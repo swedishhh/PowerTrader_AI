@@ -304,7 +304,7 @@ class NeuralSignalTile(ttk.Frame):
 # -----------------------------
 
 DEFAULT_SETTINGS = {
-    "main_neural_dir": "",
+    "main_neural_dir": "output",
     "coins": ['BTC', 'ETH', 'BNB', 'PAXG', 'SOL', 'XRP', 'DOGE'],
 
     # Long-term holdings symbols (optional): used ONLY for UI grouping.
@@ -588,17 +588,12 @@ def _now_str() -> str:
 
 def build_coin_folders(main_dir: str, coins: List[str]) -> Dict[str, str]:
     """
-    Mirrors your convention:
-      BTC uses main_dir directly
-      other coins typically have subfolders inside main_dir (auto-detected)
+    Every coin (including BTC) gets its own subfolder inside main_dir.
 
     Returns { "BTC": "...", "ETH": "...", ... }
     """
     out: Dict[str, str] = {}
     main_dir = main_dir or os.getcwd()
-
-    # BTC folder
-    out["BTC"] = main_dir
 
     # Auto-detect subfolders
     if os.path.isdir(main_dir):
@@ -607,7 +602,7 @@ def build_coin_folders(main_dir: str, coins: List[str]) -> Dict[str, str]:
             if not os.path.isdir(p):
                 continue
             sym = name.upper().strip()
-            if sym in coins and sym != "BTC":
+            if sym in coins:
                 out[sym] = p
 
     # Fallbacks for missing ones
@@ -1742,16 +1737,18 @@ class PowerTraderHub(tk.Tk):
 
         self.project_dir = os.path.abspath(os.path.dirname(__file__))
 
-        main_dir = str(self.settings.get("main_neural_dir") or "").strip()
+        main_dir = str(self.settings.get("main_neural_dir") or "output").strip()
         if main_dir and not os.path.isabs(main_dir):
             main_dir = os.path.abspath(os.path.join(self.project_dir, main_dir))
-        if (not main_dir) or (not os.path.isdir(main_dir)):
-            main_dir = self.project_dir
+        if not main_dir:
+            main_dir = os.path.join(self.project_dir, "output")
+        _ensure_dir(main_dir)
         self.settings["main_neural_dir"] = main_dir
 
-
-        # hub data dir
-        hub_dir = self.settings.get("hub_data_dir") or os.path.join(self.project_dir, "hub_data")
+        # hub data dir (defaults to output/hub_data)
+        hub_dir = self.settings.get("hub_data_dir") or os.path.join(main_dir, "hub_data")
+        if hub_dir and not os.path.isabs(hub_dir):
+            hub_dir = os.path.abspath(os.path.join(self.project_dir, hub_dir))
         self.hub_dir = os.path.abspath(hub_dir)
         _ensure_dir(self.hub_dir)
 
@@ -2178,6 +2175,18 @@ class PowerTraderHub(tk.Tk):
             dtf = merged["timeframes"][0] if merged["timeframes"] else "1hour"
         merged["default_timeframe"] = dtf
 
+        # Migrate: old default was project dir itself; new default is output/
+        _proj = os.path.abspath(os.path.dirname(__file__))
+        _mnd = str(merged.get("main_neural_dir") or "").strip().rstrip("/\\")
+        if _mnd == _proj or not _mnd:
+            merged["main_neural_dir"] = "output"
+
+        # Migrate: old hub_data default was project_dir/hub_data; move into output/
+        _hdd = str(merged.get("hub_data_dir") or "").strip().rstrip("/\\")
+        _old_hub = os.path.join(_proj, "hub_data").rstrip("/\\")
+        if _hdd == _old_hub or not _hdd:
+            merged["hub_data_dir"] = ""
+
         # Best-effort: write back healed settings so the file becomes self-contained
         try:
             if data != merged:
@@ -2238,27 +2247,21 @@ class PowerTraderHub(tk.Tk):
     def _ensure_alt_coin_folders_and_trainer_on_startup(self) -> None:
         """
         Startup behavior (mirrors Settings-save behavior):
-        - For every alt coin in the coin list that does NOT have its folder yet:
-            - create the folder
-            - copy neural_trainer.py from the MAIN (BTC) folder into the new folder
+        - For every coin that does NOT have its folder yet, create it
+          and copy the trainer script into it.
         """
         try:
             coins = [str(c).strip().upper() for c in (self.settings.get("coins") or []) if str(c).strip()]
-            main_dir = (self.settings.get("main_neural_dir") or self.project_dir or os.getcwd()).strip()
+            main_dir = (self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "output")).strip()
 
             trainer_name = os.path.basename(str(self.settings.get("script_neural_trainer", "neural_trainer.py")))
 
-            # Source trainer: MAIN folder (BTC folder)
-            src_main_trainer = os.path.join(main_dir, trainer_name)
-
-            # Best-effort fallback if the main folder doesn't have it (keeps behavior robust)
+            # Source trainer: project dir or configured path
+            src_project_trainer = os.path.join(self.project_dir, trainer_name)
             src_cfg_trainer = str(self.settings.get("script_neural_trainer", trainer_name))
-            src_trainer_path = src_main_trainer if os.path.isfile(src_main_trainer) else src_cfg_trainer
+            src_trainer_path = src_project_trainer if os.path.isfile(src_project_trainer) else src_cfg_trainer
 
             for coin in coins:
-                if coin == "BTC":
-                    continue  # BTC uses main folder; no per-coin folder needed
-
                 coin_dir = os.path.join(main_dir, coin)
 
                 created = False
@@ -4263,22 +4266,19 @@ class PowerTraderHub(tk.Tk):
         # Use the trainer script that lives INSIDE that coin's folder so outputs land in the right place.
         trainer_name = os.path.basename(str(self.settings.get("script_neural_trainer", "pt_trainer.py")))
 
-        # If an alt coin folder doesn't exist yet, create it and copy the trainer script from the main (BTC) folder.
-        # (Also: overwrite to avoid running stale trainer copies in alt folders.)
+        # If the coin folder doesn't exist yet, create it and copy the trainer script in.
+        # (Also: overwrite to avoid running stale trainer copies in coin folders.)
+        try:
+            if not os.path.isdir(coin_cwd):
+                os.makedirs(coin_cwd, exist_ok=True)
 
-        if coin != "BTC":
-            try:
-                if not os.path.isdir(coin_cwd):
-                    os.makedirs(coin_cwd, exist_ok=True)
+            src_trainer_path = os.path.join(self.project_dir, trainer_name)
+            dst_trainer_path = os.path.join(coin_cwd, trainer_name)
 
-                src_main_folder = self.coin_folders.get("BTC", self.project_dir)
-                src_trainer_path = os.path.join(src_main_folder, trainer_name)
-                dst_trainer_path = os.path.join(coin_cwd, trainer_name)
-
-                if os.path.isfile(src_trainer_path):
-                    shutil.copy2(src_trainer_path, dst_trainer_path)
-            except Exception:
-                pass
+            if os.path.isfile(src_trainer_path):
+                shutil.copy2(src_trainer_path, dst_trainer_path)
+        except Exception:
+            pass
 
         trainer_path = os.path.join(coin_cwd, trainer_name)
 
@@ -5229,7 +5229,7 @@ class PowerTraderHub(tk.Tk):
 
                 try:
                     self.chart_coin_folders = build_coin_folders(
-                        self.settings.get("main_neural_dir") or self.project_dir,
+                        self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "output"),
                         self.chart_coins,
                     )
                     self._chart_coin_folders_sig = (self.settings.get("main_neural_dir"), tuple(self.chart_coins))
@@ -5366,7 +5366,7 @@ class PowerTraderHub(tk.Tk):
         """
         # Rebuild trading coin list + folders (used by allocation math and neural tiles)
         self.coins = [c.upper().strip() for c in (self.settings.get("coins") or []) if c.strip()]
-        self.coin_folders = build_coin_folders(self.settings.get("main_neural_dir") or self.project_dir, self.coins)
+        self.coin_folders = build_coin_folders(self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "output"), self.coins)
 
         # Rebuild chart coin list (charts should include held/LTH coins even if not in trading list)
         try:
@@ -5413,7 +5413,7 @@ class PowerTraderHub(tk.Tk):
 
         # Keep a separate folder map for chart coins (so extra coins don't fall back to cwd paths)
         try:
-            self.chart_coin_folders = build_coin_folders(self.settings.get("main_neural_dir") or self.project_dir, self.chart_coins)
+            self.chart_coin_folders = build_coin_folders(self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "output"), self.chart_coins)
             self._chart_coin_folders_sig = (self.settings.get("main_neural_dir"), tuple(self.chart_coins))
         except Exception:
             pass
@@ -5567,7 +5567,7 @@ class PowerTraderHub(tk.Tk):
             sig = (str(self.settings.get("main_neural_dir") or ""), tuple(self.coins or []))
             if getattr(self, "_coin_folders_sig", None) != sig:
                 self._coin_folders_sig = sig
-                self.coin_folders = build_coin_folders(self.settings.get("main_neural_dir") or self.project_dir, self.coins)
+                self.coin_folders = build_coin_folders(self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "output"), self.coins)
         except Exception:
             pass
 
@@ -6757,19 +6757,14 @@ class PowerTraderHub(tk.Tk):
                     new_coins = [c.strip().upper() for c in (self.settings.get("coins") or []) if c.strip()]
                     added = [c for c in new_coins if c and c not in prev_coins]
 
-                    main_dir = self.settings.get("main_neural_dir") or self.project_dir
+                    main_dir = self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "output")
                     trainer_name = os.path.basename(str(self.settings.get("script_neural_trainer", "neural_trainer.py")))
 
-                    # Best-effort resolve source trainer path:
-                    # Prefer trainer living in the main (BTC) folder; fallback to the configured trainer path.
-                    src_main_trainer = os.path.join(main_dir, trainer_name)
+                    src_project_trainer = os.path.join(self.project_dir, trainer_name)
                     src_cfg_trainer = str(self.settings.get("script_neural_trainer", trainer_name))
-                    src_trainer_path = src_main_trainer if os.path.isfile(src_main_trainer) else src_cfg_trainer
+                    src_trainer_path = src_project_trainer if os.path.isfile(src_project_trainer) else src_cfg_trainer
 
                     for coin in added:
-                        if coin == "BTC":
-                            continue  # BTC uses main folder; no per-coin folder needed
-
                         coin_dir = os.path.join(main_dir, coin)
                         if not os.path.isdir(coin_dir):
                             os.makedirs(coin_dir, exist_ok=True)

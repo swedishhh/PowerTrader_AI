@@ -1,0 +1,7 @@
+output/
+hub_data/
+gui_settings.json
+r_key.txt
+r_secret.txt
+__pycache__/
+*.pyc
