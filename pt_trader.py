@@ -2560,11 +2560,10 @@ class CryptoAPITrading:
                 current_buy_price = current_buy_prices.get(full_symbol, 0)
                 current_sell_price = current_sell_prices.get(full_symbol, 0)
 
-                # keep the per-coin current price file behavior for consistency
                 try:
-                    file = open(symbol + '_current_price.txt', 'w+')
-                    file.write(str(current_buy_price))
-                    file.close()
+                    _cpf = os.path.join(self.path_map.get(symbol, os.path.join(main_dir, symbol)), f"{symbol}_current_price.txt")
+                    with open(_cpf, 'w') as _f:
+                        _f.write(str(current_buy_price))
                 except Exception:
                     pass
 
@@ -2765,9 +2764,9 @@ class CryptoAPITrading:
                     dist_to_trail_pct = ((current_sell_price - trail_line_disp) / trail_line_disp) * 100.0
 
 
-            file = open(symbol+'_current_price.txt', 'w+')
-            file.write(str(current_buy_price))
-            file.close()
+            _cpf = os.path.join(self.path_map.get(symbol, os.path.join(main_dir, symbol)), f"{symbol}_current_price.txt")
+            with open(_cpf, 'w') as _f:
+                _f.write(str(current_buy_price))
             positions[symbol] = {
                 "quantity": quantity,
                 "avg_cost_basis": avg_cost_basis,
@@ -3025,11 +3024,10 @@ class CryptoAPITrading:
                 current_buy_price = current_buy_prices.get(full_symbol, 0.0)
                 current_sell_price = current_sell_prices.get(full_symbol, 0.0)
 
-                # keep the per-coin current price file behavior for consistency
                 try:
-                    file = open(sym + '_current_price.txt', 'w+')
-                    file.write(str(current_buy_price))
-                    file.close()
+                    _cpf = os.path.join(self.path_map.get(sym, os.path.join(main_dir, sym)), f"{sym}_current_price.txt")
+                    with open(_cpf, 'w') as _f:
+                        _f.write(str(current_buy_price))
                 except Exception:
                     pass
 
