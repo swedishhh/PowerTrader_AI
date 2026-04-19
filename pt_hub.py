@@ -4109,7 +4109,7 @@ class PowerTraderHub(tk.Tk):
         # If trainer reports it's currently training, it's not "trained" yet.
         try:
             st = _safe_read_json(os.path.join(folder, "trainer_status.json"))
-            if isinstance(st, dict) and str(st.get("state", "")).upper() == "TRAINING":
+            if isinstance(st, dict) and str(st.get("state", "")).upper() in ("TRAINING", "FAILED"):
                 return False
         except Exception:
             pass
@@ -4175,9 +4175,24 @@ class PowerTraderHub(tk.Tk):
 
 
 
+    def _coin_training_status(self, coin: str, running: set) -> str:
+        if coin in running:
+            return "TRAINING"
+        if self._coin_is_trained(coin):
+            return "TRAINED"
+        folder = self.coin_folders.get(coin, "")
+        if folder:
+            try:
+                st = _safe_read_json(os.path.join(folder, "trainer_status.json"))
+                if isinstance(st, dict) and str(st.get("state", "")).upper() == "FAILED":
+                    return "FAILED"
+            except Exception:
+                pass
+        return "NOT TRAINED"
+
     def _training_status_map(self) -> Dict[str, str]:
         """
-        Returns {coin: "TRAINED" | "TRAINING" | "NOT TRAINED"}.
+        Returns {coin: "TRAINED" | "TRAINING" | "NOT TRAINED" | "FAILED"}.
 
         Cached by a compact signature of the relevant per-coin files so the GUI
         does not hit the filesystem for every coin on every UI tick.
@@ -4213,12 +4228,7 @@ class PowerTraderHub(tk.Tk):
             running = set(self._running_trainers())
             out: Dict[str, str] = {}
             for c in self.coins:
-                if c in running:
-                    out[c] = "TRAINING"
-                elif self._coin_is_trained(c):
-                    out[c] = "TRAINED"
-                else:
-                    out[c] = "NOT TRAINED"
+                out[c] = self._coin_training_status(c, running)
 
             self._last_training_status_map_sig = sig
             self._last_training_status_map_cache = dict(out)
@@ -4227,13 +4237,39 @@ class PowerTraderHub(tk.Tk):
             running = set(self._running_trainers())
             out: Dict[str, str] = {}
             for c in self.coins:
-                if c in running:
-                    out[c] = "TRAINING"
-                elif self._coin_is_trained(c):
-                    out[c] = "TRAINED"
-                else:
-                    out[c] = "NOT TRAINED"
+                out[c] = self._coin_training_status(c, running)
             return out
+
+    def _log_trainer_failure(self, coin: str) -> None:
+        try:
+            folder = self.coin_folders.get(coin, "")
+            if not folder:
+                return
+            info = _safe_read_json(os.path.join(folder, "trainer_failure_info.json"))
+            if not isinstance(info, dict) or not info.get("traceback"):
+                info = _safe_read_json(os.path.join(folder, "trainer_status.json"))
+            if not isinstance(info, dict):
+                return
+            lp = self.trainers.get(coin)
+            if not lp:
+                return
+            q = lp.log_q
+            tag = f"[{coin}] "
+            q.put_nowait(f"{tag}{'='*50}")
+            q.put_nowait(f"{tag}TRAINING FAILED: {info.get('error', info.get('exception_message', 'unknown'))}")
+            tb = info.get("traceback", "")
+            if tb:
+                for line in tb.strip().splitlines():
+                    q.put_nowait(f"{tag}  {line}")
+            state = info.get("trainer_state", {})
+            if state:
+                q.put_nowait(f"{tag}Trainer state at failure:")
+                for k, v in state.items():
+                    q.put_nowait(f"{tag}  {k} = {v}")
+            q.put_nowait(f"{tag}See trainer_failure_info.json for full details")
+            q.put_nowait(f"{tag}{'='*50}")
+        except Exception:
+            pass
 
     def train_selected_coin(self) -> None:
         coin = (getattr(self, 'train_coin_var', self.trainer_coin_var).get() or "").strip().upper()
@@ -4297,6 +4333,7 @@ class PowerTraderHub(tk.Tk):
             patterns = [
                 "trainer_last_training_time.txt",
                 "trainer_status.json",
+                "trainer_failure_info.json",
                 "trainer_last_start_time.txt",
                 "killer.txt",
                 "memories_*.txt",
@@ -4756,8 +4793,11 @@ class PowerTraderHub(tk.Tk):
         try:
             training_running = [c for c, s in status_map.items() if s == "TRAINING"]
             not_trained = [c for c, s in status_map.items() if s == "NOT TRAINED"]
+            failed = [c for c, s in status_map.items() if s == "FAILED"]
 
-            if training_running:
+            if failed:
+                self.lbl_training_overview.config(text=f"Training: FAILED ({', '.join(failed)})")
+            elif training_running:
                 self.lbl_training_overview.config(text=f"Training: RUNNING ({', '.join(training_running)})")
             elif not_trained:
                 self.lbl_training_overview.config(text=f"Training: REQUIRED ({len(not_trained)} not trained)")
@@ -4767,10 +4807,13 @@ class PowerTraderHub(tk.Tk):
             # show each coin status (ONLY redraw the list if it actually changed)
             sig = tuple((c, status_map.get(c, "N/A")) for c in self.coins)
             if getattr(self, "_last_training_sig", None) != sig:
+                old_sig = dict(getattr(self, "_last_training_sig", ()) or ())
                 self._last_training_sig = sig
                 self.training_list.delete(0, "end")
                 for c, st in sig:
                     self.training_list.insert("end", f"{c}: {st}")
+                    if st == "FAILED" and old_sig.get(c) != "FAILED":
+                        self._log_trainer_failure(c)
 
             # show gating hint (Start All handles the runner->ready->trader sequence)
             if not all_trained:

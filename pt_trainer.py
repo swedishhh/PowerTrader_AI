@@ -219,6 +219,82 @@ def PrintException():
 	linecache.checkcache(filename)
 	line = linecache.getline(filename, lineno, f.f_globals)
 	print('EXCEPTION IN (LINE {} "{}"): {}'.format(lineno, line.strip(), exc_obj))
+
+def _write_failure_state(exc_type, exc_value, exc_tb):
+	"""Write comprehensive failure info on unhandled exception."""
+	tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+
+	g = globals()
+	_safe_get = lambda k: g.get(k, "<not set>")
+	state_snapshot = {}
+	for key in ("the_big_index", "restarted_yet", "tf_choice", "timeframe",
+	            "timeframe_minutes", "start_time", "end_time", "coin_choice",
+	            "price_list_length", "choice_index", "restarting",
+	            "number_of_candles_index", "loop_i"):
+		state_snapshot[key] = str(_safe_get(key))
+	for key in ("history_list", "price_list", "price_list2",
+	            "open_price_list", "open_price_list2", "price_change_list"):
+		try:
+			val = g.get(key)
+			state_snapshot[f"len_{key}"] = len(val) if val is not None else "<not set>"
+		except Exception:
+			state_snapshot[f"len_{key}"] = "<error>"
+	try:
+		state_snapshot["tf_choices"] = _safe_get("tf_choices")
+		state_snapshot["tf_minutes"] = _safe_get("tf_minutes")
+	except Exception:
+		pass
+
+	failure_info = {
+		"coin": g.get("_arg_coin", "???"),
+		"state": "FAILED",
+		"exception_type": exc_type.__name__ if exc_type else "Unknown",
+		"exception_message": str(exc_value),
+		"traceback": tb_str,
+		"trainer_state": state_snapshot,
+		"timestamp": int(time.time()),
+		"started_at": g.get("_trainer_started_at", 0),
+	}
+
+	try:
+		with open("trainer_failure_info.json", "w", encoding="utf-8") as f:
+			json.dump(failure_info, f, indent=2)
+	except Exception:
+		pass
+
+	try:
+		with open("trainer_status.json", "w", encoding="utf-8") as f:
+			json.dump({
+				"coin": g.get("_arg_coin", "???"),
+				"state": "FAILED",
+				"started_at": g.get("_trainer_started_at", 0),
+				"failed_at": int(time.time()),
+				"timestamp": int(time.time()),
+				"error": f"{exc_type.__name__}: {exc_value}" if exc_type else str(exc_value),
+			}, f)
+	except Exception:
+		pass
+
+	print(f"\n{'='*60}")
+	print(f"TRAINING FAILED: {exc_type.__name__ if exc_type else 'Unknown'}: {exc_value}")
+	print(f"{'='*60}")
+	print(tb_str)
+	print(f"Trainer state: {json.dumps(state_snapshot, indent=2, default=str)}")
+	print(f"Full failure info written to trainer_failure_info.json")
+	print(f"{'='*60}")
+	sys.stdout.flush()
+
+_orig_excepthook = sys.excepthook
+
+def _fatal_exception_handler(exc_type, exc_value, exc_tb):
+	if issubclass(exc_type, (SystemExit, KeyboardInterrupt)):
+		_orig_excepthook(exc_type, exc_value, exc_tb)
+		return
+	_write_failure_state(exc_type, exc_value, exc_tb)
+	_orig_excepthook(exc_type, exc_value, exc_tb)
+
+sys.excepthook = _fatal_exception_handler
+
 how_far_to_look_back = 100000
 number_of_candles = [2]
 number_of_candles_index = 0
@@ -272,6 +348,11 @@ try:
 except Exception:
 	pass
 
+try:
+	with open("trainer_failure_info.json", "w", encoding="utf-8") as f:
+		json.dump({}, f)
+except Exception:
+	pass
 
 the_big_index = 0
 while True:
