@@ -5,7 +5,7 @@ import time
 import math
 import shutil
 from decimal import Decimal, ROUND_HALF_UP, ROUND_CEILING, ROUND_FLOOR
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 import os
 import colorama
 from colorama import Fore, Style
