@@ -4299,10 +4299,6 @@ class PowerTraderHub(tk.Tk):
         # Stop the Neural Runner before any training starts (training modifies artifacts the runner reads)
         self.stop_neural()
 
-        # --- IMPORTANT ---
-        # Match the trader's folder convention:
-        #   BTC runs from the main neural folder
-        #   Alts run from their own coin subfolder
         coin_cwd = self.coin_folders.get(coin, self.project_dir)
 
         # Use the trainer script that lives INSIDE that coin's folder so outputs land in the right place.

@@ -221,10 +221,23 @@ def _write_lth_ema200_snapshot() -> None:
 		pass
 
 
+def _resolve_main_neural_dir() -> str:
+	try:
+		if os.path.isfile(_GUI_SETTINGS_PATH):
+			with open(_GUI_SETTINGS_PATH, "r", encoding="utf-8") as f:
+				data = json.load(f) or {}
+			d = str(data.get("main_neural_dir") or "output").strip()
+			if d and not os.path.isabs(d):
+				d = os.path.join(BASE_DIR, d)
+			if os.path.isdir(d):
+				return d
+	except Exception:
+		pass
+	return os.path.join(BASE_DIR, "output")
+
 def coin_folder(sym: str) -> str:
 	sym = sym.upper()
-	# Your "main folder is BTC folder" convention:
-	return BASE_DIR if sym == 'BTC' else os.path.join(BASE_DIR, sym)
+	return os.path.join(_resolve_main_neural_dir(), sym)
 
 
 # --- training freshness gate (mirrors pt_hub.py) ---
