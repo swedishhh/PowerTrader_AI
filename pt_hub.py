@@ -20,6 +20,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import FuncFormatter
 from matplotlib.transforms import blended_transform_factory
+from trader_api import discover_exchanges, exchange_display_name
 
 DARK_BG = "#070B10"
 DARK_BG2 = "#0B1220"
@@ -346,6 +347,10 @@ DEFAULT_SETTINGS = {
     "chart_refresh_seconds": 4.0,
     "candles_limit": 250,
     "ui_font_size": 16,
+
+    "exchange": "demo",
+    "demo_starting_usd": 10000.0,
+    "demo_slippage_factor": 0.001,
 
     "auto_start_scripts": False,
 }
@@ -3436,7 +3441,8 @@ class PowerTraderHub(tk.Tk):
             return
 
         env = os.environ.copy()
-        env["POWERTRADER_HUB_DIR"] = self.hub_dir  # so rhcb writes where GUI reads
+        env["POWERTRADER_HUB_DIR"] = self.hub_dir
+        env["POWERTRADER_EXCHANGE"] = str(self.settings.get("exchange", "demo")).strip().lower()
 
         try:
             p.proc = subprocess.Popen(
@@ -5972,7 +5978,16 @@ class PowerTraderHub(tk.Tk):
 
         hub_dir_var = tk.StringVar(value=self.settings.get("hub_data_dir", ""))
 
-
+        _exchanges = discover_exchanges(self.project_dir)
+        if not _exchanges:
+            _exchanges = ["demo"]
+        _cur_exchange = str(self.settings.get("exchange", "demo")).strip().lower()
+        if _cur_exchange not in _exchanges:
+            _exchanges.append(_cur_exchange)
+            _exchanges.sort()
+        exchange_var = tk.StringVar(value=_cur_exchange)
+        demo_starting_usd_var = tk.StringVar(value=str(self.settings.get("demo_starting_usd", DEFAULT_SETTINGS["demo_starting_usd"])))
+        demo_slippage_var = tk.StringVar(value=str(self.settings.get("demo_slippage_factor", DEFAULT_SETTINGS["demo_slippage_factor"])))
 
         neural_script_var = tk.StringVar(value=self.settings["script_neural_runner2"])
         trainer_script_var = tk.StringVar(value=self.settings.get("script_neural_trainer", "pt_trainer.py"))
@@ -6049,8 +6064,28 @@ class PowerTraderHub(tk.Tk):
 
         add_row(r, "Hub data dir (optional):", hub_dir_var, browse="dir"); r += 1
 
+        # --- Exchange selection ---
+        ttk.Separator(frm, orient="horizontal").grid(row=r, column=0, columnspan=3, sticky="ew", pady=10); r += 1
 
+        ttk.Label(frm, text="Exchange:").grid(row=r, column=0, sticky="w", padx=(0, 10), pady=6)
+        _exchange_display = [exchange_display_name(k) for k in _exchanges]
+        _exchange_combo = ttk.Combobox(frm, textvariable=exchange_var, values=_exchanges, state="readonly")
+        _exchange_combo.grid(row=r, column=1, sticky="ew", pady=6)
+        ttk.Label(frm, text="").grid(row=r, column=2, sticky="e", padx=(10, 0), pady=6)
+        r += 1
 
+        # --- Demo-specific settings (shown only when exchange == "demo") ---
+        demo_frame = ttk.Frame(frm)
+        demo_frame.grid(row=r, column=0, columnspan=3, sticky="ew"); r += 1
+        demo_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(demo_frame, text="Demo starting USD:").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
+        ttk.Entry(demo_frame, textvariable=demo_starting_usd_var).grid(row=0, column=1, sticky="ew", pady=6)
+        ttk.Label(demo_frame, text="").grid(row=0, column=2, sticky="e", padx=(10, 0), pady=6)
+
+        ttk.Label(demo_frame, text="Demo slippage factor:").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=6)
+        ttk.Entry(demo_frame, textvariable=demo_slippage_var).grid(row=1, column=1, sticky="ew", pady=6)
+        ttk.Label(demo_frame, text="").grid(row=1, column=2, sticky="e", padx=(10, 0), pady=6)
 
         ttk.Separator(frm, orient="horizontal").grid(row=r, column=0, columnspan=3, sticky="ew", pady=10); r += 1
 
@@ -6638,10 +6673,14 @@ class PowerTraderHub(tk.Tk):
             ttk.Button(save_btns, text="Save", command=do_save).pack(side="left")
             ttk.Button(save_btns, text="Close", command=wiz.destroy).pack(side="left", padx=8)
 
-        ttk.Label(frm, text="Robinhood API:").grid(row=r, column=0, sticky="w", padx=(0, 10), pady=6)
+        rh_section = ttk.Frame(frm)
+        rh_section.grid(row=r, column=0, columnspan=3, sticky="ew"); r += 1
+        rh_section.columnconfigure(1, weight=1)
 
-        api_row = ttk.Frame(frm)
-        api_row.grid(row=r, column=1, columnspan=2, sticky="ew", pady=6)
+        ttk.Label(rh_section, text="Robinhood API:").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
+
+        api_row = ttk.Frame(rh_section)
+        api_row.grid(row=0, column=1, columnspan=2, sticky="ew", pady=6)
         api_row.columnconfigure(0, weight=1)
 
         ttk.Label(api_row, textvariable=api_status_var).grid(row=0, column=0, sticky="w")
@@ -6649,10 +6688,21 @@ class PowerTraderHub(tk.Tk):
         ttk.Button(api_row, text="Open Folder", command=_open_api_folder).grid(row=0, column=2, sticky="e", padx=(8, 0))
         ttk.Button(api_row, text="Clear", command=_clear_api_files).grid(row=0, column=3, sticky="e", padx=(8, 0))
 
-        r += 1
-
         _refresh_api_status()
 
+        def _on_exchange_changed(*_):
+            sel = exchange_var.get().strip().lower()
+            if sel == "robinhood":
+                rh_section.grid()
+            else:
+                rh_section.grid_remove()
+            if sel == "demo":
+                demo_frame.grid()
+            else:
+                demo_frame.grid_remove()
+
+        exchange_var.trace_add("write", _on_exchange_changed)
+        _on_exchange_changed()
 
         ttk.Separator(frm, orient="horizontal").grid(row=r, column=0, columnspan=3, sticky="ew", pady=10); r += 1
 
@@ -6768,8 +6818,23 @@ class PowerTraderHub(tk.Tk):
 
                 self.settings["hub_data_dir"] = hub_dir_var.get().strip()
 
+                self.settings["exchange"] = exchange_var.get().strip().lower()
 
+                try:
+                    _demo_usd = float(demo_starting_usd_var.get().strip() or 10000.0)
+                except Exception:
+                    _demo_usd = float(DEFAULT_SETTINGS["demo_starting_usd"])
+                if _demo_usd < 0:
+                    _demo_usd = 0.0
+                self.settings["demo_starting_usd"] = _demo_usd
 
+                try:
+                    _demo_slip = float(demo_slippage_var.get().strip() or 0.001)
+                except Exception:
+                    _demo_slip = float(DEFAULT_SETTINGS["demo_slippage_factor"])
+                if _demo_slip < 0:
+                    _demo_slip = 0.0
+                self.settings["demo_slippage_factor"] = _demo_slip
 
                 self.settings["script_neural_runner2"] = neural_script_var.get().strip()
                 self.settings["script_neural_trainer"] = trainer_script_var.get().strip()
