@@ -345,6 +345,7 @@ DEFAULT_SETTINGS = {
     "ui_refresh_seconds": 1.0,
     "chart_refresh_seconds": 4.0,
     "candles_limit": 250,
+    "ui_font_size": 16,
 
     "auto_start_scripts": False,
 }
@@ -1170,7 +1171,7 @@ class CandleChart(ttk.Frame):
                     transform=trans,
                     ha="left",
                     va="center",
-                    fontsize=8,
+                    fontsize=16,
                     color=color,
                     bbox=dict(
                         facecolor=DARK_BG2,
@@ -1259,7 +1260,7 @@ class CandleChart(ttk.Frame):
                         textcoords="offset points",
                         xytext=(0, 10),
                         ha="center",
-                        fontsize=8,
+                        fontsize=16,
                         color=DARK_FG,
                         zorder=7,
                     )
@@ -1296,7 +1297,7 @@ class CandleChart(ttk.Frame):
             self.ax.minorticks_off()
             self.ax.set_xticks(tick_x)
             self.ax.set_xticklabels(tick_lbl)
-            self.ax.tick_params(axis="x", labelsize=8)
+            self.ax.tick_params(axis="x", labelsize=16)
         except Exception:
             pass
 
@@ -1670,7 +1671,7 @@ class AccountValueChart(ttk.Frame):
             self.ax.minorticks_off()
             self.ax.set_xticks(tick_x)
             self.ax.set_xticklabels(tick_lbl)
-            self.ax.tick_params(axis="x", labelsize=8)
+            self.ax.tick_params(axis="x", labelsize=16)
         except Exception:
             pass
 
@@ -1725,11 +1726,6 @@ class PowerTraderHub(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("PowerTrader - Hub")
-        self.geometry("1400x820")
-
-        # Hard minimum window size so the UI can't be shrunk to a point where panes vanish.
-        # (Keeps things usable even if someone aggressively resizes.)
-        self.minsize(980, 640)
 
         # Debounce map for panedwindow clamp operations
         self._paned_clamp_after_ids: Dict[str, str] = {}
@@ -1738,6 +1734,11 @@ class PowerTraderHub(tk.Tk):
         self._apply_forced_dark_mode()
 
         self.settings = self._load_settings()
+        self._apply_ui_font_size()
+        w, h = self._scaled_geometry(1400, 820)
+        self.geometry(f"{w}x{h}")
+        mw, mh = self._scaled_geometry(980, 640)
+        self.minsize(mw, mh)
 
         self.project_dir = os.path.abspath(os.path.dirname(__file__))
 
@@ -2194,6 +2195,43 @@ class PowerTraderHub(tk.Tk):
         _safe_write_json(settings_path, self.settings)
 
 
+    def _font_scale(self) -> float:
+        try:
+            cur = abs(int(tkfont.nametofont("TkDefaultFont").cget("size")))
+        except Exception:
+            cur = 10
+        return max(1.0, cur / 10.0)
+
+    def _scaled_geometry(self, base_w: int, base_h: int) -> tuple:
+        s = self._font_scale()
+        w = int(base_w * s)
+        h = int(base_h * s)
+        try:
+            sw = self.winfo_screenwidth()
+            sh = self.winfo_screenheight()
+            w = min(w, int(sw * 0.95))
+            h = min(h, int(sh * 0.90))
+        except Exception:
+            pass
+        return w, h
+
+    def _apply_ui_font_size(self) -> None:
+        size = int(self.settings.get("ui_font_size", 0) or 0)
+        if size <= 0:
+            return
+        for name in ("TkDefaultFont", "TkTextFont", "TkFixedFont",
+                      "TkMenuFont", "TkHeadingFont", "TkCaptionFont",
+                      "TkSmallCaptionFont", "TkIconFont", "TkTooltipFont"):
+            try:
+                tkfont.nametofont(name).configure(size=size)
+            except Exception:
+                pass
+        if hasattr(self, "_live_log_font"):
+            try:
+                self._live_log_font.configure(size=size)
+            except Exception:
+                pass
+
     def _settings_getter(self) -> dict:
         return self.settings
 
@@ -2306,8 +2344,9 @@ class PowerTraderHub(tk.Tk):
 
         # Prevent the outer (left/right) panes from being collapsible to 0 width
         try:
-            outer.paneconfigure(left, minsize=360)
-            outer.paneconfigure(right, minsize=520)
+            _s = self._font_scale()
+            outer.paneconfigure(left, minsize=int(360 * _s))
+            outer.paneconfigure(right, minsize=int(520 * _s))
         except Exception:
             pass
 
@@ -2755,11 +2794,10 @@ class PowerTraderHub(tk.Tk):
         logs_tab = ttk.Frame(self.left_nb)
         self.left_nb.add(logs_tab, text="Live Output")
 
-        # Half-size fixed-width font for live logs (Runner/Trader/Trainers)
         _base = tkfont.nametofont("TkFixedFont")
-        _half = max(6, int(round(abs(int(_base.cget("size"))) / 2.0)))
+        _base_size = abs(int(_base.cget("size")))
         self._live_log_font = _base.copy()
-        self._live_log_font.configure(size=_half)
+        self._live_log_font.configure(size=_base_size)
 
         logs_frame = ttk.LabelFrame(logs_tab, text="Live Output")
         logs_frame.pack(fill="both", expand=True, padx=6, pady=6)
@@ -3189,8 +3227,9 @@ class PowerTraderHub(tk.Tk):
 
         try:
             # Give charts more guaranteed height so candles + labels never get squished.
-            right_split.paneconfigure(charts_frame, minsize=420)
-            right_split.paneconfigure(right_bottom_tabs, minsize=220)
+            _s = self._font_scale()
+            right_split.paneconfigure(charts_frame, minsize=int(420 * _s))
+            right_split.paneconfigure(right_bottom_tabs, minsize=int(220 * _s))
         except Exception:
             pass
 
@@ -3744,8 +3783,10 @@ class PowerTraderHub(tk.Tk):
         win = tk.Toplevel(self)
         win.title(f"Select bot orders — {base}")
         win.configure(bg=DARK_BG)
-        win.geometry("980x620")
-        win.minsize(860, 540)
+        _sw, _sh = self._scaled_geometry(980, 620)
+        win.geometry(f"{_sw}x{_sh}")
+        _mw, _mh = self._scaled_geometry(860, 540)
+        win.minsize(_mw, _mh)
         win.transient(self)
         try:
             win.grab_set()
@@ -5736,9 +5777,10 @@ class PowerTraderHub(tk.Tk):
 
         win = tk.Toplevel(self)
         win.title("Settings")
-        # Big enough for the bottom buttons on most screens + still scrolls if someone resizes smaller.
-        win.geometry("860x680")
-        win.minsize(760, 560)
+        _sw, _sh = self._scaled_geometry(860, 680)
+        win.geometry(f"{_sw}x{_sh}")
+        _mw, _mh = self._scaled_geometry(760, 560)
+        win.minsize(_mw, _mh)
         win.configure(bg=DARK_BG)
 
         # Scrollable settings content (auto-hides the scrollbar if everything fits),
@@ -5896,6 +5938,8 @@ class PowerTraderHub(tk.Tk):
         ui_refresh_var = tk.StringVar(value=str(self.settings["ui_refresh_seconds"]))
         chart_refresh_var = tk.StringVar(value=str(self.settings["chart_refresh_seconds"]))
         candles_limit_var = tk.StringVar(value=str(self.settings["candles_limit"]))
+        _cur_font_size = abs(int(tkfont.nametofont("TkDefaultFont").cget("size")))
+        ui_font_size_var = tk.StringVar(value=str(_cur_font_size))
         auto_start_var = tk.BooleanVar(value=bool(self.settings.get("auto_start_scripts", False)))
 
         r = 0
@@ -6082,9 +6126,10 @@ class PowerTraderHub(tk.Tk):
 
             wiz = tk.Toplevel(win)
             wiz.title("Robinhood API Setup")
-            # Big enough to show the bottom buttons, but still scrolls if the window is resized smaller.
-            wiz.geometry("980x720")
-            wiz.minsize(860, 620)
+            _sw, _sh = self._scaled_geometry(980, 720)
+            wiz.geometry(f"{_sw}x{_sh}")
+            _mw, _mh = self._scaled_geometry(860, 620)
+            wiz.minsize(_mw, _mh)
             wiz.configure(bg=DARK_BG)
 
             # Scrollable content area (same pattern as the Neural Levels scrollbar).
@@ -6572,6 +6617,7 @@ class PowerTraderHub(tk.Tk):
         add_row(r, "UI refresh seconds:", ui_refresh_var); r += 1
         add_row(r, "Chart refresh seconds:", chart_refresh_var); r += 1
         add_row(r, "Candles limit:", candles_limit_var); r += 1
+        add_row(r, "UI font size:", ui_font_size_var); r += 1
 
         chk = ttk.Checkbutton(frm, text="Auto start scripts on GUI launch", variable=auto_start_var)
         chk.grid(row=r, column=0, columnspan=3, sticky="w", pady=(10, 0)); r += 1
@@ -6689,8 +6735,21 @@ class PowerTraderHub(tk.Tk):
                 self.settings["ui_refresh_seconds"] = float(ui_refresh_var.get().strip())
                 self.settings["chart_refresh_seconds"] = float(chart_refresh_var.get().strip())
                 self.settings["candles_limit"] = int(float(candles_limit_var.get().strip()))
+                try:
+                    fs = int(float(ui_font_size_var.get().strip()))
+                except Exception:
+                    fs = 0
+                if fs > 0:
+                    self.settings["ui_font_size"] = max(6, min(fs, 72))
+                else:
+                    self.settings["ui_font_size"] = 0
                 self.settings["auto_start_scripts"] = bool(auto_start_var.get())
                 self._save_settings()
+                self._apply_ui_font_size()
+                _nw, _nh = self._scaled_geometry(1400, 820)
+                self.geometry(f"{_nw}x{_nh}")
+                _nmw, _nmh = self._scaled_geometry(980, 640)
+                self.minsize(_nmw, _nmh)
 
                 # If new coin(s) were added and their training folder doesn't exist yet,
                 # create the folder and copy neural_trainer.py into it RIGHT AFTER saving settings.
