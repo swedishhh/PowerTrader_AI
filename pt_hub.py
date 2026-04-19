@@ -10,6 +10,7 @@ import subprocess
 import shutil
 import glob
 import bisect
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 import tkinter as tk
@@ -3402,6 +3403,11 @@ class PowerTraderHub(tk.Tk):
     # ---- process control ----
 
 
+    @staticmethod
+    def _log_ts() -> str:
+        now = datetime.now()
+        return now.strftime("%Y%m%d.%H%M%S.") + f"{now.microsecond // 1000:03d}"
+
     def _reader_thread(self, proc: subprocess.Popen, q: "queue.Queue[str]", prefix: str) -> None:
         def _push(msg: str) -> None:
             # Never let log spam block the reader or the GUI.
@@ -3427,11 +3433,11 @@ class PowerTraderHub(tk.Tk):
                         break
                     time.sleep(0.05)
                     continue
-                _push(f"{prefix}{line.rstrip()}")
+                _push(f"{self._log_ts()} {prefix}{line.rstrip()}")
         except Exception:
             pass
         finally:
-            _push(f"{prefix}[process exited]")
+            _push(f"{self._log_ts()} {prefix}[process exited]")
 
     def _start_process(self, p: ProcInfo, log_q: Optional["queue.Queue[str]"] = None, prefix: str = "") -> None:
         if p.proc and p.proc.poll() is None:
@@ -4261,19 +4267,20 @@ class PowerTraderHub(tk.Tk):
                 return
             q = lp.log_q
             tag = f"[{coin}] "
-            q.put_nowait(f"{tag}{'='*50}")
-            q.put_nowait(f"{tag}TRAINING FAILED: {info.get('error', info.get('exception_message', 'unknown'))}")
+            ts = self._log_ts()
+            q.put_nowait(f"{ts} {tag}{'='*50}")
+            q.put_nowait(f"{ts} {tag}TRAINING FAILED: {info.get('error', info.get('exception_message', 'unknown'))}")
             tb = info.get("traceback", "")
             if tb:
                 for line in tb.strip().splitlines():
-                    q.put_nowait(f"{tag}  {line}")
+                    q.put_nowait(f"{self._log_ts()} {tag}  {line}")
             state = info.get("trainer_state", {})
             if state:
-                q.put_nowait(f"{tag}Trainer state at failure:")
+                q.put_nowait(f"{self._log_ts()} {tag}Trainer state at failure:")
                 for k, v in state.items():
-                    q.put_nowait(f"{tag}  {k} = {v}")
-            q.put_nowait(f"{tag}See trainer_failure_info.json for full details")
-            q.put_nowait(f"{tag}{'='*50}")
+                    q.put_nowait(f"{self._log_ts()} {tag}  {k} = {v}")
+            q.put_nowait(f"{self._log_ts()} {tag}See trainer_failure_info.json for full details")
+            q.put_nowait(f"{self._log_ts()} {tag}{'='*50}")
         except Exception:
             pass
 
