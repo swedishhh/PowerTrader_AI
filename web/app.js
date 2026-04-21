@@ -640,7 +640,7 @@ function updateChartPriceLines() {
       });
       state.priceLines.push(pl);
     }
-    if (pos.trail_active && pos.trail_line) {
+    if (pos.trail_line && pos.trail_line > 0) {
       const pl = state.candleSeries.createPriceLine({
         price: pos.trail_line,
         color: '#00CC66',
