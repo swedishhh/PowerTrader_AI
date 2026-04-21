@@ -16,10 +16,16 @@ const state = {
   chart: null,
   candleSeries: null,
   priceLines: [],
+  chartRefreshTimer: null,
   settings: {},
 };
 
 const TF_LIST = ['1min','5min','15min','30min','1hour','2hour','4hour','8hour','12hour','1day','1week'];
+const TF_REFRESH_MS = {
+  '1min': 5_000, '5min': 15_000, '15min': 30_000, '30min': 45_000,
+  '1hour': 60_000, '2hour': 90_000, '4hour': 120_000,
+  '8hour': 180_000, '12hour': 300_000, '1day': 300_000, '1week': 600_000,
+};
 const CHART_COLORS = {
   bg: '#0B0B14',
   text: '#555570',
@@ -353,6 +359,10 @@ function selectCoin(coin) {
 async function loadChart(coin, tf) {
   const container = $('#chart-container');
 
+  if (state.chartRefreshTimer) {
+    clearInterval(state.chartRefreshTimer);
+    state.chartRefreshTimer = null;
+  }
   if (state.chart) {
     state.chart.remove();
     state.chart = null;
@@ -408,6 +418,18 @@ async function loadChart(coin, tf) {
   }
 
   updateChartPriceLines();
+
+  const refreshMs = TF_REFRESH_MS[tf] || 60_000;
+  state.chartRefreshTimer = setInterval(async () => {
+    if (!state.candleSeries || state.selectedCoin !== coin || state.selectedTf !== tf) return;
+    try {
+      const fresh = await api(`candles/${coin}?timeframe=${tf}&limit=2`);
+      if (fresh.candles) {
+        fresh.candles.forEach(c => state.candleSeries.update(c));
+      }
+      updateChartPriceLines();
+    } catch {}
+  }, refreshMs);
 
   const resizeObserver = new ResizeObserver(() => {
     if (state.chart) {
