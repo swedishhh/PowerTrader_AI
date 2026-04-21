@@ -6,3 +6,5 @@ cryptography
 PyNaCl
 kucoin-python
 ccxt
+fastapi
+uvicorn

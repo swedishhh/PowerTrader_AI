@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PowerTrader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Azeret+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ── Top Bar ── -->
+<header id="topbar">
+  <div class="topbar-brand">
+    <span class="brand-mark">⚡</span>
+    <span class="brand-name">POWERTRADER</span>
+  </div>
+  <div class="topbar-vitals">
+    <div class="vital-pill" id="pill-neural">
+      <span class="pill-dot"></span>
+      <span class="pill-label">Neural</span>
+    </div>
+    <div class="vital-pill" id="pill-trader">
+      <span class="pill-dot"></span>
+      <span class="pill-label">Trader</span>
+    </div>
+  </div>
+  <div class="topbar-account">
+    <div class="acct-block">
+      <span class="acct-label">Portfolio</span>
+      <span class="acct-value" id="acct-total">—</span>
+    </div>
+    <div class="acct-block">
+      <span class="acct-label">Realized P&L</span>
+      <span class="acct-value" id="acct-pnl">—</span>
+    </div>
+    <div class="acct-block">
+      <span class="acct-label">Buying Power</span>
+      <span class="acct-value" id="acct-power">—</span>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <button class="btn btn-primary" id="btn-start-all">Start All</button>
+    <button class="btn btn-danger" id="btn-stop-all" style="display:none">Stop All</button>
+    <button class="btn btn-secondary" id="btn-train-all">Train All</button>
+  </div>
+</header>
+
+<!-- ── Main Layout ── -->
+<main id="app">
+  <!-- Left: Signal Grid -->
+  <section id="panel-signals" class="panel">
+    <div class="panel-header">
+      <h2>Neural Signals</h2>
+      <span class="panel-meta" id="signal-update-time"></span>
+    </div>
+    <div id="signal-grid" class="signal-grid"></div>
+  </section>
+
+  <!-- Center: Chart + Detail -->
+  <section id="panel-chart" class="panel">
+    <div class="panel-header">
+      <div class="chart-controls">
+        <span class="chart-coin-name" id="chart-coin-label">Select a coin</span>
+        <div class="tf-selector" id="tf-selector"></div>
+      </div>
+    </div>
+    <div id="chart-container" class="chart-container"></div>
+    <div id="coin-position" class="coin-position hidden"></div>
+  </section>
+
+  <!-- Right: Trades + Info -->
+  <section id="panel-trades" class="panel">
+    <div class="panel-header">
+      <div class="tab-bar" id="trades-tabs">
+        <button class="tab-btn active" data-tab="positions">Positions</button>
+        <button class="tab-btn" data-tab="history">History</button>
+        <button class="tab-btn" data-tab="training">Training</button>
+        <button class="tab-btn" data-tab="logs">Logs</button>
+        <button class="tab-btn" data-tab="settings">Settings</button>
+      </div>
+    </div>
+    <div class="tab-content active" id="tab-positions">
+      <div id="positions-list" class="positions-list"></div>
+    </div>
+    <div class="tab-content" id="tab-history">
+      <div id="history-list" class="history-list"></div>
+    </div>
+    <div class="tab-content" id="tab-training">
+      <div id="training-list" class="training-list"></div>
+    </div>
+    <div class="tab-content" id="tab-logs">
+      <div class="log-controls">
+        <select id="log-source">
+          <option value="neural">Neural Runner</option>
+          <option value="trader">Trader</option>
+        </select>
+        <button class="btn btn-small" id="btn-refresh-logs">Refresh</button>
+      </div>
+      <pre id="log-output" class="log-output"></pre>
+    </div>
+    <div class="tab-content" id="tab-settings">
+      <div id="settings-form" class="settings-form"></div>
+    </div>
+  </section>
+</main>
+
+<!-- ── Mobile Nav ── -->
+<nav id="mobile-nav">
+  <button class="mnav-btn active" data-view="signals"><span class="mnav-icon">◈</span>Signals</button>
+  <button class="mnav-btn" data-view="chart"><span class="mnav-icon">◆</span>Chart</button>
+  <button class="mnav-btn" data-view="trades"><span class="mnav-icon">⬡</span>Trades</button>
+  <button class="mnav-btn" data-view="settings"><span class="mnav-icon">⬢</span>More</button>
+</nav>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
