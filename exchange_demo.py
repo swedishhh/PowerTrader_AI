@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple
 
 from kucoin.client import Market
 
-from trader_api import ExchangeAdapter, OrderResult
+from exchange_api import ExchangeAdapter, OrderResult
 
 _market = Market(url="https://api.kucoin.com")
 
@@ -208,7 +208,7 @@ class DemoAdapter(ExchangeAdapter):
 def create_adapter() -> DemoAdapter:
     hub_data = os.environ.get(
         "POWERTRADER_HUB_DIR",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "hub_data"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "state", "hub_data"),
     )
     state_path = os.path.join(hub_data, "demo_exchange_state.json")
 

@@ -110,7 +110,7 @@ CURRENT_COINS = list(COIN_SYMBOLS)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-HUB_DATA_DIR = os.environ.get("POWERTRADER_HUB_DIR", os.path.join(BASE_DIR, "hub_data"))
+HUB_DATA_DIR = os.environ.get("POWERTRADER_HUB_DIR", os.path.join(BASE_DIR, "state", "hub_data"))
 os.makedirs(HUB_DATA_DIR, exist_ok=True)
 LTH_EMA200_PATH = os.path.join(HUB_DATA_DIR, "lth_daily_ema200.json")
 
@@ -226,18 +226,18 @@ def _resolve_main_neural_dir() -> str:
 		if os.path.isfile(_GUI_SETTINGS_PATH):
 			with open(_GUI_SETTINGS_PATH, "r", encoding="utf-8") as f:
 				data = json.load(f) or {}
-			d = str(data.get("main_neural_dir") or "output").strip()
+			d = str(data.get("main_neural_dir") or "state").strip()
 			if d and not os.path.isabs(d):
 				d = os.path.join(BASE_DIR, d)
 			if os.path.isdir(d):
 				return d
 	except Exception:
 		pass
-	return os.path.join(BASE_DIR, "output")
+	return os.path.join(BASE_DIR, "state")
 
 def coin_folder(sym: str) -> str:
 	sym = sym.upper()
-	return os.path.join(_resolve_main_neural_dir(), sym)
+	return os.path.join(_resolve_main_neural_dir(), "coins", sym)
 
 
 # --- training freshness gate (mirrors pt_hub.py) ---
@@ -271,7 +271,7 @@ def _coin_is_trained(sym: str) -> bool:
 
 # --- GUI HUB "runner ready" gate file (read by gui_hub.py Start All toggle) ---
 
-HUB_DIR = os.environ.get("POWERTRADER_HUB_DIR") or os.path.join(BASE_DIR, "hub_data")
+HUB_DIR = os.environ.get("POWERTRADER_HUB_DIR") or os.path.join(BASE_DIR, "state", "hub_data")
 try:
 	os.makedirs(HUB_DIR, exist_ok=True)
 except Exception:

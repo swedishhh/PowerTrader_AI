@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from nacl.signing import SigningKey
 
-from trader_api import ExchangeAdapter, OrderResult
+from exchange_api import ExchangeAdapter, OrderResult
 
 
 class RobinhoodAdapter(ExchangeAdapter):
@@ -698,7 +698,7 @@ def create_adapter() -> RobinhoodAdapter:
             "Open the GUI and go to Settings → Robinhood API → Setup / Update.\n"
         )
 
-    hub_data = os.environ.get("POWERTRADER_HUB_DIR", os.path.join(base_dir, "hub_data"))
+    hub_data = os.environ.get("POWERTRADER_HUB_DIR", os.path.join(base_dir, "state", "hub_data"))
     debug_dir = os.path.join(hub_data, "debug_trade_dumps")
 
     return RobinhoodAdapter(

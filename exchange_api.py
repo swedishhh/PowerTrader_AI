@@ -1,7 +1,7 @@
 """
 Abstract base class for exchange adapters.
 
-Each exchange lives in trader_<exchange>.py and subclasses ExchangeAdapter.
+Each exchange lives in exchange_<exchange>.py and subclasses ExchangeAdapter.
 The exchange key is the lowercase slug derived from the filename.
 """
 
@@ -118,17 +118,17 @@ class ExchangeAdapter(ABC):
 
 
 # ------------------------------------------------------------------
-# Auto-discovery: scan for trader_*.py to find available exchanges
+# Auto-discovery: scan for exchange_*.py to find available exchanges
 # ------------------------------------------------------------------
 
 def discover_exchanges(search_dir: Optional[str] = None) -> List[str]:
-    """Return sorted list of exchange keys found as trader_<key>.py files."""
+    """Return sorted list of exchange keys found as exchange_<key>.py files."""
     if search_dir is None:
         search_dir = os.path.dirname(os.path.abspath(__file__))
     keys = []
-    for path in glob.glob(os.path.join(search_dir, "trader_*.py")):
-        name = os.path.basename(path)  # trader_demo.py
-        key = name[len("trader_"):-len(".py")]  # demo
+    for path in glob.glob(os.path.join(search_dir, "exchange_*.py")):
+        name = os.path.basename(path)  # exchange_demo.py
+        key = name[len("exchange_"):-len(".py")]  # demo
         if key == "api":
             continue
         keys.append(key)
@@ -141,7 +141,7 @@ def exchange_display_name(key: str) -> str:
 
 
 def load_exchange_adapter(key: str) -> ExchangeAdapter:
-    """Import trader_<key> and return its create_adapter() result."""
+    """Import exchange_<key> and return its create_adapter() result."""
     import importlib
-    mod = importlib.import_module(f"trader_{key}")
+    mod = importlib.import_module(f"exchange_{key}")
     return mod.create_adapter()

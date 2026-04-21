@@ -11,14 +11,14 @@ import colorama
 from colorama import Fore, Style
 import traceback
 
-from trader_api import ExchangeAdapter, OrderResult, load_exchange_adapter
+from exchange_api import ExchangeAdapter, OrderResult, load_exchange_adapter
 
 
 
 # -----------------------------
 # GUI HUB OUTPUTS (parameterized by exchange key)
 # -----------------------------
-HUB_DATA_DIR = os.environ.get("POWERTRADER_HUB_DIR", os.path.join(os.path.dirname(__file__), "hub_data"))
+HUB_DATA_DIR = os.environ.get("POWERTRADER_HUB_DIR", os.path.join(os.path.dirname(__file__), "state", "hub_data"))
 os.makedirs(HUB_DATA_DIR, exist_ok=True)
 
 EXCHANGE_KEY = os.environ.get("POWERTRADER_EXCHANGE", "demo")
@@ -279,16 +279,17 @@ def _load_gui_settings() -> dict:
 
 def _build_base_paths(main_dir_in: str, coins_in: list) -> dict:
 	"""
-	Every coin uses <main_dir>/<SYM> — no special-casing.
+	Every coin uses <main_dir>/coins/<SYM>.
 	Only includes the coin if that subfolder exists.
 	"""
 	out = {}
+	coins_root = os.path.join(main_dir_in, "coins")
 	try:
 		for sym in coins_in:
 			sym = str(sym).strip().upper()
 			if not sym:
 				continue
-			sub = os.path.join(main_dir_in, sym)
+			sub = os.path.join(coins_root, sym)
 			if os.path.isdir(sub):
 				out[sym] = sub
 	except Exception:
@@ -300,7 +301,7 @@ def _build_base_paths(main_dir_in: str, coins_in: list) -> dict:
 crypto_symbols = ['BTC', 'ETH', 'XRP', 'BNB', 'DOGE']
 
 # Default main_dir behavior if settings are missing
-main_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+main_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
 base_paths = {}
 TRADE_START_LEVEL = 3
 START_ALLOC_PCT = 0.005
@@ -357,7 +358,7 @@ def _refresh_paths_and_symbols():
 	_last_settings_mtime = mtime
 
 	coins = s.get("coins") or list(crypto_symbols)
-	mndir = str(s.get("main_neural_dir") or "output").strip()
+	mndir = str(s.get("main_neural_dir") or "state").strip()
 	if mndir and not os.path.isabs(mndir):
 		mndir = os.path.join(os.path.dirname(os.path.abspath(__file__)), mndir)
 	TRADE_START_LEVEL = max(1, min(int(s.get("trade_start_level", TRADE_START_LEVEL) or TRADE_START_LEVEL), 7))
@@ -422,7 +423,7 @@ def _refresh_paths_and_symbols():
 
 	# Keep it safe if folder isn't real on this machine
 	if not os.path.isdir(mndir):
-		mndir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+		mndir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
 
 	crypto_symbols = list(coins)
 	main_dir = mndir
@@ -1832,7 +1833,7 @@ class CryptoAPITrading:
         - DCA assist: the *next* DCA neural level is derived from TRADE_START_LEVEL at runtime
         """
         sym = str(symbol).upper().strip()
-        folder = base_paths.get(sym, os.path.join(main_dir, sym))
+        folder = base_paths.get(sym, os.path.join(main_dir, "coins", sym))
         path = os.path.join(folder, "long_dca_signal.txt")
         try:
             with open(path, "r") as f:
@@ -1853,7 +1854,7 @@ class CryptoAPITrading:
         - Additional context alongside the configured TRADE_START_LEVEL logic
         """
         sym = str(symbol).upper().strip()
-        folder = base_paths.get(sym, os.path.join(main_dir, sym))
+        folder = base_paths.get(sym, os.path.join(main_dir, "coins", sym))
         path = os.path.join(folder, "short_dca_signal.txt")
         try:
             with open(path, "r") as f:
@@ -1874,7 +1875,7 @@ class CryptoAPITrading:
           N7 = 7th blue line (bottom)
         """
         sym = str(symbol).upper().strip()
-        folder = base_paths.get(sym, os.path.join(main_dir, sym))
+        folder = base_paths.get(sym, os.path.join(main_dir, "coins", sym))
         path = os.path.join(folder, "low_bound_prices.html")
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -2561,7 +2562,7 @@ class CryptoAPITrading:
                 current_sell_price = current_sell_prices.get(full_symbol, 0)
 
                 try:
-                    _cpf = os.path.join(self.path_map.get(symbol, os.path.join(main_dir, symbol)), f"{symbol}_current_price.txt")
+                    _cpf = os.path.join(self.path_map.get(symbol, os.path.join(main_dir, "coins", symbol)), f"{symbol}_current_price.txt")
                     with open(_cpf, 'w') as _f:
                         _f.write(str(current_buy_price))
                 except Exception:
@@ -2764,7 +2765,7 @@ class CryptoAPITrading:
                     dist_to_trail_pct = ((current_sell_price - trail_line_disp) / trail_line_disp) * 100.0
 
 
-            _cpf = os.path.join(self.path_map.get(symbol, os.path.join(main_dir, symbol)), f"{symbol}_current_price.txt")
+            _cpf = os.path.join(self.path_map.get(symbol, os.path.join(main_dir, "coins", symbol)), f"{symbol}_current_price.txt")
             with open(_cpf, 'w') as _f:
                 _f.write(str(current_buy_price))
             positions[symbol] = {
@@ -3025,7 +3026,7 @@ class CryptoAPITrading:
                 current_sell_price = current_sell_prices.get(full_symbol, 0.0)
 
                 try:
-                    _cpf = os.path.join(self.path_map.get(sym, os.path.join(main_dir, sym)), f"{sym}_current_price.txt")
+                    _cpf = os.path.join(self.path_map.get(sym, os.path.join(main_dir, "coins", sym)), f"{sym}_current_price.txt")
                     with open(_cpf, 'w') as _f:
                         _f.write(str(current_buy_price))
                 except Exception:

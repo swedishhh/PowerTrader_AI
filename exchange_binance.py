@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from trader_api import ExchangeAdapter, OrderResult
+from exchange_api import ExchangeAdapter, OrderResult
 
 
 class BinanceAdapter(ExchangeAdapter):
