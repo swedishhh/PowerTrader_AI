@@ -61,8 +61,8 @@ def create_adapter() -> KrakenAdapter:
     settings_path = os.environ.get("POWERTRADER_GUI_SETTINGS") or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "gui_settings.json"
     )
-    api_key = ""
-    api_secret = ""
+    api_key = "/unqGUatSqD1e4qWVNWEIjSceH7Ewr3FnaJqwETrNAfzscLURgFwnwwf"
+    api_secret = "yP+T51E88SLn6bsfsb0z/jas0zYGPxTPLpUWZqM0Er32uA42iE2eOvBWQJxuFfCzM0JNc1NMrgLm+ATqwyGMsQ=="
     try:
         if os.path.isfile(settings_path):
             with open(settings_path, "r", encoding="utf-8") as f:
