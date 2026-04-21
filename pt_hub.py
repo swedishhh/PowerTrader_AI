@@ -1758,11 +1758,12 @@ class PowerTraderHub(tk.Tk):
         self.hub_dir = os.path.abspath(hub_dir)
         _ensure_dir(self.hub_dir)
 
-        # file paths written by pt_trader.py (after edits below)
-        self.trader_status_path = os.path.join(self.hub_dir, "trader_status.json")
-        self.trade_history_path = os.path.join(self.hub_dir, "trade_history.jsonl")
-        self.pnl_ledger_path = os.path.join(self.hub_dir, "pnl_ledger.json")
-        self.account_value_history_path = os.path.join(self.hub_dir, "account_value_history.jsonl")
+        # file paths written by pt_trader.py (exchange-suffixed)
+        _xk = str(self.settings.get("exchange", "demo")).strip().lower()
+        self.trader_status_path = os.path.join(self.hub_dir, f"trader_status_{_xk}.json")
+        self.trade_history_path = os.path.join(self.hub_dir, f"trade_history_{_xk}.jsonl")
+        self.pnl_ledger_path = os.path.join(self.hub_dir, f"pnl_ledger_{_xk}.json")
+        self.account_value_history_path = os.path.join(self.hub_dir, f"account_value_history_{_xk}.jsonl")
 
         # file written by pt_thinker.py (runner readiness gate used for Start All)
         self.runner_ready_path = os.path.join(self.hub_dir, "runner_ready.json")
@@ -3546,7 +3547,8 @@ class PowerTraderHub(tk.Tk):
     # -----------------------------
 
     def _bot_order_ids_path(self) -> str:
-        return os.path.join(self.hub_dir, "bot_order_ids.json")
+        _xk = str(self.settings.get("exchange", "demo")).strip().lower()
+        return os.path.join(self.hub_dir, f"bot_order_ids_{_xk}.json")
 
     def _load_bot_order_ids(self) -> Dict[str, List[str]]:
         try:
