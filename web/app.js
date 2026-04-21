@@ -447,6 +447,7 @@ async function loadChart(coin, tf) {
   }
 
   updateChartPriceLines();
+  await updateChartTradeMarkers(coin);
 
   const refreshMs = TF_REFRESH_MS[tf] || 60_000;
   state.chartRefreshTimer = setInterval(async () => {
@@ -585,6 +586,44 @@ async function _applyAccountData(hours) {
       const points = data.history.map(h => ({time: Math.floor(h.ts), value: h.total_account_value}));
       state.areaSeries.setData(points);
     }
+  } catch {}
+}
+
+async function updateChartTradeMarkers(coin) {
+  if (!state.candleSeries || !coin) return;
+  try {
+    const data = await api(`coins/${coin}`);
+    const trades = data.trades || [];
+    if (trades.length === 0) { state.candleSeries.setMarkers([]); return; }
+
+    const markers = trades.map(t => {
+      const side = (t.side || '').toLowerCase();
+      const tag = (t.tag || '').toUpperCase();
+      let label, color, shape, position;
+
+      if (side === 'buy') {
+        label = tag === 'DCA' ? 'DCA' : 'BUY';
+        color = tag === 'DCA' ? '#A855F7' : '#FF4466';
+        shape = 'arrowUp';
+        position = 'belowBar';
+      } else {
+        label = 'SELL';
+        color = '#00CC66';
+        shape = 'arrowDown';
+        position = 'aboveBar';
+      }
+
+      return {
+        time: Math.floor(t.ts),
+        position,
+        color,
+        shape,
+        text: label,
+      };
+    });
+
+    markers.sort((a, b) => a.time - b.time);
+    state.candleSeries.setMarkers(markers);
   } catch {}
 }
 
