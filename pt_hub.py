@@ -30,8 +30,8 @@ DARK_PANEL2 = "#121C2F"
 DARK_BORDER = "#243044"
 DARK_FG = "#C7D1DB"
 DARK_MUTED = "#8B949E"
-DARK_ACCENT = "#00FF66"   
-DARK_ACCENT2 = "#00E5FF"   
+DARK_ACCENT = "#00FF66"
+DARK_ACCENT2 = "#00E5FF"
 DARK_SELECT_BG = "#17324A"
 DARK_SELECT_FG = "#00FF66"
 
@@ -44,7 +44,6 @@ class _WrapItem:
 
 
 class WrapFrame(ttk.Frame):
-
     def __init__(self, parent, **kwargs):
         super().__init__(parent, **kwargs)
         self._items: List[_WrapItem] = []
@@ -115,8 +114,14 @@ class WrapFrame(ttk.Frame):
 
 
 class NeuralSignalTile(ttk.Frame):
-
-    def __init__(self, parent: tk.Widget, coin: str, bar_height: int = 52, levels: int = 8, trade_start_level: int = 3):
+    def __init__(
+        self,
+        parent: tk.Widget,
+        coin: str,
+        bar_height: int = 52,
+        levels: int = 8,
+        trade_start_level: int = 3,
+    ):
         super().__init__(parent)
         self.coin = coin
 
@@ -128,8 +133,8 @@ class NeuralSignalTile(ttk.Frame):
         self._normal_fg = DARK_FG
         self._hover_fg = DARK_ACCENT2
 
-        self._levels = max(2, int(levels))             
-        self._display_levels = self._levels - 1        
+        self._levels = max(2, int(levels))
+        self._display_levels = self._levels - 1
 
         self._bar_h = int(bar_height)
         self._bar_w = 12
@@ -173,7 +178,10 @@ class NeuralSignalTile(ttk.Frame):
 
             self._long_segs.append(
                 self.canvas.create_rectangle(
-                    x0, y_top, x1, y_bot,
+                    x0,
+                    y_top,
+                    x1,
+                    y_bot,
                     fill=self._base_fill,
                     outline=DARK_BORDER,
                     width=1,
@@ -181,7 +189,10 @@ class NeuralSignalTile(ttk.Frame):
             )
             self._short_segs.append(
                 self.canvas.create_rectangle(
-                    x2, y_top, x3, y_bot,
+                    x2,
+                    y_top,
+                    x3,
+                    y_bot,
                     fill=self._base_fill,
                     outline=DARK_BORDER,
                     width=1,
@@ -191,11 +202,14 @@ class NeuralSignalTile(ttk.Frame):
         # Trade-start marker line (boundary before the trade-start level).
         # Example: trade_start_level=3 => line after 2nd block (between 2 and 3).
         self._trade_line_geom = (x0, x1, x2, x3, yb)
-        self._trade_line_long = self.canvas.create_line(x0, yb, x1, yb, fill=DARK_FG, width=2)
-        self._trade_line_short = self.canvas.create_line(x2, yb, x3, yb, fill=DARK_FG, width=2)
+        self._trade_line_long = self.canvas.create_line(
+            x0, yb, x1, yb, fill=DARK_FG, width=2
+        )
+        self._trade_line_short = self.canvas.create_line(
+            x2, yb, x3, yb, fill=DARK_FG, width=2
+        )
         self._trade_start_level = 3
         self.set_trade_start_level(trade_start_level)
-
 
         self.value_lbl = ttk.Label(self, text="L:0 S:0")
         self.value_lbl.pack(anchor="center", pady=(1, 0))
@@ -256,8 +270,6 @@ class NeuralSignalTile(ttk.Frame):
         except Exception:
             pass
 
-
-
     def _clamp_level(self, value: Any) -> int:
         try:
             v = int(float(value))
@@ -284,7 +296,6 @@ class NeuralSignalTile(ttk.Frame):
         for i in range(idx + 1):
             self.canvas.itemconfigure(seg_ids[i], fill=active_fill)
 
-
     def set_values(self, long_sig: Any, short_sig: Any) -> None:
         ls = self._clamp_level(long_sig)
         ss = self._clamp_level(short_sig)
@@ -294,80 +305,59 @@ class NeuralSignalTile(ttk.Frame):
         self._set_level(self._short_segs, ss, self._short_fill)
 
 
-
-
-
-
-
-
-
 # -----------------------------
 # Settings / Paths
 # -----------------------------
 
 DEFAULT_SETTINGS = {
     "main_neural_dir": "state",
-    "coins": ['BTC', 'ETH', 'BNB', 'PAXG', 'SOL', 'XRP', 'DOGE'],
-
+    "coins": ["BTC", "ETH", "BNB", "PAXG", "SOL", "XRP", "DOGE"],
     # Long-term holdings symbols (optional): used ONLY for UI grouping.
     # IMPORTANT: No amounts are stored anymore. The bot will auto-ignore any extra
     # holdings beyond its tracked "bot-owned" position qty.
     # Format: ["BTC", "ETH"]
-    "long_term_holdings": ['BTC', 'ETH', 'BNB', 'PAXG', 'SOL', 'XRP', 'DOGE'],
-
+    "long_term_holdings": ["BTC", "ETH", "BNB", "PAXG", "SOL", "XRP", "DOGE"],
     # % of realized trade profits to automatically grow long-term holdings.
     # When the selected % of profits accumulates to $0.50+, the trader will buy
     # the long-term coin that is furthest below its daily 200 EMA.
     "lth_profit_alloc_pct": 50.0,
-
     "trade_start_level": 4,
     "start_allocation_pct": 0.5,
-
     "dca_multiplier": 2.0,
     "dca_levels": [-5.0, -10.0, -20.0, -30.0, -40.0, -50.0, -50.0],
     "max_dca_buys_per_24h": 1,
-
     # --- Trailing PM settings (editable; hot-reload friendly) ---
     "pm_start_pct_no_dca": 3.0,
     "pm_start_pct_with_dca": 3.0,
     "trailing_gap_pct": 0.1,
-
     "hub_data_dir": "",
-
     "script_neural_runner2": "pt_thinker.py",
     "script_neural_trainer": "pt_trainer.py",
     "script_trader": "pt_trader.py",
-
-
     # Chart timeframe options (must exist for brand-new installs)
-    "timeframes": ["1min", "5min", "15min", "30min", "1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week"],
+    "timeframes": [
+        "1min",
+        "5min",
+        "15min",
+        "30min",
+        "1hour",
+        "2hour",
+        "4hour",
+        "8hour",
+        "12hour",
+        "1day",
+        "1week",
+    ],
     "default_timeframe": "1hour",
-
-
     "ui_refresh_seconds": 1.0,
     "chart_refresh_seconds": 4.0,
     "candles_limit": 250,
     "ui_font_size": 16,
-
     "exchange": "demo",
     "demo_starting_usd": 10000.0,
     "demo_slippage_factor": 0.001,
-
     "auto_start_scripts": False,
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 SETTINGS_FILE = "gui_settings.json"
@@ -444,7 +434,9 @@ def _read_trade_history_jsonl(path: str, tail: Optional[int] = None) -> List[dic
     return list(out[-tail:]) if tail else list(out)
 
 
-def _compute_dca_24h_by_coin(path: str, now_ts: Optional[float] = None) -> Dict[str, int]:
+def _compute_dca_24h_by_coin(
+    path: str, now_ts: Optional[float] = None
+) -> Dict[str, int]:
     """
     Cached helper for the Current Trades table.
     Recomputes at most once per 5-second bucket unless trade_history.jsonl changed.
@@ -522,7 +514,6 @@ def _ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
-
 def _fmt_money(x: float) -> str:
     """Format a USD *amount* (account value, position value, etc.) as dollars with 2 decimals."""
     try:
@@ -592,6 +583,7 @@ def _now_str() -> str:
 # Neural folder detection
 # -----------------------------
 
+
 def build_coin_folders(main_dir: str, coins: List[str]) -> Dict[str, str]:
     """
     Every coin gets its own subfolder inside main_dir/coins/.
@@ -639,10 +631,7 @@ def read_price_levels_from_html(path: str) -> List[float]:
 
         # Normalize common separators that pt_thinker can leave behind
         raw = (
-            raw.replace(",", " ")
-               .replace("[", " ")
-               .replace("]", " ")
-               .replace("'", " ")
+            raw.replace(",", " ").replace("[", " ").replace("]", " ").replace("'", " ")
         )
 
         vals: List[float] = []
@@ -655,7 +644,6 @@ def read_price_levels_from_html(path: str) -> List[float]:
                     continue
                 if v >= 9e15:  # pt_thinker uses 99999999999999999
                     continue
-
 
                 vals.append(v)
             except Exception:
@@ -674,7 +662,6 @@ def read_price_levels_from_html(path: str) -> List[float]:
         return out
     except Exception:
         return []
-
 
 
 def read_int_from_file(path: str) -> int:
@@ -698,15 +685,18 @@ def read_short_signal(folder: str) -> int:
 # Candle fetching (KuCoin)
 # -----------------------------
 
+
 class CandleFetcher:
     """
     Uses kucoin-python if available; otherwise falls back to KuCoin REST via requests.
     """
+
     def __init__(self):
         self._mode = "kucoin_client"
         self._market = None
         try:
             from kucoin.client import Market  # type: ignore
+
             self._market = Market(url="https://api.kucoin.com")
         except Exception:
             self._mode = "rest"
@@ -714,13 +704,13 @@ class CandleFetcher:
 
         if self._mode == "rest":
             import requests  # local import
+
             self._requests = requests
 
         # Small in-memory cache to keep timeframe switching snappy.
         # key: (pair, timeframe, limit) -> (saved_time_epoch, candles)
         self._cache: Dict[Tuple[str, str, int], Tuple[float, List[dict]]] = {}
         self._cache_ttl_seconds: float = 10.0
-
 
     def get_klines(self, symbol: str, timeframe: str, limit: int = 120) -> List[dict]:
         """
@@ -741,9 +731,17 @@ class CandleFetcher:
 
         # rough window (timeframe-dependent) so we get enough candles
         tf_seconds = {
-            "1min": 60, "5min": 300, "15min": 900, "30min": 1800,
-            "1hour": 3600, "2hour": 7200, "4hour": 14400, "8hour": 28800, "12hour": 43200,
-            "1day": 86400, "1week": 604800
+            "1min": 60,
+            "5min": 300,
+            "15min": 900,
+            "30min": 1800,
+            "1hour": 3600,
+            "2hour": 7200,
+            "4hour": 14400,
+            "8hour": 28800,
+            "12hour": 43200,
+            "1day": 86400,
+            "1week": 604800,
         }.get(timeframe, 3600)
 
         end_at = int(now)
@@ -754,18 +752,27 @@ class CandleFetcher:
                 # IMPORTANT: limit the server response by passing startAt/endAt.
                 # This avoids downloading a huge default kline set every switch.
                 try:
-                    raw = self._market.get_kline(pair, timeframe, startAt=start_at, endAt=end_at)  # type: ignore
+                    raw = self._market.get_kline(
+                        pair, timeframe, startAt=start_at, endAt=end_at
+                    )  # type: ignore
                 except Exception:
                     # fallback if that client version doesn't accept kwargs
-                    raw = self._market.get_kline(pair, timeframe)  # returns newest->oldest
+                    raw = self._market.get_kline(
+                        pair, timeframe
+                    )  # returns newest->oldest
 
                 candles: List[dict] = []
                 for row in raw:
                     # KuCoin kline row format:
                     # [time, open, close, high, low, volume, turnover]
                     ts = int(float(row[0]))
-                    o = float(row[1]); c = float(row[2]); h = float(row[3]); l = float(row[4])
-                    candles.append({"ts": ts, "open": o, "high": h, "low": l, "close": c})
+                    o = float(row[1])
+                    c = float(row[2])
+                    h = float(row[3])
+                    l = float(row[4])
+                    candles.append(
+                        {"ts": ts, "open": o, "high": h, "low": l, "close": c}
+                    )
                 candles.sort(key=lambda x: x["ts"])
                 if limit and len(candles) > limit:
                     candles = candles[-limit:]
@@ -778,14 +785,22 @@ class CandleFetcher:
         # REST fallback
         try:
             url = "https://api.kucoin.com/api/v1/market/candles"
-            params = {"symbol": pair, "type": timeframe, "startAt": start_at, "endAt": end_at}
+            params = {
+                "symbol": pair,
+                "type": timeframe,
+                "startAt": start_at,
+                "endAt": end_at,
+            }
             resp = self._requests.get(url, params=params, timeout=10)
             j = resp.json()
             data = j.get("data", [])  # newest->oldest
             candles: List[dict] = []
             for row in data:
                 ts = int(float(row[0]))
-                o = float(row[1]); c = float(row[2]); h = float(row[3]); l = float(row[4])
+                o = float(row[1])
+                c = float(row[2])
+                h = float(row[3])
+                l = float(row[4])
                 candles.append({"ts": ts, "open": o, "high": h, "low": l, "close": c})
             candles.sort(key=lambda x: x["ts"])
             if limit and len(candles) > limit:
@@ -797,10 +812,10 @@ class CandleFetcher:
             return []
 
 
-
 # -----------------------------
 # Chart widget
 # -----------------------------
+
 
 class CandleChart(ttk.Frame):
     def __init__(
@@ -819,19 +834,54 @@ class CandleChart(ttk.Frame):
 
         cfg = self.settings_getter() or {}
 
-        tfs = cfg.get("timeframes") or ["1min", "5min", "15min", "30min", "1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week"]
+        tfs = cfg.get("timeframes") or [
+            "1min",
+            "5min",
+            "15min",
+            "30min",
+            "1hour",
+            "2hour",
+            "4hour",
+            "8hour",
+            "12hour",
+            "1day",
+            "1week",
+        ]
         if isinstance(tfs, str):
             tfs = [x.strip() for x in tfs.replace("\n", ",").split(",")]
         if not isinstance(tfs, (list, tuple)):
-            tfs = ["1min", "5min", "15min", "30min", "1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week"]
-        tfs = [str(x).strip() for x in tfs if str(x).strip()] or ["1min", "5min", "15min", "30min", "1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week"]
+            tfs = [
+                "1min",
+                "5min",
+                "15min",
+                "30min",
+                "1hour",
+                "2hour",
+                "4hour",
+                "8hour",
+                "12hour",
+                "1day",
+                "1week",
+            ]
+        tfs = [str(x).strip() for x in tfs if str(x).strip()] or [
+            "1min",
+            "5min",
+            "15min",
+            "30min",
+            "1hour",
+            "2hour",
+            "4hour",
+            "8hour",
+            "12hour",
+            "1day",
+            "1week",
+        ]
 
         dtf = str(cfg.get("default_timeframe") or "").strip()
         if (not dtf) or (dtf not in tfs):
             dtf = tfs[0] if tfs else "1hour"
 
         self.timeframe_var = tk.StringVar(value=dtf)
-
 
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=6)
@@ -847,7 +897,6 @@ class CandleChart(ttk.Frame):
             width=10,
         )
         self.tf_combo.pack(side="left")
-
 
         # Debounce rapid timeframe changes so redraws don't stack
         self._tf_after_id = None
@@ -869,7 +918,6 @@ class CandleChart(ttk.Frame):
             self._tf_after_id = self.after(120, _do)
 
         self.tf_combo.bind("<<ComboboxSelected>>", _debounced_tf_change)
-
 
         self.neural_status_label = ttk.Label(top, text="Neural: N/A")
         self.neural_status_label.pack(side="left", padx=(12, 0))
@@ -933,14 +981,7 @@ class CandleChart(ttk.Frame):
 
         canvas_w.bind("<Configure>", _on_canvas_configure, add="+")
 
-
-
-
-
-
-
         self._last_refresh = 0.0
-
 
     def _apply_dark_chart_style(self) -> None:
         """Apply dark styling (called on init and after every ax.clear())."""
@@ -980,10 +1021,26 @@ class CandleChart(ttk.Frame):
         long_sig_path = os.path.join(folder, "long_dca_signal.txt")
         short_sig_path = os.path.join(folder, "short_dca_signal.txt")
 
-        long_levels = read_price_levels_from_html(low_path) if (folder and os.path.isfile(low_path)) else []
-        short_levels = read_price_levels_from_html(high_path) if (folder and os.path.isfile(high_path)) else []
-        long_sig = read_int_from_file(long_sig_path) if (folder and os.path.isfile(long_sig_path)) else 0
-        short_sig = read_int_from_file(short_sig_path) if (folder and os.path.isfile(short_sig_path)) else 0
+        long_levels = (
+            read_price_levels_from_html(low_path)
+            if (folder and os.path.isfile(low_path))
+            else []
+        )
+        short_levels = (
+            read_price_levels_from_html(high_path)
+            if (folder and os.path.isfile(high_path))
+            else []
+        )
+        long_sig = (
+            read_int_from_file(long_sig_path)
+            if (folder and os.path.isfile(long_sig_path))
+            else 0
+        )
+        short_sig = (
+            read_int_from_file(short_sig_path)
+            if (folder and os.path.isfile(short_sig_path))
+            else 0
+        )
 
         last_ts = None
         try:
@@ -998,7 +1055,11 @@ class CandleChart(ttk.Frame):
 
         trades: List[dict] = []
         try:
-            trades = _read_trade_history_jsonl(self.trade_history_path) if self.trade_history_path else []
+            trades = (
+                _read_trade_history_jsonl(self.trade_history_path)
+                if self.trade_history_path
+                else []
+            )
         except Exception:
             trades = []
 
@@ -1042,7 +1103,7 @@ class CandleChart(ttk.Frame):
             self.ax.lines.clear()
             self.ax.patches.clear()
             self.ax.collections.clear()  # scatter dots live here
-            self.ax.texts.clear()        # labels/annotations live here
+            self.ax.texts.clear()  # labels/annotations live here
         except Exception:
             self.ax.cla()
             self._apply_dark_chart_style()
@@ -1117,31 +1178,44 @@ class CandleChart(ttk.Frame):
 
         try:
             if trail_line is not None and float(trail_line) > 0:
-                self.ax.axhline(y=float(trail_line), linewidth=1.5, color="green", alpha=0.95)
+                self.ax.axhline(
+                    y=float(trail_line), linewidth=1.5, color="green", alpha=0.95
+                )
         except Exception:
             pass
 
         try:
             if dca_line_price is not None and float(dca_line_price) > 0:
-                self.ax.axhline(y=float(dca_line_price), linewidth=1.5, color="red", alpha=0.95)
+                self.ax.axhline(
+                    y=float(dca_line_price), linewidth=1.5, color="red", alpha=0.95
+                )
         except Exception:
             pass
 
         try:
             if avg_cost_basis is not None and float(avg_cost_basis) > 0:
-                self.ax.axhline(y=float(avg_cost_basis), linewidth=1.5, color="yellow", alpha=0.95)
+                self.ax.axhline(
+                    y=float(avg_cost_basis), linewidth=1.5, color="yellow", alpha=0.95
+                )
         except Exception:
             pass
 
         try:
             if current_buy_price is not None and float(current_buy_price) > 0:
-                self.ax.axhline(y=float(current_buy_price), linewidth=1.5, color="purple", alpha=0.95)
+                self.ax.axhline(
+                    y=float(current_buy_price),
+                    linewidth=1.5,
+                    color="purple",
+                    alpha=0.95,
+                )
         except Exception:
             pass
 
         try:
             if current_sell_price is not None and float(current_sell_price) > 0:
-                self.ax.axhline(y=float(current_sell_price), linewidth=1.5, color="teal", alpha=0.95)
+                self.ax.axhline(
+                    y=float(current_sell_price), linewidth=1.5, color="teal", alpha=0.95
+                )
         except Exception:
             pass
 
@@ -1235,7 +1309,11 @@ class CandleChart(ttk.Frame):
                     elif i >= len(candle_ts):
                         idx = len(candle_ts) - 1
                     else:
-                        idx = i if abs(candle_ts[i] - tts) < abs(tts - candle_ts[i - 1]) else (i - 1)
+                        idx = (
+                            i
+                            if abs(candle_ts[i] - tts) < abs(tts - candle_ts[i - 1])
+                            else (i - 1)
+                        )
 
                     y = None
                     try:
@@ -1291,7 +1369,9 @@ class CandleChart(ttk.Frame):
 
         tick_x = [xs[i] for i in idxs]
         tick_lbl = [
-            time.strftime("%Y-%m-%d\n%H:%M", time.localtime(int(candles[i].get("ts", 0))))
+            time.strftime(
+                "%Y-%m-%d\n%H:%M", time.localtime(int(candles[i].get("ts", 0)))
+            )
             for i in idxs
         ]
 
@@ -1310,7 +1390,9 @@ class CandleChart(ttk.Frame):
         )
 
         if last_ts:
-            self.last_update_label.config(text=f"Last: {time.strftime('%H:%M:%S', time.localtime(float(last_ts)))}")
+            self.last_update_label.config(
+                text=f"Last: {time.strftime('%H:%M:%S', time.localtime(float(last_ts)))}"
+            )
         else:
             self.last_update_label.config(text="Last: N/A")
 
@@ -1341,15 +1423,21 @@ class CandleChart(ttk.Frame):
 # Account Value chart widget
 # -----------------------------
 
+
 class AccountValueChart(ttk.Frame):
-    def __init__(self, parent: tk.Widget, history_path: str, trade_history_path: str, max_points: int = 250):
+    def __init__(
+        self,
+        parent: tk.Widget,
+        history_path: str,
+        trade_history_path: str,
+        max_points: int = 250,
+    ):
         super().__init__(parent)
         self.history_path = history_path
         self.trade_history_path = trade_history_path
         # Hard-cap to 250 points max (account value chart only)
         self.max_points = min(int(max_points or 0) or 250, 250)
         self._last_mtime: Optional[float] = None
-
 
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=6)
@@ -1410,13 +1498,6 @@ class AccountValueChart(ttk.Frame):
 
         canvas_w.bind("<Configure>", _on_canvas_configure, add="+")
 
-
-
-
-
-
-
-
     def _apply_dark_chart_style(self) -> None:
         try:
             self.fig.patch.set_facecolor(DARK_BG)
@@ -1438,7 +1519,11 @@ class AccountValueChart(ttk.Frame):
             m_hist = None
 
         try:
-            m_trades = os.path.getmtime(self.trade_history_path) if self.trade_history_path else None
+            m_trades = (
+                os.path.getmtime(self.trade_history_path)
+                if self.trade_history_path
+                else None
+            )
         except Exception:
             m_trades = None
 
@@ -1468,7 +1553,11 @@ class AccountValueChart(ttk.Frame):
                             tsf = float(ts)
                             vf = float(v)
 
-                            if (not math.isfinite(tsf)) or (not math.isfinite(vf)) or (vf <= 0.0):
+                            if (
+                                (not math.isfinite(tsf))
+                                or (not math.isfinite(vf))
+                                or (vf <= 0.0)
+                            ):
                                 continue
 
                             points.append((tsf, vf))
@@ -1530,7 +1619,11 @@ class AccountValueChart(ttk.Frame):
         markers: List[Tuple[int, float, str, str]] = []
 
         try:
-            trades = _read_trade_history_jsonl(self.trade_history_path) if self.trade_history_path else []
+            trades = (
+                _read_trade_history_jsonl(self.trade_history_path)
+                if self.trade_history_path
+                else []
+            )
             if trades and points:
                 ts_list = [float(p[0]) for p in points]
                 ys = [round(p[1], 2) for p in points]
@@ -1559,7 +1652,9 @@ class AccountValueChart(ttk.Frame):
                         continue
 
                     sym = str(tr.get("symbol", "")).upper().strip()
-                    coin_tag = (sym.split("_")[0].strip() if sym else "") or (sym or "?")
+                    coin_tag = (sym.split("_")[0].strip() if sym else "") or (
+                        sym or "?"
+                    )
                     label = f"{coin_tag} {action_label}"
 
                     i = bisect.bisect_left(ts_list, tts)
@@ -1568,7 +1663,11 @@ class AccountValueChart(ttk.Frame):
                     elif i >= len(ts_list):
                         idx = len(ts_list) - 1
                     else:
-                        idx = i if abs(ts_list[i] - tts) < abs(tts - ts_list[i - 1]) else (i - 1)
+                        idx = (
+                            i
+                            if abs(ts_list[i] - tts) < abs(tts - ts_list[i - 1])
+                            else (i - 1)
+                        )
 
                     markers.append((idx, ys[idx], label, color))
 
@@ -1646,7 +1745,9 @@ class AccountValueChart(ttk.Frame):
                 pass
 
         try:
-            self.ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _pos: f"${y:,.2f}"))
+            self.ax.yaxis.set_major_formatter(
+                FuncFormatter(lambda y, _pos: f"${y:,.2f}")
+            )
         except Exception:
             pass
 
@@ -1668,7 +1769,10 @@ class AccountValueChart(ttk.Frame):
                 last = i
 
         tick_x = [xs[i] for i in idxs]
-        tick_lbl = [time.strftime("%Y-%m-%d\n%H:%M:%S", time.localtime(points[i][0])) for i in idxs]
+        tick_lbl = [
+            time.strftime("%Y-%m-%d\n%H:%M:%S", time.localtime(points[i][0]))
+            for i in idxs
+        ]
         try:
             self.ax.minorticks_off()
             self.ax.set_xticks(tick_x)
@@ -1698,10 +1802,10 @@ class AccountValueChart(ttk.Frame):
         self.apply_refresh_data(payload)
 
 
-
 # -----------------------------
 # Hub App
 # -----------------------------
+
 
 @dataclass
 class ProcInfo:
@@ -1710,18 +1814,17 @@ class ProcInfo:
     proc: Optional[subprocess.Popen] = None
 
 
-
 @dataclass
 class LogProc:
     """
     A running process with a live log queue for stdout/stderr lines.
     """
+
     info: ProcInfo
     log_q: "queue.Queue[str]"
     thread: Optional[threading.Thread] = None
     is_trainer: bool = False
     coin: Optional[str] = None
-
 
 
 class PowerTraderHub(tk.Tk):
@@ -1753,7 +1856,9 @@ class PowerTraderHub(tk.Tk):
         self.settings["main_neural_dir"] = main_dir
 
         # hub data dir (defaults to output/hub_data)
-        hub_dir = self.settings.get("hub_data_dir") or os.path.join(main_dir, "hub_data")
+        hub_dir = self.settings.get("hub_data_dir") or os.path.join(
+            main_dir, "hub_data"
+        )
         if hub_dir and not os.path.isabs(hub_dir):
             hub_dir = os.path.abspath(os.path.join(self.project_dir, hub_dir))
         self.hub_dir = os.path.abspath(hub_dir)
@@ -1761,14 +1866,19 @@ class PowerTraderHub(tk.Tk):
 
         # file paths written by pt_trader.py (exchange-suffixed)
         _xk = str(self.settings.get("exchange", "demo")).strip().lower()
-        self.trader_status_path = os.path.join(self.hub_dir, f"trader_status_{_xk}.json")
-        self.trade_history_path = os.path.join(self.hub_dir, f"trade_history_{_xk}.jsonl")
+        self.trader_status_path = os.path.join(
+            self.hub_dir, f"trader_status_{_xk}.json"
+        )
+        self.trade_history_path = os.path.join(
+            self.hub_dir, f"trade_history_{_xk}.jsonl"
+        )
         self.pnl_ledger_path = os.path.join(self.hub_dir, f"pnl_ledger_{_xk}.json")
-        self.account_value_history_path = os.path.join(self.hub_dir, f"account_value_history_{_xk}.jsonl")
+        self.account_value_history_path = os.path.join(
+            self.hub_dir, f"account_value_history_{_xk}.jsonl"
+        )
 
         # file written by pt_thinker.py (runner readiness gate used for Start All)
         self.runner_ready_path = os.path.join(self.hub_dir, "runner_ready.json")
-
 
         # internal: when Start All is pressed, we start the runner first and only start the trader once ready
         self._auto_start_trader_pending = False
@@ -1793,8 +1903,6 @@ class PowerTraderHub(tk.Tk):
         # account value chart widget (created in _build_layout)
         self.account_chart = None
 
-
-
         # coin folders (neural outputs)
         self.coins = [c.upper().strip() for c in self.settings["coins"]]
 
@@ -1810,7 +1918,6 @@ class PowerTraderHub(tk.Tk):
         except Exception:
             lth_coins = []
 
-
         base_set = set(self.coins)
         extras = sorted(set(lth_coins) - base_set)
         self.chart_coins = list(self.coins) + extras
@@ -1819,20 +1926,30 @@ class PowerTraderHub(tk.Tk):
         self._ensure_alt_coin_folders_and_trainer_on_startup()
 
         # Rebuild folder maps after potential folder creation
-        self.coin_folders = build_coin_folders(self.settings["main_neural_dir"], self.coins)
-        self.chart_coin_folders = build_coin_folders(self.settings["main_neural_dir"], self.chart_coins)
+        self.coin_folders = build_coin_folders(
+            self.settings["main_neural_dir"], self.coins
+        )
+        self.chart_coin_folders = build_coin_folders(
+            self.settings["main_neural_dir"], self.chart_coins
+        )
 
         # scripts
         self.proc_neural = ProcInfo(
             name="Neural Runner",
-            path=os.path.abspath(os.path.join(self.project_dir, self.settings["script_neural_runner2"]))
+            path=os.path.abspath(
+                os.path.join(self.project_dir, self.settings["script_neural_runner2"])
+            ),
         )
         self.proc_trader = ProcInfo(
             name="Trader",
-            path=os.path.abspath(os.path.join(self.project_dir, self.settings["script_trader"]))
+            path=os.path.abspath(
+                os.path.join(self.project_dir, self.settings["script_trader"])
+            ),
         )
 
-        self.proc_trainer_path = os.path.abspath(os.path.join(self.project_dir, self.settings["script_neural_trainer"]))
+        self.proc_trainer_path = os.path.abspath(
+            os.path.join(self.project_dir, self.settings["script_neural_trainer"])
+        )
 
         # live log queues
         # Bounded on purpose: prevents runaway subprocess spam from making the GUI
@@ -1877,7 +1994,6 @@ class PowerTraderHub(tk.Tk):
         self.after(250, self._tick)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-
 
     # ---- forced dark mode ----
 
@@ -1931,8 +2047,15 @@ class PowerTraderHub(tk.Tk):
                 pass
 
         try:
-            style.configure("TLabelframe", background=DARK_BG, foreground=DARK_FG, bordercolor=DARK_BORDER)
-            style.configure("TLabelframe.Label", background=DARK_BG, foreground=DARK_ACCENT)
+            style.configure(
+                "TLabelframe",
+                background=DARK_BG,
+                foreground=DARK_FG,
+                bordercolor=DARK_BORDER,
+            )
+            style.configure(
+                "TLabelframe.Label", background=DARK_BG, foreground=DARK_ACCENT
+            )
         except Exception:
             pass
 
@@ -2007,7 +2130,12 @@ class PowerTraderHub(tk.Tk):
         # Notebooks
         try:
             style.configure("TNotebook", background=DARK_BG, bordercolor=DARK_BORDER)
-            style.configure("TNotebook.Tab", background=DARK_BG2, foreground=DARK_FG, padding=(10, 6))
+            style.configure(
+                "TNotebook.Tab",
+                background=DARK_BG2,
+                foreground=DARK_FG,
+                padding=(10, 6),
+            )
             style.map(
                 "TNotebook.Tab",
                 background=[
@@ -2067,7 +2195,6 @@ class PowerTraderHub(tk.Tk):
         except Exception:
             pass
 
-
         # Treeview (Current Trades table)
         try:
             style.configure(
@@ -2085,7 +2212,12 @@ class PowerTraderHub(tk.Tk):
                 foreground=[("selected", DARK_SELECT_FG)],
             )
 
-            style.configure("Treeview.Heading", background=DARK_BG2, foreground=DARK_ACCENT, relief="flat")
+            style.configure(
+                "Treeview.Heading",
+                background=DARK_BG2,
+                foreground=DARK_ACCENT,
+                relief="flat",
+            )
             style.map(
                 "Treeview.Heading",
                 background=[("active", DARK_PANEL2)],
@@ -2115,7 +2247,9 @@ class PowerTraderHub(tk.Tk):
     # ---- settings ----
 
     def _load_settings(self) -> dict:
-        settings_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), SETTINGS_FILE)
+        settings_path = os.path.join(
+            os.path.abspath(os.path.dirname(__file__)), SETTINGS_FILE
+        )
         data = _safe_read_json(settings_path)
         if not isinstance(data, dict):
             data = {}
@@ -2144,7 +2278,17 @@ class PowerTraderHub(tk.Tk):
 
         # normalize LTH profit allocation %
         try:
-            p = float(str(merged.get("lth_profit_alloc_pct", DEFAULT_SETTINGS.get("lth_profit_alloc_pct", 0.0)) or 0.0).replace("%", "").strip())
+            p = float(
+                str(
+                    merged.get(
+                        "lth_profit_alloc_pct",
+                        DEFAULT_SETTINGS.get("lth_profit_alloc_pct", 0.0),
+                    )
+                    or 0.0
+                )
+                .replace("%", "")
+                .strip()
+            )
         except Exception:
             p = float(DEFAULT_SETTINGS.get("lth_profit_alloc_pct", 0.0) or 0.0)
         if p < 0.0:
@@ -2205,13 +2349,11 @@ class PowerTraderHub(tk.Tk):
 
         return merged
 
-
-
-
     def _save_settings(self) -> None:
-        settings_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), SETTINGS_FILE)
+        settings_path = os.path.join(
+            os.path.abspath(os.path.dirname(__file__)), SETTINGS_FILE
+        )
         _safe_write_json(settings_path, self.settings)
-
 
     def _font_scale(self) -> float:
         try:
@@ -2237,9 +2379,17 @@ class PowerTraderHub(tk.Tk):
         size = int(self.settings.get("ui_font_size", 0) or 0)
         if size <= 0:
             return
-        for name in ("TkDefaultFont", "TkTextFont", "TkFixedFont",
-                      "TkMenuFont", "TkHeadingFont", "TkCaptionFont",
-                      "TkSmallCaptionFont", "TkIconFont", "TkTooltipFont"):
+        for name in (
+            "TkDefaultFont",
+            "TkTextFont",
+            "TkFixedFont",
+            "TkMenuFont",
+            "TkHeadingFont",
+            "TkCaptionFont",
+            "TkSmallCaptionFont",
+            "TkIconFont",
+            "TkTooltipFont",
+        ):
             try:
                 tkfont.nametofont(name).configure(size=size)
             except Exception:
@@ -2264,15 +2414,30 @@ class PowerTraderHub(tk.Tk):
           and copy the trainer script into it.
         """
         try:
-            coins = [str(c).strip().upper() for c in (self.settings.get("coins") or []) if str(c).strip()]
-            main_dir = (self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "state")).strip()
+            coins = [
+                str(c).strip().upper()
+                for c in (self.settings.get("coins") or [])
+                if str(c).strip()
+            ]
+            main_dir = (
+                self.settings.get("main_neural_dir")
+                or os.path.join(self.project_dir, "state")
+            ).strip()
 
-            trainer_name = os.path.basename(str(self.settings.get("script_neural_trainer", "neural_trainer.py")))
+            trainer_name = os.path.basename(
+                str(self.settings.get("script_neural_trainer", "neural_trainer.py"))
+            )
 
             # Source trainer: project dir or configured path
             src_project_trainer = os.path.join(self.project_dir, trainer_name)
-            src_cfg_trainer = str(self.settings.get("script_neural_trainer", trainer_name))
-            src_trainer_path = src_project_trainer if os.path.isfile(src_project_trainer) else src_cfg_trainer
+            src_cfg_trainer = str(
+                self.settings.get("script_neural_trainer", trainer_name)
+            )
+            src_trainer_path = (
+                src_project_trainer
+                if os.path.isfile(src_project_trainer)
+                else src_cfg_trainer
+            )
 
             for coin in coins:
                 coin_dir = os.path.join(main_dir, "coins", coin)
@@ -2285,13 +2450,14 @@ class PowerTraderHub(tk.Tk):
                 # Only copy into folders created at startup (per your request)
                 if created:
                     dst_trainer_path = os.path.join(coin_dir, trainer_name)
-                    if (not os.path.isfile(dst_trainer_path)) and os.path.isfile(src_trainer_path):
+                    if (not os.path.isfile(dst_trainer_path)) and os.path.isfile(
+                        src_trainer_path
+                    ):
                         shutil.copy2(src_trainer_path, dst_trainer_path)
         except Exception:
             pass
 
     # ---- menu / layout ----
-
 
     def _build_menu(self) -> None:
         menubar = tk.Menu(
@@ -2346,7 +2512,6 @@ class PowerTraderHub(tk.Tk):
 
         self.config(menu=menubar)
 
-
     def _build_layout(self) -> None:
         outer = ttk.Panedwindow(self, orient="horizontal")
         outer.pack(fill="both", expand=True)
@@ -2381,7 +2546,6 @@ class PowerTraderHub(tk.Tk):
         right_split = ttk.Panedwindow(right_inner, orient="vertical")
         right_split.pack(fill="both", expand=True)
 
-
         # Keep references so we can clamp sash positions later
         self._pw_outer = outer
         self._pw_left_split = None  # left no longer uses a Panedwindow (tabs instead)
@@ -2389,16 +2553,24 @@ class PowerTraderHub(tk.Tk):
 
         # Clamp panes when the user releases a sash or the window resizes
         outer.bind("<Configure>", lambda e: self._schedule_paned_clamp(self._pw_outer))
-        outer.bind("<ButtonRelease-1>", lambda e: (
-            setattr(self, "_user_moved_outer", True),
-            self._schedule_paned_clamp(self._pw_outer),
-        ))
+        outer.bind(
+            "<ButtonRelease-1>",
+            lambda e: (
+                setattr(self, "_user_moved_outer", True),
+                self._schedule_paned_clamp(self._pw_outer),
+            ),
+        )
 
-        right_split.bind("<Configure>", lambda e: self._schedule_paned_clamp(self._pw_right_split))
-        right_split.bind("<ButtonRelease-1>", lambda e: (
-            setattr(self, "_user_moved_right_split", True),
-            self._schedule_paned_clamp(self._pw_right_split),
-        ))
+        right_split.bind(
+            "<Configure>", lambda e: self._schedule_paned_clamp(self._pw_right_split)
+        )
+        right_split.bind(
+            "<ButtonRelease-1>",
+            lambda e: (
+                setattr(self, "_user_moved_right_split", True),
+                self._schedule_paned_clamp(self._pw_right_split),
+            ),
+        )
 
         # Set a startup default width that matches the screenshot (so left has room for Neural Levels).
         def _init_outer_sash_once():
@@ -2430,13 +2602,16 @@ class PowerTraderHub(tk.Tk):
 
         # Global safety: on some themes/platforms, the mouse events land on the sash element,
         # not the panedwindow widget, so the widget-level binds won't always fire.
-        self.bind_all("<ButtonRelease-1>", lambda e: (
-            self._schedule_paned_clamp(getattr(self, "_pw_outer", None)),
-            self._schedule_paned_clamp(getattr(self, "_pw_right_split", None)),
-            self._schedule_paned_clamp(getattr(self, "_pw_right_bottom_split", None)),
-        ))
-
-
+        self.bind_all(
+            "<ButtonRelease-1>",
+            lambda e: (
+                self._schedule_paned_clamp(getattr(self, "_pw_outer", None)),
+                self._schedule_paned_clamp(getattr(self, "_pw_right_split", None)),
+                self._schedule_paned_clamp(
+                    getattr(self, "_pw_right_bottom_split", None)
+                ),
+            ),
+        )
 
         # ----------------------------
         # LEFT: TOP (Account + Training + Controls) — stays ABOVE the tab area
@@ -2491,18 +2666,23 @@ class PowerTraderHub(tk.Tk):
         self.train_coin_combo.bind("<<ComboboxSelected>>", _sync_train_coin)
         _sync_train_coin()
 
-
-
         # Fixed controls bar (stable layout; no wrapping/reflow on resize)
         # Wrapped in a scrollable canvas so buttons are never cut off when the window is resized.
         btn_scroll_wrap = ttk.Frame(buttons_bar)
         btn_scroll_wrap.pack(fill="x", expand=False, padx=6, pady=6)
 
-        btn_canvas = tk.Canvas(btn_scroll_wrap, bg=DARK_BG, highlightthickness=0, bd=0, height=1)
-        btn_scroll_y = ttk.Scrollbar(btn_scroll_wrap, orient="vertical", command=btn_canvas.yview)
-        btn_scroll_x = ttk.Scrollbar(btn_scroll_wrap, orient="horizontal", command=btn_canvas.xview)
-        btn_canvas.configure(yscrollcommand=btn_scroll_y.set, xscrollcommand=btn_scroll_x.set)
-
+        btn_canvas = tk.Canvas(
+            btn_scroll_wrap, bg=DARK_BG, highlightthickness=0, bd=0, height=1
+        )
+        btn_scroll_y = ttk.Scrollbar(
+            btn_scroll_wrap, orient="vertical", command=btn_canvas.yview
+        )
+        btn_scroll_x = ttk.Scrollbar(
+            btn_scroll_wrap, orient="horizontal", command=btn_canvas.xview
+        )
+        btn_canvas.configure(
+            yscrollcommand=btn_scroll_y.set, xscrollcommand=btn_scroll_x.set
+        )
 
         btn_scroll_wrap.grid_columnconfigure(0, weight=1)
         btn_scroll_wrap.grid_rowconfigure(0, weight=0)
@@ -2510,7 +2690,6 @@ class PowerTraderHub(tk.Tk):
         btn_canvas.grid(row=0, column=0, sticky="ew")
         btn_scroll_y.grid(row=0, column=1, sticky="ns")
         btn_scroll_x.grid(row=1, column=0, sticky="ew")
-
 
         # Start hidden; we only show scrollbars when needed.
         btn_scroll_y.grid_remove()
@@ -2559,7 +2738,6 @@ class PowerTraderHub(tk.Tk):
             except Exception:
                 pass
 
-
         def _btn_canvas_on_configure(event=None):
             try:
                 # Keep the inner window pinned to top-left
@@ -2586,14 +2764,8 @@ class PowerTraderHub(tk.Tk):
         train_group = ttk.Frame(btn_bar)
         train_group.grid(row=0, column=0, sticky="w", padx=(0, 18), pady=(0, 6))
 
-
         # One more pass after layout so scrollbars reflect the true initial size.
         self.after_idle(_btn_update_scrollbars)
-
-
-
-
-
 
         self.lbl_neural = ttk.Label(controls_left, text="Neural: stopped")
         self.lbl_neural.pack(anchor="w", padx=6, pady=(0, 2))
@@ -2604,15 +2776,24 @@ class PowerTraderHub(tk.Tk):
         self.lbl_last_status = ttk.Label(controls_left, text="Last status: N/A")
         self.lbl_last_status.pack(anchor="w", padx=6, pady=(0, 2))
 
-
         # ----------------------------
         # Training section (everything training-specific lives here)
         # ----------------------------
         train_buttons_row = ttk.Frame(training_left)
         train_buttons_row.pack(fill="x", padx=6, pady=(6, 6))
 
-        ttk.Button(train_buttons_row, text="Train Selected", width=BTN_W, command=self.train_selected_coin).pack(anchor="w", pady=(0, 6))
-        ttk.Button(train_buttons_row, text="Train All", width=BTN_W, command=self.train_all_coins).pack(anchor="w")
+        ttk.Button(
+            train_buttons_row,
+            text="Train Selected",
+            width=BTN_W,
+            command=self.train_selected_coin,
+        ).pack(anchor="w", pady=(0, 6))
+        ttk.Button(
+            train_buttons_row,
+            text="Train All",
+            width=BTN_W,
+            command=self.train_all_coins,
+        ).pack(anchor="w")
 
         # Training status (per-coin + gating reason)
         self.lbl_training_overview = ttk.Label(training_left, text="Training: N/A")
@@ -2634,7 +2815,6 @@ class PowerTraderHub(tk.Tk):
         )
         self.training_list.pack(fill="both", expand=True, padx=6, pady=(0, 6))
 
-
         # Start All (moved here: LEFT side of the dual section, directly above Account)
         start_all_row = ttk.Frame(controls_left)
         start_all_row.pack(fill="x", padx=6, pady=(0, 6))
@@ -2647,11 +2827,9 @@ class PowerTraderHub(tk.Tk):
         )
         self.btn_toggle_all.pack(side="left")
 
-
         # Account info (LEFT column, under status)
         acct_box = ttk.LabelFrame(controls_left, text="Account")
         acct_box.pack(fill="x", padx=6, pady=6)
-
 
         self.lbl_acct_total_value = ttk.Label(acct_box, text="Total Account Value: N/A")
         self.lbl_acct_total_value.pack(anchor="w", padx=6, pady=(2, 0))
@@ -2662,7 +2840,9 @@ class PowerTraderHub(tk.Tk):
         self.lbl_acct_buying_power = ttk.Label(acct_box, text="Buying Power: N/A")
         self.lbl_acct_buying_power.pack(anchor="w", padx=6, pady=(2, 0))
 
-        self.lbl_acct_percent_in_trade = ttk.Label(acct_box, text="Percent In Trade: N/A")
+        self.lbl_acct_percent_in_trade = ttk.Label(
+            acct_box, text="Percent In Trade: N/A"
+        )
         self.lbl_acct_percent_in_trade.pack(anchor="w", padx=6, pady=(2, 0))
 
         # DCA affordability
@@ -2677,8 +2857,6 @@ class PowerTraderHub(tk.Tk):
 
         self.lbl_lth_profit_bucket = ttk.Label(acct_box, text="LTH profit bucket: N/A")
         self.lbl_lth_profit_bucket.pack(anchor="w", padx=6, pady=(2, 2))
-
-
 
         # ----------------------------
         # LEFT: Tabs (Long/Short things + Live Output)
@@ -2732,7 +2910,9 @@ class PowerTraderHub(tk.Tk):
         )
         self._neural_overview_scroll.grid(row=0, column=1, sticky="ns")
 
-        self._neural_overview_canvas.configure(yscrollcommand=self._neural_overview_scroll.set)
+        self._neural_overview_canvas.configure(
+            yscrollcommand=self._neural_overview_scroll.set
+        )
 
         self.neural_wrap = WrapFrame(self._neural_overview_canvas)
         self._neural_overview_window = self._neural_overview_canvas.create_window(
@@ -2771,24 +2951,34 @@ class PowerTraderHub(tk.Tk):
         def _on_neural_canvas_configure(e) -> None:
             # Keep the inner wrap frame exactly the canvas width so wrapping is correct.
             try:
-                self._neural_overview_canvas.itemconfigure(self._neural_overview_window, width=int(e.width))
+                self._neural_overview_canvas.itemconfigure(
+                    self._neural_overview_window, width=int(e.width)
+                )
             except Exception:
                 pass
             _update_neural_overview_scrollbars()
 
-        self._neural_overview_canvas.bind("<Configure>", _on_neural_canvas_configure, add="+")
-        self.neural_wrap.bind("<Configure>", _update_neural_overview_scrollbars, add="+")
+        self._neural_overview_canvas.bind(
+            "<Configure>", _on_neural_canvas_configure, add="+"
+        )
+        self.neural_wrap.bind(
+            "<Configure>", _update_neural_overview_scrollbars, add="+"
+        )
         self._update_neural_overview_scrollbars = _update_neural_overview_scrollbars
 
         # Mousewheel scroll inside the tiles area
         def _wheel(e):
             try:
                 if self._neural_overview_scroll.winfo_ismapped():
-                    self._neural_overview_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+                    self._neural_overview_canvas.yview_scroll(
+                        int(-1 * (e.delta / 120)), "units"
+                    )
             except Exception:
                 pass
 
-        self._neural_overview_canvas.bind("<Enter>", lambda _e: self._neural_overview_canvas.focus_set(), add="+")
+        self._neural_overview_canvas.bind(
+            "<Enter>", lambda _e: self._neural_overview_canvas.focus_set(), add="+"
+        )
         self._neural_overview_canvas.bind("<MouseWheel>", _wheel, add="+")
 
         # tiles by coin
@@ -2801,8 +2991,6 @@ class PowerTraderHub(tk.Tk):
             self.after_idle(self._update_neural_overview_scrollbars)
         except Exception:
             pass
-
-
 
         # ----------------------------
         # TAB 2: Live Output (unchanged live log content)
@@ -2821,7 +3009,6 @@ class PowerTraderHub(tk.Tk):
         self.logs_nb = ttk.Notebook(logs_frame)
         self.logs_nb.pack(fill="both", expand=True, padx=6, pady=6)
 
-
         # Runner tab
         runner_tab = ttk.Frame(self.logs_nb)
         self.logs_nb.add(runner_tab, text="Runner")
@@ -2839,7 +3026,9 @@ class PowerTraderHub(tk.Tk):
             highlightcolor=DARK_ACCENT,
         )
 
-        runner_scroll = ttk.Scrollbar(runner_tab, orient="vertical", command=self.runner_text.yview)
+        runner_scroll = ttk.Scrollbar(
+            runner_tab, orient="vertical", command=self.runner_text.yview
+        )
         self.runner_text.configure(yscrollcommand=runner_scroll.set)
         self.runner_text.pack(side="left", fill="both", expand=True)
         runner_scroll.pack(side="right", fill="y")
@@ -2861,7 +3050,9 @@ class PowerTraderHub(tk.Tk):
             highlightcolor=DARK_ACCENT,
         )
 
-        trader_scroll = ttk.Scrollbar(trader_tab, orient="vertical", command=self.trader_text.yview)
+        trader_scroll = ttk.Scrollbar(
+            trader_tab, orient="vertical", command=self.trader_text.yview
+        )
         self.trader_text.configure(yscrollcommand=trader_scroll.set)
         self.trader_text.pack(side="left", fill="both", expand=True)
         trader_scroll.pack(side="right", fill="y")
@@ -2873,19 +3064,25 @@ class PowerTraderHub(tk.Tk):
         top_bar = ttk.Frame(trainer_tab)
         top_bar.pack(fill="x", padx=6, pady=6)
 
-        self.trainer_coin_var = tk.StringVar(value=(self.coins[0] if self.coins else "BTC"))
+        self.trainer_coin_var = tk.StringVar(
+            value=(self.coins[0] if self.coins else "BTC")
+        )
         ttk.Label(top_bar, text="Coin:").pack(side="left")
         self.trainer_coin_combo = ttk.Combobox(
             top_bar,
             textvariable=self.trainer_coin_var,
             values=self.coins,
             state="readonly",
-            width=8
+            width=8,
         )
         self.trainer_coin_combo.pack(side="left", padx=(6, 12))
 
-        ttk.Button(top_bar, text="Start Trainer", command=self.start_trainer_for_selected_coin).pack(side="left")
-        ttk.Button(top_bar, text="Stop Trainer", command=self.stop_trainer_for_selected_coin).pack(side="left", padx=(6, 0))
+        ttk.Button(
+            top_bar, text="Start Trainer", command=self.start_trainer_for_selected_coin
+        ).pack(side="left")
+        ttk.Button(
+            top_bar, text="Stop Trainer", command=self.stop_trainer_for_selected_coin
+        ).pack(side="left", padx=(6, 0))
 
         self.trainer_status_lbl = ttk.Label(top_bar, text="(no trainers running)")
         self.trainer_status_lbl.pack(side="left", padx=(12, 0))
@@ -2904,20 +3101,21 @@ class PowerTraderHub(tk.Tk):
             highlightcolor=DARK_ACCENT,
         )
 
-        trainer_scroll = ttk.Scrollbar(trainer_tab, orient="vertical", command=self.trainer_text.yview)
+        trainer_scroll = ttk.Scrollbar(
+            trainer_tab, orient="vertical", command=self.trainer_text.yview
+        )
         self.trainer_text.configure(yscrollcommand=trainer_scroll.set)
-        self.trainer_text.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=(0, 6))
+        self.trainer_text.pack(
+            side="left", fill="both", expand=True, padx=(6, 0), pady=(0, 6)
+        )
         trainer_scroll.pack(side="right", fill="y", padx=(0, 6), pady=(0, 6))
-
-
-
-
-
 
         # ----------------------------
         # RIGHT TOP: Charts (tabs)
         # ----------------------------
-        charts_frame = ttk.LabelFrame(right_split, text="Charts (Neural lines overlaid)")
+        charts_frame = ttk.LabelFrame(
+            right_split, text="Charts (Neural lines overlaid)"
+        )
         self._charts_frame = charts_frame
 
         # Multi-row "tabs" (WrapFrame)
@@ -2928,8 +3126,9 @@ class PowerTraderHub(tk.Tk):
         # Page container (no ttk.Notebook, so there are NO native tabs to show)
         self.chart_pages_container = ttk.Frame(charts_frame)
         # Keep left padding, remove right padding so charts fill to the edge
-        self.chart_pages_container.pack(fill="both", expand=True, padx=(6, 0), pady=(0, 6))
-
+        self.chart_pages_container.pack(
+            fill="both", expand=True, padx=(6, 0), pady=(0, 6)
+        )
 
         self._chart_tab_buttons: Dict[str, ttk.Button] = {}
         self.chart_pages: Dict[str, ttk.Frame] = {}
@@ -2951,7 +3150,13 @@ class PowerTraderHub(tk.Tk):
             # style selected tab
             for txt, b in self._chart_tab_buttons.items():
                 try:
-                    b.configure(style=("ChartTabSelected.TButton" if txt == name else "ChartTab.TButton"))
+                    b.configure(
+                        style=(
+                            "ChartTabSelected.TButton"
+                            if txt == name
+                            else "ChartTab.TButton"
+                        )
+                    )
                 except Exception:
                     pass
 
@@ -2963,19 +3168,35 @@ class PowerTraderHub(tk.Tk):
                     coin = tab
                     chart = self.charts.get(coin)
                     if chart:
+
                         def _do_refresh_visible():
                             try:
                                 # Ensure chart coin folders exist (best-effort; fast)
                                 try:
-                                    chart_coins = list(getattr(self, "chart_coins", []) or [])
-                                    cf_sig = (self.settings.get("main_neural_dir"), tuple(chart_coins))
-                                    if getattr(self, "_chart_coin_folders_sig", None) != cf_sig:
+                                    chart_coins = list(
+                                        getattr(self, "chart_coins", []) or []
+                                    )
+                                    cf_sig = (
+                                        self.settings.get("main_neural_dir"),
+                                        tuple(chart_coins),
+                                    )
+                                    if (
+                                        getattr(self, "_chart_coin_folders_sig", None)
+                                        != cf_sig
+                                    ):
                                         self._chart_coin_folders_sig = cf_sig
-                                        self.chart_coin_folders = build_coin_folders(self.settings["main_neural_dir"], chart_coins)
+                                        self.chart_coin_folders = build_coin_folders(
+                                            self.settings["main_neural_dir"],
+                                            chart_coins,
+                                        )
                                 except Exception:
                                     pass
 
-                                pos = self._last_positions.get(coin, {}) if isinstance(self._last_positions, dict) else {}
+                                pos = (
+                                    self._last_positions.get(coin, {})
+                                    if isinstance(self._last_positions, dict)
+                                    else {}
+                                )
                                 buy_px = pos.get("current_buy_price", None)
                                 sell_px = pos.get("current_sell_price", None)
                                 trail_line = pos.get("trail_line", None)
@@ -2983,7 +3204,9 @@ class PowerTraderHub(tk.Tk):
                                 avg_cost_basis = pos.get("avg_cost_basis", None)
 
                                 chart.refresh(
-                                    getattr(self, "chart_coin_folders", self.coin_folders),
+                                    getattr(
+                                        self, "chart_coin_folders", self.coin_folders
+                                    ),
                                     current_buy_price=buy_px,
                                     current_sell_price=sell_px,
                                     trail_line=trail_line,
@@ -2991,14 +3214,12 @@ class PowerTraderHub(tk.Tk):
                                     avg_cost_basis=avg_cost_basis,
                                 )
 
-
                             except Exception:
                                 pass
 
                         self.after(1, _do_refresh_visible)
             except Exception:
                 pass
-
 
         self._show_chart_page = _show_page  # used by _rebuild_coin_chart_tabs()
 
@@ -3024,7 +3245,7 @@ class PowerTraderHub(tk.Tk):
 
         # Coin pages
         self.charts: Dict[str, CandleChart] = {}
-        for coin in (getattr(self, "chart_coins", None) or self.coins):
+        for coin in getattr(self, "chart_coins", None) or self.coins:
             page = ttk.Frame(self.chart_pages_container)
             self.chart_pages[coin] = page
 
@@ -3037,17 +3258,14 @@ class PowerTraderHub(tk.Tk):
             self.chart_tabs_bar.add(btn, padx=(0, 6), pady=(0, 6))
             self._chart_tab_buttons[coin] = btn
 
-            chart = CandleChart(page, self.fetcher, coin, self._settings_getter, self.trade_history_path)
+            chart = CandleChart(
+                page, self.fetcher, coin, self._settings_getter, self.trade_history_path
+            )
             chart.pack(fill="both", expand=True)
             self.charts[coin] = chart
 
-
         # show initial page
         self._show_chart_page("ACCOUNT")
-
-
-
-
 
         # ----------------------------
         # RIGHT BOTTOM: Current Trades + Long-term Holdings + Trade History (tabbed)
@@ -3057,7 +3275,9 @@ class PowerTraderHub(tk.Tk):
         # always has enough vertical room, and nothing overlaps.
         right_bottom_tabs = ttk.Notebook(right_split)
         self._right_bottom_tabs = right_bottom_tabs
-        self._pw_right_bottom_split = None  # no longer used (kept for clamp calls elsewhere)
+        self._pw_right_bottom_split = (
+            None  # no longer used (kept for clamp calls elsewhere)
+        )
 
         # ----------------------------
         # TAB 1: Current Trades
@@ -3071,7 +3291,7 @@ class PowerTraderHub(tk.Tk):
         cols = (
             "coin",
             "qty",
-            "value",          # <-- right after qty
+            "value",  # <-- right after qty
             "avg_cost",
             "buy_price",
             "buy_pnl",
@@ -3080,7 +3300,7 @@ class PowerTraderHub(tk.Tk):
             "dca_stages",
             "dca_24h",
             "next_dca",
-            "trail_line",     # keep trail line column
+            "trail_line",  # keep trail line column
         )
 
         header_labels = {
@@ -3102,10 +3322,7 @@ class PowerTraderHub(tk.Tk):
         trades_table_wrap.pack(fill="both", expand=True, padx=6, pady=6)
 
         self.trades_tree = ttk.Treeview(
-            trades_table_wrap,
-            columns=cols,
-            show="headings",
-            height=10
+            trades_table_wrap, columns=cols, show="headings", height=10
         )
         for c in cols:
             self.trades_tree.heading(c, text=header_labels.get(c, c))
@@ -3119,8 +3336,12 @@ class PowerTraderHub(tk.Tk):
         self.trades_tree.column("dca_stages", width=90)
         self.trades_tree.column("dca_24h", width=80)
 
-        ysb = ttk.Scrollbar(trades_table_wrap, orient="vertical", command=self.trades_tree.yview)
-        xsb = ttk.Scrollbar(trades_table_wrap, orient="horizontal", command=self.trades_tree.xview)
+        ysb = ttk.Scrollbar(
+            trades_table_wrap, orient="vertical", command=self.trades_tree.yview
+        )
+        xsb = ttk.Scrollbar(
+            trades_table_wrap, orient="horizontal", command=self.trades_tree.xview
+        )
         self.trades_tree.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
 
         self.trades_tree.pack(side="top", fill="both", expand=True)
@@ -3175,7 +3396,9 @@ class PowerTraderHub(tk.Tk):
         lth_tab = ttk.Frame(right_bottom_tabs)
         right_bottom_tabs.add(lth_tab, text="Long-term Holdings")
 
-        lth_frame = ttk.LabelFrame(lth_tab, text="Long-term Holdings (ignored by trader)")
+        lth_frame = ttk.LabelFrame(
+            lth_tab, text="Long-term Holdings (ignored by trader)"
+        )
         lth_frame.pack(fill="both", expand=True, padx=6, pady=6)
 
         lth_wrap = ttk.Frame(lth_frame)
@@ -3195,8 +3418,12 @@ class PowerTraderHub(tk.Tk):
         self.lth_tree.column("qty", width=140, anchor="center")
         self.lth_tree.column("value", width=140, anchor="center")
 
-        ysb_lth = ttk.Scrollbar(lth_wrap, orient="vertical", command=self.lth_tree.yview)
-        xsb_lth = ttk.Scrollbar(lth_wrap, orient="horizontal", command=self.lth_tree.xview)
+        ysb_lth = ttk.Scrollbar(
+            lth_wrap, orient="vertical", command=self.lth_tree.yview
+        )
+        xsb_lth = ttk.Scrollbar(
+            lth_wrap, orient="horizontal", command=self.lth_tree.xview
+        )
         self.lth_tree.configure(yscrollcommand=ysb_lth.set, xscrollcommand=xsb_lth.set)
 
         self.lth_tree.pack(side="left", fill="both", expand=True)
@@ -3229,7 +3456,9 @@ class PowerTraderHub(tk.Tk):
             highlightcolor=DARK_ACCENT,
         )
         ysb2 = ttk.Scrollbar(hist_wrap, orient="vertical", command=self.hist_list.yview)
-        xsb2 = ttk.Scrollbar(hist_wrap, orient="horizontal", command=self.hist_list.xview)
+        xsb2 = ttk.Scrollbar(
+            hist_wrap, orient="horizontal", command=self.hist_list.xview
+        )
         self.hist_list.configure(yscrollcommand=ysb2.set, xscrollcommand=xsb2.set)
 
         self.hist_list.pack(side="left", fill="both", expand=True)
@@ -3239,7 +3468,6 @@ class PowerTraderHub(tk.Tk):
         # Assemble right side
         right_split.add(charts_frame, weight=4)
         right_split.add(right_bottom_tabs, weight=2)
-
 
         try:
             # Give charts more guaranteed height so candles + labels never get squished.
@@ -3283,23 +3511,18 @@ class PowerTraderHub(tk.Tk):
 
         self.after(50, _init_right_split_sash_once)
 
-
-
-
         # Initial clamp once everything is laid out
-        self.after_idle(lambda: (
-            self._schedule_paned_clamp(getattr(self, "_pw_outer", None)),
-            self._schedule_paned_clamp(getattr(self, "_pw_left_split", None)),
-            self._schedule_paned_clamp(getattr(self, "_pw_right_split", None)),
-        ))
-
-
+        self.after_idle(
+            lambda: (
+                self._schedule_paned_clamp(getattr(self, "_pw_outer", None)),
+                self._schedule_paned_clamp(getattr(self, "_pw_left_split", None)),
+                self._schedule_paned_clamp(getattr(self, "_pw_right_split", None)),
+            )
+        )
 
         # status bar
         self.status = ttk.Label(self, text="Ready", anchor="w")
         self.status.pack(fill="x", side="bottom")
-
-
 
     # ---- panedwindow anti-collapse helpers ----
 
@@ -3332,7 +3555,6 @@ class PowerTraderHub(tk.Tk):
             self._paned_clamp_after_ids[key] = self.after(1, _run)
         except Exception:
             pass
-
 
     def _clamp_panedwindow_sashes(self, pw: ttk.Panedwindow) -> None:
         """
@@ -3401,21 +3623,19 @@ class PowerTraderHub(tk.Tk):
                         except Exception:
                             pass
 
-
         except Exception:
             pass
 
-
-
     # ---- process control ----
-
 
     @staticmethod
     def _log_ts() -> str:
         now = datetime.now()
         return now.strftime("%Y%m%d.%H%M%S.") + f"{now.microsecond // 1000:03d}"
 
-    def _reader_thread(self, proc: subprocess.Popen, q: "queue.Queue[str]", prefix: str) -> None:
+    def _reader_thread(
+        self, proc: subprocess.Popen, q: "queue.Queue[str]", prefix: str
+    ) -> None:
         def _push(msg: str) -> None:
             # Never let log spam block the reader or the GUI.
             # If the queue is full, drop the oldest line and keep the newest.
@@ -3446,7 +3666,9 @@ class PowerTraderHub(tk.Tk):
         finally:
             _push(f"{self._log_ts()} {prefix}[process exited]")
 
-    def _start_process(self, p: ProcInfo, log_q: Optional["queue.Queue[str]"] = None, prefix: str = "") -> None:
+    def _start_process(
+        self, p: ProcInfo, log_q: Optional["queue.Queue[str]"] = None, prefix: str = ""
+    ) -> None:
         if p.proc and p.proc.poll() is None:
             return
         if not os.path.isfile(p.path):
@@ -3455,7 +3677,9 @@ class PowerTraderHub(tk.Tk):
 
         env = os.environ.copy()
         env["POWERTRADER_HUB_DIR"] = self.hub_dir
-        env["POWERTRADER_EXCHANGE"] = str(self.settings.get("exchange", "demo")).strip().lower()
+        env["POWERTRADER_EXCHANGE"] = (
+            str(self.settings.get("exchange", "demo")).strip().lower()
+        )
 
         try:
             p.proc = subprocess.Popen(
@@ -3468,11 +3692,14 @@ class PowerTraderHub(tk.Tk):
                 bufsize=1,
             )
             if log_q is not None:
-                t = threading.Thread(target=self._reader_thread, args=(p.proc, log_q, prefix), daemon=True)
+                t = threading.Thread(
+                    target=self._reader_thread,
+                    args=(p.proc, log_q, prefix),
+                    daemon=True,
+                )
                 t.start()
         except Exception as e:
             messagebox.showerror("Failed to start", f"{p.name} failed to start:\n{e}")
-
 
     def _stop_process(self, p: ProcInfo) -> None:
         if not p.proc or p.proc.poll() is not None:
@@ -3489,11 +3716,15 @@ class PowerTraderHub(tk.Tk):
         # Reset runner-ready gate file (prevents stale "ready" from a prior run)
         try:
             with open(self.runner_ready_path, "w", encoding="utf-8") as f:
-                json.dump({"timestamp": time.time(), "ready": False, "stage": "starting"}, f)
+                json.dump(
+                    {"timestamp": time.time(), "ready": False, "stage": "starting"}, f
+                )
         except Exception:
             pass
 
-        self._start_process(self.proc_neural, log_q=self.runner_log_q, prefix="[RUNNER] ")
+        self._start_process(
+            self.proc_neural, log_q=self.runner_log_q, prefix="[RUNNER] "
+        )
 
     def start_trader(self) -> None:
 
@@ -3508,8 +3739,9 @@ class PowerTraderHub(tk.Tk):
             except Exception:
                 pass
 
-        self._start_process(self.proc_trader, log_q=self.trader_log_q, prefix="[TRADER] ")
-
+        self._start_process(
+            self.proc_trader, log_q=self.trader_log_q, prefix="[TRADER] "
+        )
 
     # -----------------------------
     # Neural auto-restart state
@@ -3524,9 +3756,15 @@ class PowerTraderHub(tk.Tk):
                 self._neural_autorestart_state_path(),
                 {
                     "timestamp": time.time(),
-                    "should_be_running": bool(getattr(self, "_neural_should_be_running", False)),
-                    "user_stopped_from_hub": bool(getattr(self, "_neural_user_stopped_from_hub", False)),
-                    "last_auto_restart_ts": float(getattr(self, "_neural_last_auto_restart_ts", 0.0) or 0.0),
+                    "should_be_running": bool(
+                        getattr(self, "_neural_should_be_running", False)
+                    ),
+                    "user_stopped_from_hub": bool(
+                        getattr(self, "_neural_user_stopped_from_hub", False)
+                    ),
+                    "last_auto_restart_ts": float(
+                        getattr(self, "_neural_last_auto_restart_ts", 0.0) or 0.0
+                    ),
                 },
             )
         except Exception:
@@ -3554,6 +3792,7 @@ class PowerTraderHub(tk.Tk):
 
     def _get_exchange_adapter(self):
         from exchange_api import load_exchange_adapter
+
         _xk = str(self.settings.get("exchange", "demo")).strip().lower()
         cached = getattr(self, "_hub_adapter", None)
         cached_key = getattr(self, "_hub_adapter_key", None)
@@ -3681,8 +3920,9 @@ class PowerTraderHub(tk.Tk):
             pass
         return out
 
-
-    def _pick_bot_orders_for_coin(self, base_symbol: str, preselect_ids: Optional[List[str]] = None) -> Optional[set]:
+    def _pick_bot_orders_for_coin(
+        self, base_symbol: str, preselect_ids: Optional[List[str]] = None
+    ) -> Optional[set]:
         """
         Fetch the recent order history for this coin and open the selection modal.
 
@@ -3713,7 +3953,7 @@ class PowerTraderHub(tk.Tk):
                     "Order history unavailable",
                     f"Could not fetch order history for {symbol_full}.\n\n"
                     "The picker will still open, but it will be empty.\n"
-                    "If you save with nothing selected, ALL holdings of this coin will be treated as long-term/manual."
+                    "If you save with nothing selected, ALL holdings of this coin will be treated as long-term/manual.",
                 )
             except Exception:
                 pass
@@ -3726,8 +3966,9 @@ class PowerTraderHub(tk.Tk):
 
         return self._pick_bot_orders_modal(sym, orders, pre)
 
-
-    def _pick_bot_orders_modal(self, base_symbol: str, orders: list, preselected_ids: set) -> Optional[set]:
+    def _pick_bot_orders_modal(
+        self, base_symbol: str, orders: list, preselected_ids: set
+    ) -> Optional[set]:
         """Modal UI: user selects which API-history orders belong to the BOT (active trading)."""
         base = str(base_symbol).upper().strip()
         if not base:
@@ -3753,8 +3994,9 @@ class PowerTraderHub(tk.Tk):
             "If you select none, the bot will ignore this coin and treat all current holdings as manual/long-term."
         )
 
-
-        ttk.Label(win, text=help_txt, justify="left").pack(anchor="w", padx=12, pady=(12, 8))
+        ttk.Label(win, text=help_txt, justify="left").pack(
+            anchor="w", padx=12, pady=(12, 8)
+        )
 
         frame = ttk.Frame(win)
         frame.pack(fill="both", expand=True, padx=12, pady=8)
@@ -3774,7 +4016,9 @@ class PowerTraderHub(tk.Tk):
 
         # Normalize preselected IDs (must match actual order IDs, not indices)
         try:
-            pre_ids = {str(x).strip() for x in (preselected_ids or set()) if str(x).strip()}
+            pre_ids = {
+                str(x).strip() for x in (preselected_ids or set()) if str(x).strip()
+            }
         except Exception:
             pre_ids = set()
 
@@ -3828,7 +4072,6 @@ class PowerTraderHub(tk.Tk):
         except Exception:
             pass
 
-
         out = {"selected": None}
 
         def _select_all():
@@ -3870,7 +4113,9 @@ class PowerTraderHub(tk.Tk):
         btns = ttk.Frame(win)
         btns.pack(fill="x", padx=12, pady=(0, 12))
         ttk.Button(btns, text="Select All", command=_select_all).pack(side="left")
-        ttk.Button(btns, text="Select None", command=_select_none).pack(side="left", padx=8)
+        ttk.Button(btns, text="Select None", command=_select_none).pack(
+            side="left", padx=8
+        )
         ttk.Button(btns, text="Save", command=_save_and_close).pack(side="right")
         ttk.Button(btns, text="Cancel", command=_cancel).pack(side="right", padx=8)
 
@@ -3921,7 +4166,9 @@ class PowerTraderHub(tk.Tk):
                         if float(qty or 0.0) > 1e-12:
                             held_coins.append(sym)
                 except Exception:
-                    held_coins = sorted(set(list(existing.keys()) + list(from_hist.keys())))
+                    held_coins = sorted(
+                        set(list(existing.keys()) + list(from_hist.keys()))
+                    )
             else:
                 held_coins = sorted(set(list(existing.keys()) + list(from_hist.keys())))
 
@@ -3938,12 +4185,16 @@ class PowerTraderHub(tk.Tk):
                     preselect = set(existing.get(sym, []) or [])
 
                 # Show the picker every startup so you can correct it after manual activity.
-                selected = self._pick_bot_orders_for_coin(sym, preselect_ids=sorted(preselect))
+                selected = self._pick_bot_orders_for_coin(
+                    sym, preselect_ids=sorted(preselect)
+                )
                 if selected is None:
                     # user cancelled - treat as "don't start trader"
                     return False
 
-                selected_ids = [str(x).strip() for x in (selected or []) if str(x).strip()]
+                selected_ids = [
+                    str(x).strip() for x in (selected or []) if str(x).strip()
+                ]
                 if existing.get(sym, []) != selected_ids:
                     existing[sym] = selected_ids
                     changed = True
@@ -3958,25 +4209,27 @@ class PowerTraderHub(tk.Tk):
             while True:
                 continue
 
-
-
-
-
     def stop_neural(self) -> None:
         self._mark_neural_stopped_by_user()
         self._stop_process(self.proc_neural)
-
-
 
     def stop_trader(self) -> None:
         self._stop_process(self.proc_trader)
 
     def toggle_all_scripts(self) -> None:
-        neural_running = bool(self.proc_neural.proc and self.proc_neural.proc.poll() is None)
-        trader_running = bool(self.proc_trader.proc and self.proc_trader.proc.poll() is None)
+        neural_running = bool(
+            self.proc_neural.proc and self.proc_neural.proc.poll() is None
+        )
+        trader_running = bool(
+            self.proc_trader.proc and self.proc_trader.proc.poll() is None
+        )
 
         # If anything is running (or we're waiting on runner readiness), toggle means "stop"
-        if neural_running or trader_running or bool(getattr(self, "_auto_start_trader_pending", False)):
+        if (
+            neural_running
+            or trader_running
+            or bool(getattr(self, "_auto_start_trader_pending", False))
+        ):
             self.stop_all_scripts()
             return
 
@@ -4021,11 +4274,13 @@ class PowerTraderHub(tk.Tk):
 
     def start_all_scripts(self) -> None:
         # Enforce flow: Train → Neural → (wait for runner READY) → Trader
-        all_trained = all(self._coin_is_trained(c) for c in self.coins) if self.coins else False
+        all_trained = (
+            all(self._coin_is_trained(c) for c in self.coins) if self.coins else False
+        )
         if not all_trained:
             messagebox.showwarning(
                 "Training required",
-                "All coins must be trained before starting Neural Runner.\n\nUse Train All first."
+                "All coins must be trained before starting Neural Runner.\n\nUse Train All first.",
             )
             return
 
@@ -4038,7 +4293,6 @@ class PowerTraderHub(tk.Tk):
         except Exception:
             pass
 
-
     def _coin_is_trained(self, coin: str) -> bool:
         coin = coin.upper().strip()
         folder = self.coin_folders.get(coin, "")
@@ -4048,7 +4302,10 @@ class PowerTraderHub(tk.Tk):
         # If trainer reports it's currently training, it's not "trained" yet.
         try:
             st = _safe_read_json(os.path.join(folder, "trainer_status.json"))
-            if isinstance(st, dict) and str(st.get("state", "")).upper() in ("TRAINING", "FAILED"):
+            if isinstance(st, dict) and str(st.get("state", "")).upper() in (
+                "TRAINING",
+                "FAILED",
+            ):
                 return False
         except Exception:
             pass
@@ -4088,12 +4345,17 @@ class PowerTraderHub(tk.Tk):
                 status_path = os.path.join(folder, "trainer_status.json")
                 st = _safe_read_json(status_path)
 
-                if isinstance(st, dict) and str(st.get("state", "")).upper() == "TRAINING":
+                if (
+                    isinstance(st, dict)
+                    and str(st.get("state", "")).upper() == "TRAINING"
+                ):
                     stamp_path = os.path.join(folder, "trainer_last_training_time.txt")
 
                     try:
                         if os.path.isfile(stamp_path) and os.path.isfile(status_path):
-                            if os.path.getmtime(stamp_path) >= os.path.getmtime(status_path):
+                            if os.path.getmtime(stamp_path) >= os.path.getmtime(
+                                status_path
+                            ):
                                 continue
                     except Exception:
                         pass
@@ -4112,8 +4374,6 @@ class PowerTraderHub(tk.Tk):
                 out.append(cc)
         return out
 
-
-
     def _coin_training_status(self, coin: str, running: set) -> str:
         if coin in running:
             return "TRAINING"
@@ -4123,7 +4383,10 @@ class PowerTraderHub(tk.Tk):
         if folder:
             try:
                 st = _safe_read_json(os.path.join(folder, "trainer_status.json"))
-                if isinstance(st, dict) and str(st.get("state", "")).upper() == "FAILED":
+                if (
+                    isinstance(st, dict)
+                    and str(st.get("state", "")).upper() == "FAILED"
+                ):
                     return "FAILED"
             except Exception:
                 pass
@@ -4195,8 +4458,10 @@ class PowerTraderHub(tk.Tk):
             q = lp.log_q
             tag = f"[{coin}] "
             ts = self._log_ts()
-            q.put_nowait(f"{ts} {tag}{'='*50}")
-            q.put_nowait(f"{ts} {tag}TRAINING FAILED: {info.get('error', info.get('exception_message', 'unknown'))}")
+            q.put_nowait(f"{ts} {tag}{'=' * 50}")
+            q.put_nowait(
+                f"{ts} {tag}TRAINING FAILED: {info.get('error', info.get('exception_message', 'unknown'))}"
+            )
             tb = info.get("traceback", "")
             if tb:
                 for line in tb.strip().splitlines():
@@ -4206,13 +4471,19 @@ class PowerTraderHub(tk.Tk):
                 q.put_nowait(f"{self._log_ts()} {tag}Trainer state at failure:")
                 for k, v in state.items():
                     q.put_nowait(f"{self._log_ts()} {tag}  {k} = {v}")
-            q.put_nowait(f"{self._log_ts()} {tag}See trainer_failure_info.json for full details")
-            q.put_nowait(f"{self._log_ts()} {tag}{'='*50}")
+            q.put_nowait(
+                f"{self._log_ts()} {tag}See trainer_failure_info.json for full details"
+            )
+            q.put_nowait(f"{self._log_ts()} {tag}{'=' * 50}")
         except Exception:
             pass
 
     def train_selected_coin(self) -> None:
-        coin = (getattr(self, 'train_coin_var', self.trainer_coin_var).get() or "").strip().upper()
+        coin = (
+            (getattr(self, "train_coin_var", self.trainer_coin_var).get() or "")
+            .strip()
+            .upper()
+        )
 
         if not coin:
             return
@@ -4236,7 +4507,9 @@ class PowerTraderHub(tk.Tk):
         coin_cwd = self.coin_folders.get(coin, self.project_dir)
 
         # Use the trainer script that lives INSIDE that coin's folder so outputs land in the right place.
-        trainer_name = os.path.basename(str(self.settings.get("script_neural_trainer", "pt_trainer.py")))
+        trainer_name = os.path.basename(
+            str(self.settings.get("script_neural_trainer", "pt_trainer.py"))
+        )
 
         # If the coin folder doesn't exist yet, create it and copy the trainer script in.
         # (Also: overwrite to avoid running stale trainer copies in coin folders.)
@@ -4256,14 +4529,16 @@ class PowerTraderHub(tk.Tk):
 
         if not os.path.isfile(trainer_path):
             messagebox.showerror(
-                "Missing trainer",
-                f"Cannot find trainer for {coin} at:\n{trainer_path}"
+                "Missing trainer", f"Cannot find trainer for {coin} at:\n{trainer_path}"
             )
             return
 
-        if coin in self.trainers and self.trainers[coin].info.proc and self.trainers[coin].info.proc.poll() is None:
+        if (
+            coin in self.trainers
+            and self.trainers[coin].info.proc
+            and self.trainers[coin].info.proc.poll() is None
+        ):
             return
-
 
         try:
             patterns = [
@@ -4277,7 +4552,6 @@ class PowerTraderHub(tk.Tk):
                 "neural_perfect_threshold_*.txt",
             ]
 
-
             deleted = 0
             for pat in patterns:
                 for fp in glob.glob(os.path.join(coin_cwd, pat)):
@@ -4289,7 +4563,9 @@ class PowerTraderHub(tk.Tk):
 
             if deleted:
                 try:
-                    self.status.config(text=f"Deleted {deleted} training file(s) for {coin} before training")
+                    self.status.config(
+                        text=f"Deleted {deleted} training file(s) for {coin} before training"
+                    )
                 except Exception:
                     pass
         except Exception:
@@ -4305,7 +4581,6 @@ class PowerTraderHub(tk.Tk):
             # IMPORTANT: pass `coin` so pt_trainer trains the correct market instead of defaulting to BTC
             info.proc = subprocess.Popen(
                 [sys.executable, "-u", info.path, coin],
-
                 cwd=coin_cwd,
                 env=env,
                 stdout=subprocess.PIPE,
@@ -4313,15 +4588,20 @@ class PowerTraderHub(tk.Tk):
                 text=True,
                 bufsize=1,
             )
-            t = threading.Thread(target=self._reader_thread, args=(info.proc, q, f"[{coin}] "), daemon=True)
+            t = threading.Thread(
+                target=self._reader_thread,
+                args=(info.proc, q, f"[{coin}] "),
+                daemon=True,
+            )
             t.start()
 
-            self.trainers[coin] = LogProc(info=info, log_q=q, thread=t, is_trainer=True, coin=coin)
+            self.trainers[coin] = LogProc(
+                info=info, log_q=q, thread=t, is_trainer=True, coin=coin
+            )
         except Exception as e:
-            messagebox.showerror("Failed to start", f"Trainer for {coin} failed to start:\n{e}")
-
-
-
+            messagebox.showerror(
+                "Failed to start", f"Trainer for {coin} failed to start:\n{e}"
+            )
 
     def stop_trainer_for_selected_coin(self) -> None:
         coin = (self.trainer_coin_var.get() or "").strip().upper()
@@ -4333,7 +4613,6 @@ class PowerTraderHub(tk.Tk):
         except Exception:
             pass
 
-
     def stop_all_scripts(self) -> None:
         # Cancel any pending "wait for runner then start trader"
         self._auto_start_trader_pending = False
@@ -4344,10 +4623,11 @@ class PowerTraderHub(tk.Tk):
         # Also reset the runner-ready gate file (best-effort)
         try:
             with open(self.runner_ready_path, "w", encoding="utf-8") as f:
-                json.dump({"timestamp": time.time(), "ready": False, "stage": "stopped"}, f)
+                json.dump(
+                    {"timestamp": time.time(), "ready": False, "stage": "stopped"}, f
+                )
         except Exception:
             pass
-
 
     def _on_timeframe_changed(self, event) -> None:
         """
@@ -4407,7 +4687,9 @@ class PowerTraderHub(tk.Tk):
             chart_cf_sig = (self.settings.get("main_neural_dir"), tuple(chart_coins))
             if getattr(self, "_chart_coin_folders_sig", None) != chart_cf_sig:
                 self._chart_coin_folders_sig = chart_cf_sig
-                self.chart_coin_folders = build_coin_folders(self.settings["main_neural_dir"], chart_coins)
+                self.chart_coin_folders = build_coin_folders(
+                    self.settings["main_neural_dir"], chart_coins
+                )
         except Exception:
             try:
                 self.chart_coin_folders = build_coin_folders(
@@ -4417,7 +4699,11 @@ class PowerTraderHub(tk.Tk):
             except Exception:
                 return
 
-        pos = self._last_positions.get(coin, {}) if isinstance(self._last_positions, dict) else {}
+        pos = (
+            self._last_positions.get(coin, {})
+            if isinstance(self._last_positions, dict)
+            else {}
+        )
         buy_px = pos.get("current_buy_price", None)
         sell_px = pos.get("current_sell_price", None)
         trail_line = pos.get("trail_line", None)
@@ -4437,7 +4723,15 @@ class PowerTraderHub(tk.Tk):
 
         t = threading.Thread(
             target=self._chart_refresh_worker,
-            args=(req_id, coin, buy_px, sell_px, trail_line, dca_line_price, avg_cost_basis),
+            args=(
+                req_id,
+                coin,
+                buy_px,
+                sell_px,
+                trail_line,
+                dca_line_price,
+                avg_cost_basis,
+            ),
             daemon=True,
         )
         t.start()
@@ -4472,7 +4766,10 @@ class PowerTraderHub(tk.Tk):
         finally:
             with self._chart_refresh_lock:
                 try:
-                    if isinstance(payload, dict) and req_id >= self._chart_refresh_request_id:
+                    if (
+                        isinstance(payload, dict)
+                        and req_id >= self._chart_refresh_request_id
+                    ):
                         self._chart_refresh_result = {
                             "request_id": req_id,
                             "coin": coin,
@@ -4553,7 +4850,10 @@ class PowerTraderHub(tk.Tk):
         finally:
             with self._account_chart_refresh_lock:
                 try:
-                    if isinstance(payload, dict) and req_id >= self._account_chart_refresh_request_id:
+                    if (
+                        isinstance(payload, dict)
+                        and req_id >= self._account_chart_refresh_request_id
+                    ):
                         self._account_chart_refresh_result = {
                             "request_id": req_id,
                             "payload": payload,
@@ -4662,8 +4962,12 @@ class PowerTraderHub(tk.Tk):
 
     def _tick(self) -> None:
         # process labels
-        neural_running = bool(self.proc_neural.proc and self.proc_neural.proc.poll() is None)
-        trader_running = bool(self.proc_trader.proc and self.proc_trader.proc.poll() is None)
+        neural_running = bool(
+            self.proc_neural.proc and self.proc_neural.proc.poll() is None
+        )
+        trader_running = bool(
+            self.proc_trader.proc and self.proc_trader.proc.poll() is None
+        )
 
         # Auto-restart thinker if:
         # - the hub intended it to be running
@@ -4676,15 +4980,18 @@ class PowerTraderHub(tk.Tk):
             self._neural_last_auto_restart_ts = 0.0
             self._write_neural_autorestart_state()
         else:
-            should_restart_neural = (
-                bool(getattr(self, "_neural_should_be_running", False))
-                and (not bool(getattr(self, "_neural_user_stopped_from_hub", False)))
-            )
+            should_restart_neural = bool(
+                getattr(self, "_neural_should_be_running", False)
+            ) and (not bool(getattr(self, "_neural_user_stopped_from_hub", False)))
 
             if should_restart_neural:
                 now_ts = time.time()
-                last_ts = float(getattr(self, "_neural_last_auto_restart_ts", 0.0) or 0.0)
-                cooldown = float(getattr(self, "_neural_restart_cooldown_seconds", 5.0) or 5.0)
+                last_ts = float(
+                    getattr(self, "_neural_last_auto_restart_ts", 0.0) or 0.0
+                )
+                cooldown = float(
+                    getattr(self, "_neural_restart_cooldown_seconds", 5.0) or 5.0
+                )
 
                 if (now_ts - last_ts) >= cooldown:
                     self._neural_last_auto_restart_ts = now_ts
@@ -4695,15 +5002,25 @@ class PowerTraderHub(tk.Tk):
                     except Exception:
                         pass
 
-                    neural_running = bool(self.proc_neural.proc and self.proc_neural.proc.poll() is None)
+                    neural_running = bool(
+                        self.proc_neural.proc and self.proc_neural.proc.poll() is None
+                    )
 
-        self.lbl_neural.config(text=f"Neural: {'running' if neural_running else 'stopped'}")
-        self.lbl_trader.config(text=f"Trader: {'running' if trader_running else 'stopped'}")
+        self.lbl_neural.config(
+            text=f"Neural: {'running' if neural_running else 'stopped'}"
+        )
+        self.lbl_trader.config(
+            text=f"Trader: {'running' if trader_running else 'stopped'}"
+        )
 
         # Start All is now a toggle (Start/Stop)
         try:
             if hasattr(self, "btn_toggle_all") and self.btn_toggle_all:
-                if neural_running or trader_running or bool(getattr(self, "_auto_start_trader_pending", False)):
+                if (
+                    neural_running
+                    or trader_running
+                    or bool(getattr(self, "_auto_start_trader_pending", False))
+                ):
                     self.btn_toggle_all.config(text="Stop All")
                 else:
                     self.btn_toggle_all.config(text="Start All")
@@ -4712,16 +5029,25 @@ class PowerTraderHub(tk.Tk):
 
         # --- flow gating: Train -> Start All ---
         status_map = self._training_status_map()
-        all_trained = all(v == "TRAINED" for v in status_map.values()) if status_map else False
+        all_trained = (
+            all(v == "TRAINED" for v in status_map.values()) if status_map else False
+        )
 
         # Disable Start All until training is done (but always allow it if something is already running/pending,
         # so the user can still stop everything).
         can_toggle_all = True
-        if (not all_trained) and (not neural_running) and (not trader_running) and (not self._auto_start_trader_pending):
+        if (
+            (not all_trained)
+            and (not neural_running)
+            and (not trader_running)
+            and (not self._auto_start_trader_pending)
+        ):
             can_toggle_all = False
 
         try:
-            self.btn_toggle_all.configure(state=("normal" if can_toggle_all else "disabled"))
+            self.btn_toggle_all.configure(
+                state=("normal" if can_toggle_all else "disabled")
+            )
         except Exception:
             pass
 
@@ -4732,11 +5058,17 @@ class PowerTraderHub(tk.Tk):
             failed = [c for c, s in status_map.items() if s == "FAILED"]
 
             if failed:
-                self.lbl_training_overview.config(text=f"Training: FAILED ({', '.join(failed)})")
+                self.lbl_training_overview.config(
+                    text=f"Training: FAILED ({', '.join(failed)})"
+                )
             elif training_running:
-                self.lbl_training_overview.config(text=f"Training: RUNNING ({', '.join(training_running)})")
+                self.lbl_training_overview.config(
+                    text=f"Training: RUNNING ({', '.join(training_running)})"
+                )
             elif not_trained:
-                self.lbl_training_overview.config(text=f"Training: REQUIRED ({len(not_trained)} not trained)")
+                self.lbl_training_overview.config(
+                    text=f"Training: REQUIRED ({len(not_trained)} not trained)"
+                )
             else:
                 self.lbl_training_overview.config(text="Training: READY (all trained)")
 
@@ -4753,9 +5085,13 @@ class PowerTraderHub(tk.Tk):
 
             # show gating hint (Start All handles the runner->ready->trader sequence)
             if not all_trained:
-                self.lbl_flow_hint.config(text="Flow: Train All required → then Start All")
+                self.lbl_flow_hint.config(
+                    text="Flow: Train All required → then Start All"
+                )
             elif self._auto_start_trader_pending:
-                self.lbl_flow_hint.config(text="Flow: Starting runner → waiting for ready → trader will auto-start")
+                self.lbl_flow_hint.config(
+                    text="Flow: Starting runner → waiting for ready → trader will auto-start"
+                )
             elif neural_running or trader_running:
                 self.lbl_flow_hint.config(text="Flow: Running (use the button to stop)")
             else:
@@ -4781,16 +5117,22 @@ class PowerTraderHub(tk.Tk):
 
         # charts (throttle)
         now = time.time()
-        if (now - self._last_chart_refresh) >= float(self.settings.get("chart_refresh_seconds", 10.0)):
+        if (now - self._last_chart_refresh) >= float(
+            self.settings.get("chart_refresh_seconds", 10.0)
+        ):
             # Only rebuild coin_folders when inputs change (avoids directory scans every refresh)
             try:
                 cf_sig = (self.settings.get("main_neural_dir"), tuple(self.coins))
                 if getattr(self, "_coin_folders_sig", None) != cf_sig:
                     self._coin_folders_sig = cf_sig
-                    self.coin_folders = build_coin_folders(self.settings["main_neural_dir"], self.coins)
+                    self.coin_folders = build_coin_folders(
+                        self.settings["main_neural_dir"], self.coins
+                    )
             except Exception:
                 try:
-                    self.coin_folders = build_coin_folders(self.settings["main_neural_dir"], self.coins)
+                    self.coin_folders = build_coin_folders(
+                        self.settings["main_neural_dir"], self.coins
+                    )
                 except Exception:
                     pass
 
@@ -4814,8 +5156,16 @@ class PowerTraderHub(tk.Tk):
         # trainer logs: show selected trainer output
         try:
             sel = (self.trainer_coin_var.get() or "").strip().upper()
-            running = [c for c, lp in self.trainers.items() if lp.info.proc and lp.info.proc.poll() is None]
-            self.trainer_status_lbl.config(text=f"running: {', '.join(running)}" if running else "(no trainers running)")
+            running = [
+                c
+                for c, lp in self.trainers.items()
+                if lp.info.proc and lp.info.proc.poll() is None
+            ]
+            self.trainer_status_lbl.config(
+                text=f"running: {', '.join(running)}"
+                if running
+                else "(no trainers running)"
+            )
 
             lp = self.trainers.get(sel)
             if lp:
@@ -4824,9 +5174,9 @@ class PowerTraderHub(tk.Tk):
             pass
 
         self.status.config(text=f"{_now_str()} | hub_dir={self.hub_dir}")
-        self.after(int(float(self.settings.get("ui_refresh_seconds", 1.0)) * 1000), self._tick)
-
-
+        self.after(
+            int(float(self.settings.get("ui_refresh_seconds", 1.0)) * 1000), self._tick
+        )
 
     def _refresh_trader_status(self) -> None:
         # mtime cache: still skip completely if the file did not change
@@ -4860,7 +5210,9 @@ class PowerTraderHub(tk.Tk):
                     pass
             setattr(self, cache_attr, {})
 
-        def _sync_tree(tree: ttk.Treeview, cache_attr: str, rows: List[Tuple[str, Tuple[Any, ...]]]) -> None:
+        def _sync_tree(
+            tree: ttk.Treeview, cache_attr: str, rows: List[Tuple[str, Tuple[Any, ...]]]
+        ) -> None:
             """
             rows = [(iid, values_tuple), ...]
             Updates only changed rows, deletes removed rows, inserts missing rows,
@@ -4915,7 +5267,9 @@ class PowerTraderHub(tk.Tk):
             setattr(self, cache_attr, cache)
 
         if not data:
-            self.lbl_last_status.config(text="Last status: N/A (no trader_status.json yet)")
+            self.lbl_last_status.config(
+                text="Last status: N/A (no trader_status.json yet)"
+            )
 
             try:
                 self.lbl_acct_total_value.config(text="Total Account Value: N/A")
@@ -4934,7 +5288,9 @@ class PowerTraderHub(tk.Tk):
         ts = data.get("timestamp")
         try:
             if isinstance(ts, (int, float)):
-                self.lbl_last_status.config(text=f"Last status: {time.strftime('%H:%M:%S', time.localtime(ts))}")
+                self.lbl_last_status.config(
+                    text=f"Last status: {time.strftime('%H:%M:%S', time.localtime(ts))}"
+                )
             else:
                 self.lbl_last_status.config(text="Last status: (unknown timestamp)")
         except Exception:
@@ -4972,7 +5328,9 @@ class PowerTraderHub(tk.Tk):
             single_levels = 0.0
 
             if total_val > 0.0:
-                alloc_pct = float(self.settings.get("start_allocation_pct", 0.005) or 0.005)
+                alloc_pct = float(
+                    self.settings.get("start_allocation_pct", 0.005) or 0.005
+                )
                 if alloc_pct < 0.0:
                     alloc_pct = 0.0
                 alloc_frac = alloc_pct / 100.0
@@ -4987,8 +5345,14 @@ class PowerTraderHub(tk.Tk):
                     alloc_spread = 0.5
 
                 required_spread = alloc_spread * n
-                if required_spread > 0.0 and total_val >= required_spread and dca_factor > 1.0:
-                    spread_levels = math.log(total_val / required_spread) / math.log(dca_factor)
+                if (
+                    required_spread > 0.0
+                    and total_val >= required_spread
+                    and dca_factor > 1.0
+                ):
+                    spread_levels = math.log(total_val / required_spread) / math.log(
+                        dca_factor
+                    )
                     if spread_levels < 0.0:
                         spread_levels = 0.0
 
@@ -4997,13 +5361,23 @@ class PowerTraderHub(tk.Tk):
                     alloc_single = 0.5
 
                 required_single = alloc_single
-                if required_single > 0.0 and total_val >= required_single and dca_factor > 1.0:
-                    single_levels = math.log(total_val / required_single) / math.log(dca_factor)
+                if (
+                    required_single > 0.0
+                    and total_val >= required_single
+                    and dca_factor > 1.0
+                ):
+                    single_levels = math.log(total_val / required_single) / math.log(
+                        dca_factor
+                    )
                     if single_levels < 0.0:
                         single_levels = 0.0
 
-            self.lbl_acct_dca_spread.config(text=f"DCA Levels (spread): {spread_levels:.2f}")
-            self.lbl_acct_dca_single.config(text=f"DCA Levels (single): {single_levels:.2f}")
+            self.lbl_acct_dca_spread.config(
+                text=f"DCA Levels (spread): {spread_levels:.2f}"
+            )
+            self.lbl_acct_dca_single.config(
+                text=f"DCA Levels (single): {single_levels:.2f}"
+            )
 
         except Exception:
             pass
@@ -5015,19 +5389,23 @@ class PowerTraderHub(tk.Tk):
         try:
             dca_24h_by_coin = (
                 _compute_dca_24h_by_coin(self.trade_history_path, now_ts=time.time())
-                if self.trade_history_path else {}
+                if self.trade_history_path
+                else {}
             )
         except Exception:
             dca_24h_by_coin = {}
 
         # Update headings ONCE, not once per row
         try:
-            max_dca_24h = int(float(
-                self.settings.get(
-                    "max_dca_buys_per_24h",
-                    DEFAULT_SETTINGS.get("max_dca_buys_per_24h", 2),
-                ) or 2
-            ))
+            max_dca_24h = int(
+                float(
+                    self.settings.get(
+                        "max_dca_buys_per_24h",
+                        DEFAULT_SETTINGS.get("max_dca_buys_per_24h", 2),
+                    )
+                    or 2
+                )
+            )
         except Exception:
             max_dca_24h = int(DEFAULT_SETTINGS.get("max_dca_buys_per_24h", 2) or 2)
         if max_dca_24h < 0:
@@ -5039,10 +5417,29 @@ class PowerTraderHub(tk.Tk):
             pass
 
         try:
-            pm0 = float(self.settings.get("pm_start_pct_no_dca", DEFAULT_SETTINGS.get("pm_start_pct_no_dca", 5.0)) or 5.0)
-            pm1 = float(self.settings.get("pm_start_pct_with_dca", DEFAULT_SETTINGS.get("pm_start_pct_with_dca", 2.5)) or 2.5)
-            tg = float(self.settings.get("trailing_gap_pct", DEFAULT_SETTINGS.get("trailing_gap_pct", 0.5)) or 0.5)
-            self.trades_tree.heading("trail_line", text=f"Trail Line (start {pm0:g}/{pm1:g}%, gap {tg:g}%)")
+            pm0 = float(
+                self.settings.get(
+                    "pm_start_pct_no_dca",
+                    DEFAULT_SETTINGS.get("pm_start_pct_no_dca", 5.0),
+                )
+                or 5.0
+            )
+            pm1 = float(
+                self.settings.get(
+                    "pm_start_pct_with_dca",
+                    DEFAULT_SETTINGS.get("pm_start_pct_with_dca", 2.5),
+                )
+                or 2.5
+            )
+            tg = float(
+                self.settings.get(
+                    "trailing_gap_pct", DEFAULT_SETTINGS.get("trailing_gap_pct", 0.5)
+                )
+                or 0.5
+            )
+            self.trades_tree.heading(
+                "trail_line", text=f"Trail Line (start {pm0:g}/{pm1:g}%, gap {tg:g}%)"
+            )
         except Exception:
             pass
 
@@ -5095,19 +5492,23 @@ class PowerTraderHub(tk.Tk):
             lth_rows_sort.append((sym, rq, value_usd, qty_disp))
 
         try:
-            lth_rows_sort.sort(key=lambda r: (-float(r[2]) if r[2] is not None else float("inf"), r[0]))
+            lth_rows_sort.sort(
+                key=lambda r: (-float(r[2]) if r[2] is not None else float("inf"), r[0])
+            )
         except Exception:
             pass
 
         for coin, _rq, value_usd, qty_disp in lth_rows_sort:
-            lth_rows_for_tree.append((
-                f"lth:{coin}",
+            lth_rows_for_tree.append(
                 (
-                    coin,
-                    qty_disp,
-                    _fmt_money(value_usd),
-                ),
-            ))
+                    f"lth:{coin}",
+                    (
+                        coin,
+                        qty_disp,
+                        _fmt_money(value_usd),
+                    ),
+                )
+            )
 
         _sync_tree(self.lth_tree, "_lth_tree_cache", lth_rows_for_tree)
 
@@ -5142,23 +5543,25 @@ class PowerTraderHub(tk.Tk):
             next_dca = pos.get("next_dca_display", "")
             trail_line = pos.get("trail_line", 0.0)
 
-            trade_rows_for_tree.append((
-                f"trade:{coin}",
+            trade_rows_for_tree.append(
                 (
-                    coin,
-                    f"{float(qty):.8f}".rstrip("0").rstrip("."),
-                    _fmt_money(value),
-                    _fmt_price(avg_cost),
-                    _fmt_price(buy_price),
-                    _fmt_pct(buy_pnl),
-                    _fmt_price(sell_price),
-                    _fmt_pct(sell_pnl),
-                    dca_stages,
-                    dca_24h_display,
-                    next_dca,
-                    _fmt_price(trail_line),
-                ),
-            ))
+                    f"trade:{coin}",
+                    (
+                        coin,
+                        f"{float(qty):.8f}".rstrip("0").rstrip("."),
+                        _fmt_money(value),
+                        _fmt_price(avg_cost),
+                        _fmt_price(buy_price),
+                        _fmt_pct(buy_pnl),
+                        _fmt_price(sell_price),
+                        _fmt_pct(sell_pnl),
+                        dca_stages,
+                        dca_24h_display,
+                        next_dca,
+                        _fmt_price(trail_line),
+                    ),
+                )
+            )
 
         _sync_tree(self.trades_tree, "_trades_tree_cache", trade_rows_for_tree)
 
@@ -5169,7 +5572,11 @@ class PowerTraderHub(tk.Tk):
         #   - any coins reserved as long-term holdings
         # -------------------------------------------------
         try:
-            base = [c.upper().strip() for c in (self.settings.get("coins") or []) if str(c).strip()]
+            base = [
+                c.upper().strip()
+                for c in (self.settings.get("coins") or [])
+                if str(c).strip()
+            ]
             base_set = set(base)
 
             lth_cfg = self.settings.get("long_term_holdings") or []
@@ -5179,7 +5586,7 @@ class PowerTraderHub(tk.Tk):
                 lth_cfg = []
 
             lth_set = set()
-            for v in (lth_cfg or []):
+            for v in lth_cfg or []:
                 sym = str(v).upper().strip()
                 if sym and sym not in ("USD", "USDT", "USDC"):
                     lth_set.add(sym)
@@ -5208,10 +5615,14 @@ class PowerTraderHub(tk.Tk):
 
                 try:
                     self.chart_coin_folders = build_coin_folders(
-                        self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "state"),
+                        self.settings.get("main_neural_dir")
+                        or os.path.join(self.project_dir, "state"),
                         self.chart_coins,
                     )
-                    self._chart_coin_folders_sig = (self.settings.get("main_neural_dir"), tuple(self.chart_coins))
+                    self._chart_coin_folders_sig = (
+                        self.settings.get("main_neural_dir"),
+                        tuple(self.chart_coins),
+                    )
                 except Exception:
                     pass
 
@@ -5221,16 +5632,6 @@ class PowerTraderHub(tk.Tk):
                     pass
         except Exception:
             pass
-
-
-
-
-
-
-
-
-
-
 
     def _refresh_pnl(self) -> None:
         # mtime cache: avoid reading/parsing every tick
@@ -5252,15 +5653,11 @@ class PowerTraderHub(tk.Tk):
         total = float(data.get("total_realized_profit_usd", 0.0))
         self.lbl_pnl.config(text=f"Total realized: ${total:,.4f}")
 
-        
-
         bucket_usd = float(data.get("lth_profit_bucket_usd", 0.0) or 0.0)
         bucket_cents = bucket_usd * 100.0
         self.lbl_lth_profit_bucket.config(
             text=f"LTH profit bucket: {bucket_cents:.2f}¢ / 50.00¢  ({_fmt_money(bucket_usd)})"
         )
-
-
 
     def _refresh_trade_history(self) -> None:
         # mtime/signature cache: avoid rereading/reparsing the file during GUI refreshes
@@ -5284,7 +5681,11 @@ class PowerTraderHub(tk.Tk):
         for obj in reversed(rows):
             try:
                 ts = obj.get("ts", None)
-                tss = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts)) if isinstance(ts, (int, float)) else "?"
+                tss = (
+                    time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+                    if isinstance(ts, (int, float))
+                    else "?"
+                )
                 side = str(obj.get("side", "")).upper()
                 tag = str(obj.get("tag", "") or "").upper()
 
@@ -5333,8 +5734,6 @@ class PowerTraderHub(tk.Tk):
         else:
             self.hist_list.insert("end", "(no trade rows yet)")
 
-
-
     def _refresh_coin_dependent_ui(self, prev_coins: List[str]) -> None:
         """
         After settings change: refresh every coin-driven UI element:
@@ -5344,8 +5743,14 @@ class PowerTraderHub(tk.Tk):
           - Chart tabs: show ALL configured coins PLUS any coins held in-trade or reserved as long-term holdings
         """
         # Rebuild trading coin list + folders (used by allocation math and neural tiles)
-        self.coins = [c.upper().strip() for c in (self.settings.get("coins") or []) if c.strip()]
-        self.coin_folders = build_coin_folders(self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "state"), self.coins)
+        self.coins = [
+            c.upper().strip() for c in (self.settings.get("coins") or []) if c.strip()
+        ]
+        self.coin_folders = build_coin_folders(
+            self.settings.get("main_neural_dir")
+            or os.path.join(self.project_dir, "state"),
+            self.coins,
+        )
 
         # Rebuild chart coin list (charts should include held/LTH coins even if not in trading list)
         try:
@@ -5392,24 +5797,45 @@ class PowerTraderHub(tk.Tk):
 
         # Keep a separate folder map for chart coins (so extra coins don't fall back to cwd paths)
         try:
-            self.chart_coin_folders = build_coin_folders(self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "state"), self.chart_coins)
-            self._chart_coin_folders_sig = (self.settings.get("main_neural_dir"), tuple(self.chart_coins))
+            self.chart_coin_folders = build_coin_folders(
+                self.settings.get("main_neural_dir")
+                or os.path.join(self.project_dir, "state"),
+                self.chart_coins,
+            )
+            self._chart_coin_folders_sig = (
+                self.settings.get("main_neural_dir"),
+                tuple(self.chart_coins),
+            )
         except Exception:
             pass
 
         # Refresh coin dropdowns (they don't auto-update)
         try:
             # Training pane dropdown
-            if hasattr(self, "train_coin_combo") and self.train_coin_combo.winfo_exists():
+            if (
+                hasattr(self, "train_coin_combo")
+                and self.train_coin_combo.winfo_exists()
+            ):
                 self.train_coin_combo["values"] = self.coins
-                cur = (self.train_coin_var.get() or "").strip().upper() if hasattr(self, "train_coin_var") else ""
+                cur = (
+                    (self.train_coin_var.get() or "").strip().upper()
+                    if hasattr(self, "train_coin_var")
+                    else ""
+                )
                 if self.coins and cur not in self.coins:
                     self.train_coin_var.set(self.coins[0])
 
             # Trainers tab dropdown
-            if hasattr(self, "trainer_coin_combo") and self.trainer_coin_combo.winfo_exists():
+            if (
+                hasattr(self, "trainer_coin_combo")
+                and self.trainer_coin_combo.winfo_exists()
+            ):
                 self.trainer_coin_combo["values"] = self.coins
-                cur = (self.trainer_coin_var.get() or "").strip().upper() if hasattr(self, "trainer_coin_var") else ""
+                cur = (
+                    (self.trainer_coin_var.get() or "").strip().upper()
+                    if hasattr(self, "trainer_coin_var")
+                    else ""
+                )
                 if self.coins and cur not in self.coins:
                     self.trainer_coin_var.set(self.coins[0])
 
@@ -5435,8 +5861,6 @@ class PowerTraderHub(tk.Tk):
         except Exception:
             pass
 
-
-
     def _rebuild_neural_overview(self) -> None:
         """
         Recreate the coin tiles in the left-side Neural Signals box to match self.coins.
@@ -5458,9 +5882,12 @@ class PowerTraderHub(tk.Tk):
 
         self.neural_tiles = {}
 
-        for coin in (self.coins or []):
-            tile = NeuralSignalTile(self.neural_wrap, coin, trade_start_level=int(self.settings.get("trade_start_level", 3) or 3))
-
+        for coin in self.coins or []:
+            tile = NeuralSignalTile(
+                self.neural_wrap,
+                coin,
+                trade_start_level=int(self.settings.get("trade_start_level", 3) or 3),
+            )
 
             # --- Hover highlighting (real, visible) ---
             def _on_enter(_e=None, t=tile):
@@ -5528,11 +5955,6 @@ class PowerTraderHub(tk.Tk):
         except Exception:
             pass
 
-
-
-
-
-
     def _refresh_neural_overview(self) -> None:
         """
         Update each coin tile with long/short neural signals.
@@ -5543,10 +5965,17 @@ class PowerTraderHub(tk.Tk):
 
         # Keep coin_folders aligned with current settings/coins
         try:
-            sig = (str(self.settings.get("main_neural_dir") or ""), tuple(self.coins or []))
+            sig = (
+                str(self.settings.get("main_neural_dir") or ""),
+                tuple(self.coins or []),
+            )
             if getattr(self, "_coin_folders_sig", None) != sig:
                 self._coin_folders_sig = sig
-                self.coin_folders = build_coin_folders(self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "state"), self.coins)
+                self.coin_folders = build_coin_folders(
+                    self.settings.get("main_neural_dir")
+                    or os.path.join(self.project_dir, "state"),
+                    self.coins,
+                )
         except Exception:
             pass
 
@@ -5619,7 +6048,10 @@ class PowerTraderHub(tk.Tk):
 
         # Update "Last:" label
         try:
-            if hasattr(self, "lbl_neural_overview_last") and self.lbl_neural_overview_last.winfo_exists():
+            if (
+                hasattr(self, "lbl_neural_overview_last")
+                and self.lbl_neural_overview_last.winfo_exists()
+            ):
                 if latest_ts:
                     self.lbl_neural_overview_last.config(
                         text=f"Last: {time.strftime('%H:%M:%S', time.localtime(float(latest_ts)))}"
@@ -5629,8 +6061,6 @@ class PowerTraderHub(tk.Tk):
         except Exception:
             pass
 
-
-
     def _rebuild_coin_chart_tabs(self) -> None:
         """
         Ensure the Charts multi-row tab bar + pages match self.chart_coins
@@ -5638,7 +6068,9 @@ class PowerTraderHub(tk.Tk):
         Keeps the ACCOUNT page intact and preserves the currently selected page when possible.
         """
         charts_frame = getattr(self, "_charts_frame", None)
-        if charts_frame is None or (hasattr(charts_frame, "winfo_exists") and not charts_frame.winfo_exists()):
+        if charts_frame is None or (
+            hasattr(charts_frame, "winfo_exists") and not charts_frame.winfo_exists()
+        ):
             return
 
         # Decide which coins should have chart tabs
@@ -5669,7 +6101,10 @@ class PowerTraderHub(tk.Tk):
             pass
 
         try:
-            if hasattr(self, "chart_pages_container") and self.chart_pages_container.winfo_exists():
+            if (
+                hasattr(self, "chart_pages_container")
+                and self.chart_pages_container.winfo_exists()
+            ):
                 self.chart_pages_container.destroy()
         except Exception:
             pass
@@ -5698,7 +6133,13 @@ class PowerTraderHub(tk.Tk):
 
             for txt, b in self._chart_tab_buttons.items():
                 try:
-                    b.configure(style=("ChartTabSelected.TButton" if txt == name else "ChartTab.TButton"))
+                    b.configure(
+                        style=(
+                            "ChartTabSelected.TButton"
+                            if txt == name
+                            else "ChartTab.TButton"
+                        )
+                    )
                 except Exception:
                     pass
 
@@ -5739,16 +6180,14 @@ class PowerTraderHub(tk.Tk):
             self.chart_tabs_bar.add(btn, padx=(0, 6), pady=(0, 6))
             self._chart_tab_buttons[coin] = btn
 
-            chart = CandleChart(page, self.fetcher, coin, self._settings_getter, self.trade_history_path)
+            chart = CandleChart(
+                page, self.fetcher, coin, self._settings_getter, self.trade_history_path
+            )
             chart.pack(fill="both", expand=True)
             self.charts[coin] = chart
 
         # Restore selection
         self._show_chart_page(selected)
-
-
-
-
 
     # ---- settings dialog ----
 
@@ -5838,10 +6277,12 @@ class PowerTraderHub(tk.Tk):
 
         settings_canvas.bind("<Enter>", lambda _e: settings_canvas.focus_set(), add="+")
         settings_canvas.bind("<MouseWheel>", _wheel, add="+")  # Windows / Mac
-        settings_canvas.bind("<Button-4>", lambda _e: settings_canvas.yview_scroll(-3, "units"), add="+")  # Linux
-        settings_canvas.bind("<Button-5>", lambda _e: settings_canvas.yview_scroll(3, "units"), add="+")   # Linux
-
-
+        settings_canvas.bind(
+            "<Button-4>", lambda _e: settings_canvas.yview_scroll(-3, "units"), add="+"
+        )  # Linux
+        settings_canvas.bind(
+            "<Button-5>", lambda _e: settings_canvas.yview_scroll(3, "units"), add="+"
+        )  # Linux
 
         # Make the entry column expand
         frm.columnconfigure(0, weight=0)  # labels
@@ -5852,20 +6293,28 @@ class PowerTraderHub(tk.Tk):
             """
             browse: "dir" to attach a directory chooser, else None.
             """
-            ttk.Label(frm, text=label).grid(row=r, column=0, sticky="w", padx=(0, 10), pady=6)
+            ttk.Label(frm, text=label).grid(
+                row=r, column=0, sticky="w", padx=(0, 10), pady=6
+            )
 
             ent = ttk.Entry(frm, textvariable=var)
             ent.grid(row=r, column=1, sticky="ew", pady=6)
 
             if browse == "dir":
+
                 def do_browse():
                     picked = filedialog.askdirectory()
                     if picked:
                         var.set(picked)
-                ttk.Button(frm, text="Browse", command=do_browse).grid(row=r, column=2, sticky="e", padx=(10, 0), pady=6)
+
+                ttk.Button(frm, text="Browse", command=do_browse).grid(
+                    row=r, column=2, sticky="e", padx=(10, 0), pady=6
+                )
             else:
                 # keep column alignment consistent
-                ttk.Label(frm, text="").grid(row=r, column=2, sticky="e", padx=(10, 0), pady=6)
+                ttk.Label(frm, text="").grid(
+                    row=r, column=2, sticky="e", padx=(10, 0), pady=6
+                )
 
         main_dir_var = tk.StringVar(value=self.settings["main_neural_dir"])
         coins_var = tk.StringVar(value=",".join(self.settings["coins"]))
@@ -5887,24 +6336,63 @@ class PowerTraderHub(tk.Tk):
         long_term_holdings_var = tk.StringVar(value=",".join(_lth_syms))
 
         # % of realized trade profits to auto-buy into long-term holdings
-        lth_profit_alloc_pct_var = tk.StringVar(value=str(self.settings.get("lth_profit_alloc_pct", DEFAULT_SETTINGS.get("lth_profit_alloc_pct", 0.0))))
+        lth_profit_alloc_pct_var = tk.StringVar(
+            value=str(
+                self.settings.get(
+                    "lth_profit_alloc_pct",
+                    DEFAULT_SETTINGS.get("lth_profit_alloc_pct", 0.0),
+                )
+            )
+        )
 
+        trade_start_level_var = tk.StringVar(
+            value=str(self.settings.get("trade_start_level", 3))
+        )
 
-        trade_start_level_var = tk.StringVar(value=str(self.settings.get("trade_start_level", 3)))
-
-        start_alloc_pct_var = tk.StringVar(value=str(self.settings.get("start_allocation_pct", 0.005)))
+        start_alloc_pct_var = tk.StringVar(
+            value=str(self.settings.get("start_allocation_pct", 0.005))
+        )
 
         dca_mult_var = tk.StringVar(value=str(self.settings.get("dca_multiplier", 2.0)))
-        _dca_levels = self.settings.get("dca_levels", DEFAULT_SETTINGS.get("dca_levels", []))
+        _dca_levels = self.settings.get(
+            "dca_levels", DEFAULT_SETTINGS.get("dca_levels", [])
+        )
         if not isinstance(_dca_levels, list):
             _dca_levels = DEFAULT_SETTINGS.get("dca_levels", [])
         dca_levels_var = tk.StringVar(value=",".join(str(x) for x in _dca_levels))
-        max_dca_var = tk.StringVar(value=str(self.settings.get("max_dca_buys_per_24h", DEFAULT_SETTINGS.get("max_dca_buys_per_24h", 2))))
+        max_dca_var = tk.StringVar(
+            value=str(
+                self.settings.get(
+                    "max_dca_buys_per_24h",
+                    DEFAULT_SETTINGS.get("max_dca_buys_per_24h", 2),
+                )
+            )
+        )
 
         # --- Trailing PM settings (editable; hot-reload friendly) ---
-        pm_no_dca_var = tk.StringVar(value=str(self.settings.get("pm_start_pct_no_dca", DEFAULT_SETTINGS.get("pm_start_pct_no_dca", 5.0))))
-        pm_with_dca_var = tk.StringVar(value=str(self.settings.get("pm_start_pct_with_dca", DEFAULT_SETTINGS.get("pm_start_pct_with_dca", 2.5))))
-        trailing_gap_var = tk.StringVar(value=str(self.settings.get("trailing_gap_pct", DEFAULT_SETTINGS.get("trailing_gap_pct", 0.5))))
+        pm_no_dca_var = tk.StringVar(
+            value=str(
+                self.settings.get(
+                    "pm_start_pct_no_dca",
+                    DEFAULT_SETTINGS.get("pm_start_pct_no_dca", 5.0),
+                )
+            )
+        )
+        pm_with_dca_var = tk.StringVar(
+            value=str(
+                self.settings.get(
+                    "pm_start_pct_with_dca",
+                    DEFAULT_SETTINGS.get("pm_start_pct_with_dca", 2.5),
+                )
+            )
+        )
+        trailing_gap_var = tk.StringVar(
+            value=str(
+                self.settings.get(
+                    "trailing_gap_pct", DEFAULT_SETTINGS.get("trailing_gap_pct", 0.5)
+                )
+            )
+        )
 
         hub_dir_var = tk.StringVar(value=self.settings.get("hub_data_dir", ""))
 
@@ -5916,34 +6404,62 @@ class PowerTraderHub(tk.Tk):
             _exchanges.append(_cur_exchange)
             _exchanges.sort()
         exchange_var = tk.StringVar(value=_cur_exchange)
-        demo_starting_usd_var = tk.StringVar(value=str(self.settings.get("demo_starting_usd", DEFAULT_SETTINGS["demo_starting_usd"])))
-        demo_slippage_var = tk.StringVar(value=str(self.settings.get("demo_slippage_factor", DEFAULT_SETTINGS["demo_slippage_factor"])))
+        demo_starting_usd_var = tk.StringVar(
+            value=str(
+                self.settings.get(
+                    "demo_starting_usd", DEFAULT_SETTINGS["demo_starting_usd"]
+                )
+            )
+        )
+        demo_slippage_var = tk.StringVar(
+            value=str(
+                self.settings.get(
+                    "demo_slippage_factor", DEFAULT_SETTINGS["demo_slippage_factor"]
+                )
+            )
+        )
 
         neural_script_var = tk.StringVar(value=self.settings["script_neural_runner2"])
-        trainer_script_var = tk.StringVar(value=self.settings.get("script_neural_trainer", "pt_trainer.py"))
+        trainer_script_var = tk.StringVar(
+            value=self.settings.get("script_neural_trainer", "pt_trainer.py")
+        )
         trader_script_var = tk.StringVar(value=self.settings["script_trader"])
 
         ui_refresh_var = tk.StringVar(value=str(self.settings["ui_refresh_seconds"]))
-        chart_refresh_var = tk.StringVar(value=str(self.settings["chart_refresh_seconds"]))
+        chart_refresh_var = tk.StringVar(
+            value=str(self.settings["chart_refresh_seconds"])
+        )
         candles_limit_var = tk.StringVar(value=str(self.settings["candles_limit"]))
         _cur_font_size = abs(int(tkfont.nametofont("TkDefaultFont").cget("size")))
         ui_font_size_var = tk.StringVar(value=str(_cur_font_size))
-        auto_start_var = tk.BooleanVar(value=bool(self.settings.get("auto_start_scripts", False)))
+        auto_start_var = tk.BooleanVar(
+            value=bool(self.settings.get("auto_start_scripts", False))
+        )
 
         r = 0
-        add_row(r, "Main neural folder:", main_dir_var, browse="dir"); r += 1
-        add_row(r, "Coins (comma):", coins_var); r += 1
-        add_row(r, "Long-term holdings (symbols, optional):", long_term_holdings_var); r += 1
-        add_row(r, "LTH auto-buy from profits (%):", lth_profit_alloc_pct_var); r += 1
-        add_row(r, "Trade start level (1-7):", trade_start_level_var); r += 1
-
+        add_row(r, "Main neural folder:", main_dir_var, browse="dir")
+        r += 1
+        add_row(r, "Coins (comma):", coins_var)
+        r += 1
+        add_row(r, "Long-term holdings (symbols, optional):", long_term_holdings_var)
+        r += 1
+        add_row(r, "LTH auto-buy from profits (%):", lth_profit_alloc_pct_var)
+        r += 1
+        add_row(r, "Trade start level (1-7):", trade_start_level_var)
+        r += 1
 
         # Start allocation % (shows approx $/coin using the last known account value; always displays the $0.50 minimum)
-        ttk.Label(frm, text="Start allocation %:").grid(row=r, column=0, sticky="w", padx=(0, 10), pady=6)
-        ttk.Entry(frm, textvariable=start_alloc_pct_var).grid(row=r, column=1, sticky="ew", pady=6)
+        ttk.Label(frm, text="Start allocation %:").grid(
+            row=r, column=0, sticky="w", padx=(0, 10), pady=6
+        )
+        ttk.Entry(frm, textvariable=start_alloc_pct_var).grid(
+            row=r, column=1, sticky="ew", pady=6
+        )
 
         start_alloc_hint_var = tk.StringVar(value="")
-        ttk.Label(frm, textvariable=start_alloc_hint_var).grid(row=r, column=2, sticky="w", padx=(10, 0), pady=6)
+        ttk.Label(frm, textvariable=start_alloc_hint_var).grid(
+            row=r, column=2, sticky="w", padx=(10, 0), pady=6
+        )
 
         def _update_start_alloc_hint(*_):
             # Parse % (allow "0.01" or "0.01%")
@@ -5958,11 +6474,17 @@ class PowerTraderHub(tk.Tk):
 
             # Use the last account value we saw in trader_status.json (no extra API calls).
             try:
-                total_val = float(getattr(self, "_last_total_account_value", 0.0) or 0.0)
+                total_val = float(
+                    getattr(self, "_last_total_account_value", 0.0) or 0.0
+                )
             except Exception:
                 total_val = 0.0
 
-            coins_list = [c.strip().upper() for c in (coins_var.get() or "").split(",") if c.strip()]
+            coins_list = [
+                c.strip().upper()
+                for c in (coins_var.get() or "").split(",")
+                if c.strip()
+            ]
             n_coins = len(coins_list) if coins_list else 1
 
             per_coin = 0.0
@@ -5972,7 +6494,9 @@ class PowerTraderHub(tk.Tk):
                 per_coin = 0.5
 
             if total_val > 0.0:
-                start_alloc_hint_var.set(f"≈ {_fmt_money(per_coin)} per coin (min $0.50)")
+                start_alloc_hint_var.set(
+                    f"≈ {_fmt_money(per_coin)} per coin (min $0.50)"
+                )
             else:
                 start_alloc_hint_var.set("≈ $0.50 min per coin (needs account value)")
 
@@ -5982,46 +6506,79 @@ class PowerTraderHub(tk.Tk):
 
         r += 1
 
-        add_row(r, "DCA levels (% list):", dca_levels_var); r += 1
+        add_row(r, "DCA levels (% list):", dca_levels_var)
+        r += 1
 
-        add_row(r, "DCA multiplier:", dca_mult_var); r += 1
+        add_row(r, "DCA multiplier:", dca_mult_var)
+        r += 1
 
-        add_row(r, "Max DCA buys / coin (rolling 24h):", max_dca_var); r += 1
+        add_row(r, "Max DCA buys / coin (rolling 24h):", max_dca_var)
+        r += 1
 
-        add_row(r, "Trailing PM start % (no DCA):", pm_no_dca_var); r += 1
-        add_row(r, "Trailing PM start % (with DCA):", pm_with_dca_var); r += 1
-        add_row(r, "Trailing gap % (behind peak):", trailing_gap_var); r += 1
+        add_row(r, "Trailing PM start % (no DCA):", pm_no_dca_var)
+        r += 1
+        add_row(r, "Trailing PM start % (with DCA):", pm_with_dca_var)
+        r += 1
+        add_row(r, "Trailing gap % (behind peak):", trailing_gap_var)
+        r += 1
 
-        add_row(r, "Hub data dir (optional):", hub_dir_var, browse="dir"); r += 1
+        add_row(r, "Hub data dir (optional):", hub_dir_var, browse="dir")
+        r += 1
 
         # --- Exchange selection ---
-        ttk.Separator(frm, orient="horizontal").grid(row=r, column=0, columnspan=3, sticky="ew", pady=10); r += 1
+        ttk.Separator(frm, orient="horizontal").grid(
+            row=r, column=0, columnspan=3, sticky="ew", pady=10
+        )
+        r += 1
 
-        ttk.Label(frm, text="Exchange:").grid(row=r, column=0, sticky="w", padx=(0, 10), pady=6)
+        ttk.Label(frm, text="Exchange:").grid(
+            row=r, column=0, sticky="w", padx=(0, 10), pady=6
+        )
         _exchange_display = [exchange_display_name(k) for k in _exchanges]
-        _exchange_combo = ttk.Combobox(frm, textvariable=exchange_var, values=_exchanges, state="readonly")
+        _exchange_combo = ttk.Combobox(
+            frm, textvariable=exchange_var, values=_exchanges, state="readonly"
+        )
         _exchange_combo.grid(row=r, column=1, sticky="ew", pady=6)
         ttk.Label(frm, text="").grid(row=r, column=2, sticky="e", padx=(10, 0), pady=6)
         r += 1
 
         # --- Demo-specific settings (shown only when exchange == "demo") ---
         demo_frame = ttk.Frame(frm)
-        demo_frame.grid(row=r, column=0, columnspan=3, sticky="ew"); r += 1
+        demo_frame.grid(row=r, column=0, columnspan=3, sticky="ew")
+        r += 1
         demo_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(demo_frame, text="Demo starting USD:").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
-        ttk.Entry(demo_frame, textvariable=demo_starting_usd_var).grid(row=0, column=1, sticky="ew", pady=6)
-        ttk.Label(demo_frame, text="").grid(row=0, column=2, sticky="e", padx=(10, 0), pady=6)
+        ttk.Label(demo_frame, text="Demo starting USD:").grid(
+            row=0, column=0, sticky="w", padx=(0, 10), pady=6
+        )
+        ttk.Entry(demo_frame, textvariable=demo_starting_usd_var).grid(
+            row=0, column=1, sticky="ew", pady=6
+        )
+        ttk.Label(demo_frame, text="").grid(
+            row=0, column=2, sticky="e", padx=(10, 0), pady=6
+        )
 
-        ttk.Label(demo_frame, text="Demo slippage factor:").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=6)
-        ttk.Entry(demo_frame, textvariable=demo_slippage_var).grid(row=1, column=1, sticky="ew", pady=6)
-        ttk.Label(demo_frame, text="").grid(row=1, column=2, sticky="e", padx=(10, 0), pady=6)
+        ttk.Label(demo_frame, text="Demo slippage factor:").grid(
+            row=1, column=0, sticky="w", padx=(0, 10), pady=6
+        )
+        ttk.Entry(demo_frame, textvariable=demo_slippage_var).grid(
+            row=1, column=1, sticky="ew", pady=6
+        )
+        ttk.Label(demo_frame, text="").grid(
+            row=1, column=2, sticky="e", padx=(10, 0), pady=6
+        )
 
-        ttk.Separator(frm, orient="horizontal").grid(row=r, column=0, columnspan=3, sticky="ew", pady=10); r += 1
+        ttk.Separator(frm, orient="horizontal").grid(
+            row=r, column=0, columnspan=3, sticky="ew", pady=10
+        )
+        r += 1
 
-        add_row(r, "pt_thinker.py path:", neural_script_var); r += 1
-        add_row(r, "pt_trainer.py path:", trainer_script_var); r += 1
-        add_row(r, "pt_trader.py path:", trader_script_var); r += 1
+        add_row(r, "pt_thinker.py path:", neural_script_var)
+        r += 1
+        add_row(r, "pt_trainer.py path:", trainer_script_var)
+        r += 1
+        add_row(r, "pt_trader.py path:", trader_script_var)
+        r += 1
 
         # --- Robinhood API setup (writes r_key.txt + r_secret.txt used by pt_trader.py) ---
         def _api_paths() -> Tuple[str, str]:
@@ -6056,7 +6613,9 @@ class PowerTraderHub(tk.Tk):
                 missing.append("r_secret.txt (PRIVATE key)")
 
             if missing:
-                api_status_var.set("Not configured ❌ (missing " + ", ".join(missing) + ")")
+                api_status_var.set(
+                    "Not configured ❌ (missing " + ", ".join(missing) + ")"
+                )
             else:
                 api_status_var.set("Configured ✅ (credentials found)")
 
@@ -6072,7 +6631,10 @@ class PowerTraderHub(tk.Tk):
                     return
                 subprocess.Popen(["xdg-open", folder])
             except Exception as e:
-                messagebox.showerror("Couldn't open folder", f"Tried to open:\n{self.project_dir}\n\nError:\n{e}")
+                messagebox.showerror(
+                    "Couldn't open folder",
+                    f"Tried to open:\n{self.project_dir}\n\nError:\n{e}",
+                )
 
         def _clear_api_files() -> None:
             """Delete r_key.txt / r_secret.txt (with a big confirmation)."""
@@ -6083,7 +6645,7 @@ class PowerTraderHub(tk.Tk):
                 f"  {key_path}\n"
                 f"  {secret_path}\n\n"
                 "After deleting, the trader can NOT authenticate until you run the setup wizard again.\n\n"
-                "Are you sure you want to delete these files?"
+                "Are you sure you want to delete these files?",
             ):
                 return
 
@@ -6093,7 +6655,9 @@ class PowerTraderHub(tk.Tk):
                 if os.path.isfile(secret_path):
                     os.remove(secret_path)
             except Exception as e:
-                messagebox.showerror("Delete failed", f"Couldn't delete the files:\n\n{e}")
+                messagebox.showerror(
+                    "Delete failed", f"Couldn't delete the files:\n\n{e}"
+                )
                 return
 
             _refresh_api_status()
@@ -6123,7 +6687,7 @@ class PowerTraderHub(tk.Tk):
                     "The 'cryptography' package is required for Robinhood API setup.\n\n"
                     "Fix: open a Command Prompt / Terminal in this folder and run:\n"
                     "  pip install cryptography\n\n"
-                    "Then re-open this Setup Wizard."
+                    "Then re-open this Setup Wizard.",
                 )
                 return
 
@@ -6155,7 +6719,9 @@ class PowerTraderHub(tk.Tk):
             )
             wiz_canvas.grid(row=0, column=0, sticky="nsew")
 
-            wiz_scroll = ttk.Scrollbar(viewport, orient="vertical", command=wiz_canvas.yview)
+            wiz_scroll = ttk.Scrollbar(
+                viewport, orient="vertical", command=wiz_canvas.yview
+            )
             wiz_scroll.grid(row=0, column=1, sticky="ns")
             wiz_canvas.configure(yscrollcommand=wiz_scroll.set)
 
@@ -6210,9 +6776,12 @@ class PowerTraderHub(tk.Tk):
 
             wiz_canvas.bind("<Enter>", lambda _e: wiz_canvas.focus_set(), add="+")
             wiz_canvas.bind("<MouseWheel>", _wheel, add="+")  # Windows / Mac
-            wiz_canvas.bind("<Button-4>", lambda _e: wiz_canvas.yview_scroll(-3, "units"), add="+")  # Linux
-            wiz_canvas.bind("<Button-5>", lambda _e: wiz_canvas.yview_scroll(3, "units"), add="+")   # Linux
-
+            wiz_canvas.bind(
+                "<Button-4>", lambda _e: wiz_canvas.yview_scroll(-3, "units"), add="+"
+            )  # Linux
+            wiz_canvas.bind(
+                "<Button-5>", lambda _e: wiz_canvas.yview_scroll(3, "units"), add="+"
+            )  # Linux
 
             key_path, secret_path = _api_paths()
 
@@ -6234,7 +6803,9 @@ class PowerTraderHub(tk.Tk):
                         return
                     subprocess.Popen(["xdg-open", p])
                 except Exception as e:
-                    messagebox.showerror("Couldn't open folder", f"Tried to open:\n{path}\n\nError:\n{e}")
+                    messagebox.showerror(
+                        "Couldn't open folder", f"Tried to open:\n{path}\n\nError:\n{e}"
+                    )
 
             def _copy_to_clipboard(txt: str, title: str = "Copied") -> None:
                 try:
@@ -6287,18 +6858,36 @@ class PowerTraderHub(tk.Tk):
                 # Robinhood entry point. User will still need to click into Settings → Crypto → API Trading.
                 webbrowser.open("https://robinhood.com/account/crypto")
 
-            ttk.Button(top_btns, text="Open Robinhood API Credentials page (Crypto)", command=open_robinhood_page).pack(side="left")
-            ttk.Button(top_btns, text="Open Robinhood Crypto Trading API docs", command=lambda: webbrowser.open("https://docs.robinhood.com/crypto/trading/")).pack(side="left", padx=8)
-            ttk.Button(top_btns, text="Open Folder With r_key.txt / r_secret.txt", command=lambda: _open_in_file_manager(self.project_dir)).pack(side="left", padx=8)
+            ttk.Button(
+                top_btns,
+                text="Open Robinhood API Credentials page (Crypto)",
+                command=open_robinhood_page,
+            ).pack(side="left")
+            ttk.Button(
+                top_btns,
+                text="Open Robinhood Crypto Trading API docs",
+                command=lambda: webbrowser.open(
+                    "https://docs.robinhood.com/crypto/trading/"
+                ),
+            ).pack(side="left", padx=8)
+            ttk.Button(
+                top_btns,
+                text="Open Folder With r_key.txt / r_secret.txt",
+                command=lambda: _open_in_file_manager(self.project_dir),
+            ).pack(side="left", padx=8)
 
             # -----------------------------
             # Step 1 — Generate keys
             # -----------------------------
-            step1 = ttk.LabelFrame(container, text="Step 1 — Generate your keys (click once)")
+            step1 = ttk.LabelFrame(
+                container, text="Step 1 — Generate your keys (click once)"
+            )
             step1.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
             step1.columnconfigure(0, weight=1)
 
-            ttk.Label(step1, text="Public Key (this is what you paste into Robinhood):").grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
+            ttk.Label(
+                step1, text="Public Key (this is what you paste into Robinhood):"
+            ).grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
 
             pub_box = tk.Text(step1, height=4, wrap="none")
             pub_box.grid(row=1, column=0, sticky="nsew", padx=10, pady=(6, 10))
@@ -6337,7 +6926,9 @@ class PowerTraderHub(tk.Tk):
 
             # If already configured before, show the public key again (derived from stored private key)
             if private_b64_state["value"]:
-                _set_pub_text(_render_public_from_private_b64(private_b64_state["value"]))
+                _set_pub_text(
+                    _render_public_from_private_b64(private_b64_state["value"])
+                )
 
             def generate_keys():
                 # Generate an Ed25519 keypair (Robinhood expects base64 raw public key bytes)
@@ -6361,7 +6952,6 @@ class PowerTraderHub(tk.Tk):
                 # Show what you paste into Robinhood: base64(raw public key)
                 _set_pub_text(base64.b64encode(pub_raw).decode("utf-8"))
 
-
                 messagebox.showinfo(
                     "Step 1 complete",
                     "Public/Private keys generated.\n\n"
@@ -6372,27 +6962,33 @@ class PowerTraderHub(tk.Tk):
                     "  4) Paste the Public Key (base64) into the 'Public key' field\n"
                     "  5) Enable permissions READ + TRADE (this trader needs both), then Save\n"
                     "  6) Robinhood shows an API Key (usually starts with 'rh...') — copy it right away\n\n"
-                    "Then come back here and paste that API Key into the 'API Key' box."
+                    "Then come back here and paste that API Key into the 'API Key' box.",
                 )
-
-
 
             def copy_public_key():
                 txt = (pub_box.get("1.0", "end") or "").strip()
                 if not txt:
-                    messagebox.showwarning("Nothing to copy", "Click 'Generate Keys' first.")
+                    messagebox.showwarning(
+                        "Nothing to copy", "Click 'Generate Keys' first."
+                    )
                     return
                 _copy_to_clipboard(txt, title="Public Key copied")
 
             step1_btns = ttk.Frame(step1)
             step1_btns.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
-            ttk.Button(step1_btns, text="Generate Keys", command=generate_keys).pack(side="left")
-            ttk.Button(step1_btns, text="Copy Public Key", command=copy_public_key).pack(side="left", padx=8)
+            ttk.Button(step1_btns, text="Generate Keys", command=generate_keys).pack(
+                side="left"
+            )
+            ttk.Button(
+                step1_btns, text="Copy Public Key", command=copy_public_key
+            ).pack(side="left", padx=8)
 
             # -----------------------------
             # Step 2 — Paste API key (from Robinhood)
             # -----------------------------
-            step2 = ttk.LabelFrame(container, text="Step 2 — Paste your Robinhood API Key here")
+            step2 = ttk.LabelFrame(
+                container, text="Step 2 — Paste your Robinhood API Key here"
+            )
             step2.grid(row=3, column=0, sticky="nsew", pady=(0, 10))
             step2.columnconfigure(0, weight=1)
 
@@ -6400,7 +6996,9 @@ class PowerTraderHub(tk.Tk):
                 "In Robinhood, after you add the Public Key, Robinhood will show an API Key.\n"
                 "Paste that API Key below. (It often starts with 'rh.'.)"
             )
-            ttk.Label(step2, text=step2_help, justify="left").grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
+            ttk.Label(step2, text=step2_help, justify="left").grid(
+                row=0, column=0, sticky="w", padx=10, pady=(8, 0)
+            )
 
             api_key_var = tk.StringVar(value=existing_api_key or "")
             api_ent = ttk.Entry(step2, textvariable=api_key_var)
@@ -6415,15 +7013,20 @@ class PowerTraderHub(tk.Tk):
                         "Missing dependency",
                         "The 'requests' package is required for the Test button.\n\n"
                         "Fix: pip install requests\n\n"
-                        "(You can still Save without testing.)"
+                        "(You can still Save without testing.)",
                     )
                     return
 
                 if not priv_b64:
-                    messagebox.showerror("Missing private key", "Step 1: click 'Generate Keys' first.")
+                    messagebox.showerror(
+                        "Missing private key", "Step 1: click 'Generate Keys' first."
+                    )
                     return
                 if not api_key:
-                    messagebox.showerror("Missing API key", "Paste the API key from Robinhood into Step 2 first.")
+                    messagebox.showerror(
+                        "Missing API key",
+                        "Paste the API key from Robinhood into Step 2 first.",
+                    )
                     return
 
                 # Safe test: market-data endpoint (no trading)
@@ -6445,14 +7048,18 @@ class PowerTraderHub(tk.Tk):
                     elif len(raw) == 32:
                         seed = raw
                     else:
-                        raise ValueError(f"Unexpected private key length: {len(raw)} bytes (expected 32 or 64)")
+                        raise ValueError(
+                            f"Unexpected private key length: {len(raw)} bytes (expected 32 or 64)"
+                        )
 
                     pk = ed25519.Ed25519PrivateKey.from_private_bytes(seed)
                     sig_b64 = base64.b64encode(pk.sign(msg)).decode("utf-8")
                 except Exception as e:
-                    messagebox.showerror("Bad private key", f"Couldn't use your private key (r_secret.txt).\n\nError:\n{e}")
+                    messagebox.showerror(
+                        "Bad private key",
+                        f"Couldn't use your private key (r_secret.txt).\n\nError:\n{e}",
+                    )
                     return
-
 
                 headers = {
                     "x-api-key": api_key,
@@ -6462,7 +7069,9 @@ class PowerTraderHub(tk.Tk):
                 }
 
                 try:
-                    resp = requests.get(f"{base_url}{path}", headers=headers, timeout=10)
+                    resp = requests.get(
+                        f"{base_url}{path}", headers=headers, timeout=10
+                    )
                     if resp.status_code >= 400:
                         # Give layman-friendly hints for common failures
                         hint = ""
@@ -6473,7 +7082,10 @@ class PowerTraderHub(tk.Tk):
                                 "  • In Robinhood, ensure the key has permissions READ + TRADE.\n"
                                 "  • If you just created the key, wait 30–60 seconds and try again.\n"
                             )
-                        messagebox.showerror("Test failed", f"Robinhood returned HTTP {resp.status_code}.\n\n{resp.text}{hint}")
+                        messagebox.showerror(
+                            "Test failed",
+                            f"Robinhood returned HTTP {resp.status_code}.\n\n{resp.text}{hint}",
+                        )
                         return
 
                     data = resp.json()
@@ -6490,14 +7102,20 @@ class PowerTraderHub(tk.Tk):
                         "✅ Your API Key + Private Key worked!\n\n"
                         "Robinhood responded successfully.\n"
                         f"BTC-USD ask (example): {ask if ask is not None else 'received'}\n\n"
-                        "Next: click Save."
+                        "Next: click Save.",
                     )
                 except Exception as e:
-                    messagebox.showerror("Test failed", f"Couldn't reach Robinhood.\n\nError:\n{e}")
+                    messagebox.showerror(
+                        "Test failed", f"Couldn't reach Robinhood.\n\nError:\n{e}"
+                    )
 
             step2_btns = ttk.Frame(step2)
             step2_btns.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 10))
-            ttk.Button(step2_btns, text="Test Credentials (safe, no trading)", command=_test_credentials).pack(side="left")
+            ttk.Button(
+                step2_btns,
+                text="Test Credentials (safe, no trading)",
+                command=_test_credentials,
+            ).pack(side="left")
 
             # -----------------------------
             # Step 3 — Save
@@ -6522,7 +7140,9 @@ class PowerTraderHub(tk.Tk):
                 priv_b64 = (private_b64_state.get("value") or "").strip()
 
                 if not priv_b64:
-                    messagebox.showerror("Missing private key", "Step 1: click 'Generate Keys' first.")
+                    messagebox.showerror(
+                        "Missing private key", "Step 1: click 'Generate Keys' first."
+                    )
                     return
 
                 # Normalize private key so pt_thinker.py can load it:
@@ -6533,37 +7153,41 @@ class PowerTraderHub(tk.Tk):
                     if len(raw) == 64:
                         raw = raw[:32]
                         priv_b64 = base64.b64encode(raw).decode("utf-8")
-                        private_b64_state["value"] = priv_b64  # keep UI state consistent
+                        private_b64_state["value"] = (
+                            priv_b64  # keep UI state consistent
+                        )
                     elif len(raw) != 32:
                         messagebox.showerror(
                             "Bad private key",
                             f"Your private key decodes to {len(raw)} bytes, but it must be 32 bytes.\n\n"
-                            "Click 'Generate Keys' again to create a fresh keypair."
+                            "Click 'Generate Keys' again to create a fresh keypair.",
                         )
                         return
                 except Exception as e:
                     messagebox.showerror(
                         "Bad private key",
-                        f"Couldn't decode the private key as base64.\n\nError:\n{e}"
+                        f"Couldn't decode the private key as base64.\n\nError:\n{e}",
                     )
                     return
 
                 if not api_key:
-                    messagebox.showerror("Missing API key", "Step 2: paste your API key from Robinhood first.")
+                    messagebox.showerror(
+                        "Missing API key",
+                        "Step 2: paste your API key from Robinhood first.",
+                    )
                     return
                 if not bool(ack_var.get()):
                     messagebox.showwarning(
                         "Please confirm",
-                        "For safety, please check the box confirming you understand r_secret.txt is private."
+                        "For safety, please check the box confirming you understand r_secret.txt is private.",
                     )
                     return
-
 
                 # Small sanity warning (don’t block, just help)
                 if len(api_key) < 10:
                     if not messagebox.askyesno(
                         "API key looks short",
-                        "That API key looks unusually short. Are you sure you pasted the API Key from Robinhood?"
+                        "That API key looks unusually short. Are you sure you pasted the API Key from Robinhood?",
                     ):
                         return
 
@@ -6583,7 +7207,10 @@ class PowerTraderHub(tk.Tk):
                     with open(secret_path, "w", encoding="utf-8") as f:
                         f.write(priv_b64)
                 except Exception as e:
-                    messagebox.showerror("Save failed", f"Couldn't write the credential files.\n\nError:\n{e}")
+                    messagebox.showerror(
+                        "Save failed",
+                        f"Couldn't write the credential files.\n\nError:\n{e}",
+                    )
                     return
 
                 _refresh_api_status()
@@ -6596,27 +7223,40 @@ class PowerTraderHub(tk.Tk):
                     "Next steps:\n"
                     "  1) Close this window\n"
                     "  2) Start the trader (pt_trader.py)\n"
-                    "If something fails, come back here and click 'Test Credentials'."
+                    "If something fails, come back here and click 'Test Credentials'.",
                 )
                 wiz.destroy()
 
             ttk.Button(save_btns, text="Save", command=do_save).pack(side="left")
-            ttk.Button(save_btns, text="Close", command=wiz.destroy).pack(side="left", padx=8)
+            ttk.Button(save_btns, text="Close", command=wiz.destroy).pack(
+                side="left", padx=8
+            )
 
         rh_section = ttk.Frame(frm)
-        rh_section.grid(row=r, column=0, columnspan=3, sticky="ew"); r += 1
+        rh_section.grid(row=r, column=0, columnspan=3, sticky="ew")
+        r += 1
         rh_section.columnconfigure(1, weight=1)
 
-        ttk.Label(rh_section, text="Robinhood API:").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
+        ttk.Label(rh_section, text="Robinhood API:").grid(
+            row=0, column=0, sticky="w", padx=(0, 10), pady=6
+        )
 
         api_row = ttk.Frame(rh_section)
         api_row.grid(row=0, column=1, columnspan=2, sticky="ew", pady=6)
         api_row.columnconfigure(0, weight=1)
 
-        ttk.Label(api_row, textvariable=api_status_var).grid(row=0, column=0, sticky="w")
-        ttk.Button(api_row, text="Setup Wizard", command=_open_robinhood_api_wizard).grid(row=0, column=1, sticky="e", padx=(10, 0))
-        ttk.Button(api_row, text="Open Folder", command=_open_api_folder).grid(row=0, column=2, sticky="e", padx=(8, 0))
-        ttk.Button(api_row, text="Clear", command=_clear_api_files).grid(row=0, column=3, sticky="e", padx=(8, 0))
+        ttk.Label(api_row, textvariable=api_status_var).grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Button(
+            api_row, text="Setup Wizard", command=_open_robinhood_api_wizard
+        ).grid(row=0, column=1, sticky="e", padx=(10, 0))
+        ttk.Button(api_row, text="Open Folder", command=_open_api_folder).grid(
+            row=0, column=2, sticky="e", padx=(8, 0)
+        )
+        ttk.Button(api_row, text="Clear", command=_clear_api_files).grid(
+            row=0, column=3, sticky="e", padx=(8, 0)
+        )
 
         _refresh_api_status()
 
@@ -6634,16 +7274,25 @@ class PowerTraderHub(tk.Tk):
         exchange_var.trace_add("write", _on_exchange_changed)
         _on_exchange_changed()
 
-        ttk.Separator(frm, orient="horizontal").grid(row=r, column=0, columnspan=3, sticky="ew", pady=10); r += 1
+        ttk.Separator(frm, orient="horizontal").grid(
+            row=r, column=0, columnspan=3, sticky="ew", pady=10
+        )
+        r += 1
 
+        add_row(r, "UI refresh seconds:", ui_refresh_var)
+        r += 1
+        add_row(r, "Chart refresh seconds:", chart_refresh_var)
+        r += 1
+        add_row(r, "Candles limit:", candles_limit_var)
+        r += 1
+        add_row(r, "UI font size:", ui_font_size_var)
+        r += 1
 
-        add_row(r, "UI refresh seconds:", ui_refresh_var); r += 1
-        add_row(r, "Chart refresh seconds:", chart_refresh_var); r += 1
-        add_row(r, "Candles limit:", candles_limit_var); r += 1
-        add_row(r, "UI font size:", ui_font_size_var); r += 1
-
-        chk = ttk.Checkbutton(frm, text="Auto start scripts on GUI launch", variable=auto_start_var)
-        chk.grid(row=r, column=0, columnspan=3, sticky="w", pady=(10, 0)); r += 1
+        chk = ttk.Checkbutton(
+            frm, text="Auto start scripts on GUI launch", variable=auto_start_var
+        )
+        chk.grid(row=r, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        r += 1
 
         btns = ttk.Frame(frm)
         btns.grid(row=r, column=0, columnspan=3, sticky="ew", pady=14)
@@ -6652,10 +7301,18 @@ class PowerTraderHub(tk.Tk):
         def save():
             try:
                 # Track coins before changes so we can detect newly added coins
-                prev_coins = set([str(c).strip().upper() for c in (self.settings.get("coins") or []) if str(c).strip()])
+                prev_coins = set(
+                    [
+                        str(c).strip().upper()
+                        for c in (self.settings.get("coins") or [])
+                        if str(c).strip()
+                    ]
+                )
 
                 self.settings["main_neural_dir"] = main_dir_var.get().strip()
-                self.settings["coins"] = [c.strip().upper() for c in coins_var.get().split(",") if c.strip()]
+                self.settings["coins"] = [
+                    c.strip().upper() for c in coins_var.get().split(",") if c.strip()
+                ]
 
                 # Long-term (ignored) holdings symbols (comma list: BTC,ETH,...)
                 lth_raw = (long_term_holdings_var.get() or "").strip()
@@ -6672,19 +7329,27 @@ class PowerTraderHub(tk.Tk):
 
                 # LTH auto-buy from profits (% of realized profit)
                 try:
-                    ptxt = (lth_profit_alloc_pct_var.get() or "").strip().replace("%", "")
+                    ptxt = (
+                        (lth_profit_alloc_pct_var.get() or "").strip().replace("%", "")
+                    )
                     p = float(ptxt) if ptxt else 0.0
                 except Exception:
-                    p = float(self.settings.get("lth_profit_alloc_pct", DEFAULT_SETTINGS.get("lth_profit_alloc_pct", 0.0)) or 0.0)
+                    p = float(
+                        self.settings.get(
+                            "lth_profit_alloc_pct",
+                            DEFAULT_SETTINGS.get("lth_profit_alloc_pct", 0.0),
+                        )
+                        or 0.0
+                    )
                 if p < 0.0:
                     p = 0.0
                 if p > 100.0:
                     p = 100.0
                 self.settings["lth_profit_alloc_pct"] = p
 
-
-                self.settings["trade_start_level"] = max(1, min(int(float(trade_start_level_var.get().strip())), 7))
-
+                self.settings["trade_start_level"] = max(
+                    1, min(int(float(trade_start_level_var.get().strip())), 7)
+                )
 
                 sap = (start_alloc_pct_var.get() or "").strip().replace("%", "")
                 self.settings["start_allocation_pct"] = max(0.0, float(sap or 0.0))
@@ -6693,7 +7358,13 @@ class PowerTraderHub(tk.Tk):
                 try:
                     dm_f = float(dm)
                 except Exception:
-                    dm_f = float(self.settings.get("dca_multiplier", DEFAULT_SETTINGS.get("dca_multiplier", 2.0)) or 2.0)
+                    dm_f = float(
+                        self.settings.get(
+                            "dca_multiplier",
+                            DEFAULT_SETTINGS.get("dca_multiplier", 2.0),
+                        )
+                        or 2.0
+                    )
                 if dm_f < 0.0:
                     dm_f = 0.0
                 self.settings["dca_multiplier"] = dm_f
@@ -6713,38 +7384,65 @@ class PowerTraderHub(tk.Tk):
                 try:
                     md_i = int(float(md))
                 except Exception:
-                    md_i = int(self.settings.get("max_dca_buys_per_24h", DEFAULT_SETTINGS.get("max_dca_buys_per_24h", 2)) or 2)
+                    md_i = int(
+                        self.settings.get(
+                            "max_dca_buys_per_24h",
+                            DEFAULT_SETTINGS.get("max_dca_buys_per_24h", 2),
+                        )
+                        or 2
+                    )
                 if md_i < 0:
                     md_i = 0
                 self.settings["max_dca_buys_per_24h"] = md_i
 
-
                 # --- Trailing PM settings ---
                 try:
-                    pm0 = float((pm_no_dca_var.get() or "").strip().replace("%", "") or 0.0)
+                    pm0 = float(
+                        (pm_no_dca_var.get() or "").strip().replace("%", "") or 0.0
+                    )
                 except Exception:
-                    pm0 = float(self.settings.get("pm_start_pct_no_dca", DEFAULT_SETTINGS.get("pm_start_pct_no_dca", 5.0)) or 5.0)
+                    pm0 = float(
+                        self.settings.get(
+                            "pm_start_pct_no_dca",
+                            DEFAULT_SETTINGS.get("pm_start_pct_no_dca", 5.0),
+                        )
+                        or 5.0
+                    )
                 if pm0 < 0.0:
                     pm0 = 0.0
                 self.settings["pm_start_pct_no_dca"] = pm0
 
                 try:
-                    pm1 = float((pm_with_dca_var.get() or "").strip().replace("%", "") or 0.0)
+                    pm1 = float(
+                        (pm_with_dca_var.get() or "").strip().replace("%", "") or 0.0
+                    )
                 except Exception:
-                    pm1 = float(self.settings.get("pm_start_pct_with_dca", DEFAULT_SETTINGS.get("pm_start_pct_with_dca", 2.5)) or 2.5)
+                    pm1 = float(
+                        self.settings.get(
+                            "pm_start_pct_with_dca",
+                            DEFAULT_SETTINGS.get("pm_start_pct_with_dca", 2.5),
+                        )
+                        or 2.5
+                    )
                 if pm1 < 0.0:
                     pm1 = 0.0
                 self.settings["pm_start_pct_with_dca"] = pm1
 
                 try:
-                    tg = float((trailing_gap_var.get() or "").strip().replace("%", "") or 0.0)
+                    tg = float(
+                        (trailing_gap_var.get() or "").strip().replace("%", "") or 0.0
+                    )
                 except Exception:
-                    tg = float(self.settings.get("trailing_gap_pct", DEFAULT_SETTINGS.get("trailing_gap_pct", 0.5)) or 0.5)
+                    tg = float(
+                        self.settings.get(
+                            "trailing_gap_pct",
+                            DEFAULT_SETTINGS.get("trailing_gap_pct", 0.5),
+                        )
+                        or 0.5
+                    )
                 if tg < 0.0:
                     tg = 0.0
                 self.settings["trailing_gap_pct"] = tg
-
-
 
                 self.settings["hub_data_dir"] = hub_dir_var.get().strip()
 
@@ -6767,12 +7465,20 @@ class PowerTraderHub(tk.Tk):
                 self.settings["demo_slippage_factor"] = _demo_slip
 
                 self.settings["script_neural_runner2"] = neural_script_var.get().strip()
-                self.settings["script_neural_trainer"] = trainer_script_var.get().strip()
+                self.settings["script_neural_trainer"] = (
+                    trainer_script_var.get().strip()
+                )
                 self.settings["script_trader"] = trader_script_var.get().strip()
 
-                self.settings["ui_refresh_seconds"] = float(ui_refresh_var.get().strip())
-                self.settings["chart_refresh_seconds"] = float(chart_refresh_var.get().strip())
-                self.settings["candles_limit"] = int(float(candles_limit_var.get().strip()))
+                self.settings["ui_refresh_seconds"] = float(
+                    ui_refresh_var.get().strip()
+                )
+                self.settings["chart_refresh_seconds"] = float(
+                    chart_refresh_var.get().strip()
+                )
+                self.settings["candles_limit"] = int(
+                    float(candles_limit_var.get().strip())
+                )
                 try:
                     fs = int(float(ui_font_size_var.get().strip()))
                 except Exception:
@@ -6792,15 +7498,33 @@ class PowerTraderHub(tk.Tk):
                 # If new coin(s) were added and their training folder doesn't exist yet,
                 # create the folder and copy neural_trainer.py into it RIGHT AFTER saving settings.
                 try:
-                    new_coins = [c.strip().upper() for c in (self.settings.get("coins") or []) if c.strip()]
+                    new_coins = [
+                        c.strip().upper()
+                        for c in (self.settings.get("coins") or [])
+                        if c.strip()
+                    ]
                     added = [c for c in new_coins if c and c not in prev_coins]
 
-                    main_dir = self.settings.get("main_neural_dir") or os.path.join(self.project_dir, "state")
-                    trainer_name = os.path.basename(str(self.settings.get("script_neural_trainer", "neural_trainer.py")))
+                    main_dir = self.settings.get("main_neural_dir") or os.path.join(
+                        self.project_dir, "state"
+                    )
+                    trainer_name = os.path.basename(
+                        str(
+                            self.settings.get(
+                                "script_neural_trainer", "neural_trainer.py"
+                            )
+                        )
+                    )
 
                     src_project_trainer = os.path.join(self.project_dir, trainer_name)
-                    src_cfg_trainer = str(self.settings.get("script_neural_trainer", trainer_name))
-                    src_trainer_path = src_project_trainer if os.path.isfile(src_project_trainer) else src_cfg_trainer
+                    src_cfg_trainer = str(
+                        self.settings.get("script_neural_trainer", trainer_name)
+                    )
+                    src_trainer_path = (
+                        src_project_trainer
+                        if os.path.isfile(src_project_trainer)
+                        else src_cfg_trainer
+                    )
 
                     for coin in added:
                         coin_dir = os.path.join(main_dir, "coins", coin)
@@ -6808,7 +7532,9 @@ class PowerTraderHub(tk.Tk):
                             os.makedirs(coin_dir, exist_ok=True)
 
                         dst_trainer_path = os.path.join(coin_dir, trainer_name)
-                        if (not os.path.isfile(dst_trainer_path)) and os.path.isfile(src_trainer_path):
+                        if (not os.path.isfile(dst_trainer_path)) and os.path.isfile(
+                            src_trainer_path
+                        ):
                             shutil.copy2(src_trainer_path, dst_trainer_path)
                 except Exception:
                     pass
@@ -6819,14 +7545,11 @@ class PowerTraderHub(tk.Tk):
                 messagebox.showinfo("Saved", "Settings saved.")
                 win.destroy()
 
-
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save settings:\n{e}")
 
-
         ttk.Button(btns, text="Save", command=save).pack(side="left")
         ttk.Button(btns, text="Cancel", command=win.destroy).pack(side="left", padx=8)
-
 
     # ---- close ----
 

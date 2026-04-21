@@ -14,18 +14,21 @@ import traceback
 from exchange_api import ExchangeAdapter, OrderResult, load_exchange_adapter
 
 
-
 # -----------------------------
 # GUI HUB OUTPUTS (parameterized by exchange key)
 # -----------------------------
-HUB_DATA_DIR = os.environ.get("POWERTRADER_HUB_DIR", os.path.join(os.path.dirname(__file__), "state", "hub_data"))
+HUB_DATA_DIR = os.environ.get(
+    "POWERTRADER_HUB_DIR", os.path.join(os.path.dirname(__file__), "state", "hub_data")
+)
 os.makedirs(HUB_DATA_DIR, exist_ok=True)
 
 EXCHANGE_KEY = os.environ.get("POWERTRADER_EXCHANGE", "demo")
 
+
 def _exchange_path(basename: str, ext: str) -> str:
     """Return hub_data path with exchange suffix: e.g. trade_history_demo.jsonl"""
     return os.path.join(HUB_DATA_DIR, f"{basename}_{EXCHANGE_KEY}{ext}")
+
 
 TRADER_STATUS_PATH = _exchange_path("trader_status", ".json")
 TRADE_HISTORY_PATH = _exchange_path("trade_history", ".jsonl")
@@ -33,7 +36,6 @@ PNL_LEDGER_PATH = _exchange_path("pnl_ledger", ".json")
 ACCOUNT_VALUE_HISTORY_PATH = _exchange_path("account_value_history", ".jsonl")
 BOT_ORDER_IDS_PATH = _exchange_path("bot_order_ids", ".json")
 LTH_EMA200_PATH = os.path.join(HUB_DATA_DIR, "lth_daily_ema200.json")
-
 
 
 # Initialize colorama
@@ -44,261 +46,289 @@ colorama.init(autoreset=True)
 # GUI SETTINGS (coins list + main_neural_dir)
 # -----------------------------
 _GUI_SETTINGS_PATH = os.environ.get("POWERTRADER_GUI_SETTINGS") or os.path.join(
-	os.path.dirname(os.path.abspath(__file__)),
-	"gui_settings.json"
+    os.path.dirname(os.path.abspath(__file__)), "gui_settings.json"
 )
 
 _gui_settings_cache = {
-	"mtime": None,
-	"coins": ['BTC', 'ETH', 'BNB', 'PAXG', 'SOL', 'XRP', 'DOGE'],  # fallback defaults
-	"main_neural_dir": None,
-	"trade_start_level": 4,
-	"start_allocation_pct": 0.5,
-	"dca_multiplier": 2.0,
-	"dca_levels": [-5.0, -10.0, -20.0, -30.0, -40.0, -50.0, -50.0],
-	"max_dca_buys_per_24h": 1,
-
-	# Long-term holdings symbols (optional UI grouping only).
-	# IMPORTANT: no amounts are stored. The bot auto-ignores any extra holdings.
-	# Format: ["BTC","ETH"]
-	"long_term_holdings": ['BTC', 'ETH', 'BNB', 'PAXG', 'SOL', 'XRP', 'DOGE'],
-
-	# % of realized trade profits to auto-buy into long-term holdings
-	"lth_profit_alloc_pct": 50.0,
-
-
-	# Trailing PM settings
-	"pm_start_pct_no_dca": 3.0,
-	"pm_start_pct_with_dca": 3.0,
-	"trailing_gap_pct": 0.1,
+    "mtime": None,
+    "coins": ["BTC", "ETH", "BNB", "PAXG", "SOL", "XRP", "DOGE"],  # fallback defaults
+    "main_neural_dir": None,
+    "trade_start_level": 4,
+    "start_allocation_pct": 0.5,
+    "dca_multiplier": 2.0,
+    "dca_levels": [-5.0, -10.0, -20.0, -30.0, -40.0, -50.0, -50.0],
+    "max_dca_buys_per_24h": 1,
+    # Long-term holdings symbols (optional UI grouping only).
+    # IMPORTANT: no amounts are stored. The bot auto-ignores any extra holdings.
+    # Format: ["BTC","ETH"]
+    "long_term_holdings": ["BTC", "ETH", "BNB", "PAXG", "SOL", "XRP", "DOGE"],
+    # % of realized trade profits to auto-buy into long-term holdings
+    "lth_profit_alloc_pct": 50.0,
+    # Trailing PM settings
+    "pm_start_pct_no_dca": 3.0,
+    "pm_start_pct_with_dca": 3.0,
+    "trailing_gap_pct": 0.1,
 }
 
 
-
-
-
-
-
-
-
 def _load_gui_settings() -> dict:
-	"""
-	Reads gui_settings.json and returns a dict with:
-	- coins: uppercased list
-	- main_neural_dir: string (may be None)
-	Caches by mtime so it is cheap to call frequently.
-	"""
-	try:
-		if not os.path.isfile(_GUI_SETTINGS_PATH):
-			return dict(_gui_settings_cache)
+    """
+    Reads gui_settings.json and returns a dict with:
+    - coins: uppercased list
+    - main_neural_dir: string (may be None)
+    Caches by mtime so it is cheap to call frequently.
+    """
+    try:
+        if not os.path.isfile(_GUI_SETTINGS_PATH):
+            return dict(_gui_settings_cache)
 
-		mtime = os.path.getmtime(_GUI_SETTINGS_PATH)
-		if _gui_settings_cache["mtime"] == mtime:
-			return dict(_gui_settings_cache)
+        mtime = os.path.getmtime(_GUI_SETTINGS_PATH)
+        if _gui_settings_cache["mtime"] == mtime:
+            return dict(_gui_settings_cache)
 
-		with open(_GUI_SETTINGS_PATH, "r", encoding="utf-8") as f:
-			data = json.load(f) or {}
+        with open(_GUI_SETTINGS_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f) or {}
 
-		coins = data.get("coins", None)
-		if not isinstance(coins, list) or not coins:
-			coins = list(_gui_settings_cache["coins"])
-		coins = [str(c).strip().upper() for c in coins if str(c).strip()]
-		if not coins:
-			coins = list(_gui_settings_cache["coins"])
+        coins = data.get("coins", None)
+        if not isinstance(coins, list) or not coins:
+            coins = list(_gui_settings_cache["coins"])
+        coins = [str(c).strip().upper() for c in coins if str(c).strip()]
+        if not coins:
+            coins = list(_gui_settings_cache["coins"])
 
-		main_neural_dir = data.get("main_neural_dir", None)
-		if isinstance(main_neural_dir, str):
-			main_neural_dir = main_neural_dir.strip() or None
-		else:
-			main_neural_dir = None
+        main_neural_dir = data.get("main_neural_dir", None)
+        if isinstance(main_neural_dir, str):
+            main_neural_dir = main_neural_dir.strip() or None
+        else:
+            main_neural_dir = None
 
-		trade_start_level = data.get("trade_start_level", _gui_settings_cache.get("trade_start_level", 3))
-		try:
-			trade_start_level = int(float(trade_start_level))
-		except Exception:
-			trade_start_level = int(_gui_settings_cache.get("trade_start_level", 3))
-		trade_start_level = max(1, min(trade_start_level, 7))
+        trade_start_level = data.get(
+            "trade_start_level", _gui_settings_cache.get("trade_start_level", 3)
+        )
+        try:
+            trade_start_level = int(float(trade_start_level))
+        except Exception:
+            trade_start_level = int(_gui_settings_cache.get("trade_start_level", 3))
+        trade_start_level = max(1, min(trade_start_level, 7))
 
-		start_allocation_pct = data.get("start_allocation_pct", _gui_settings_cache.get("start_allocation_pct", 0.005))
-		try:
-			start_allocation_pct = float(str(start_allocation_pct).replace("%", "").strip())
-		except Exception:
-			start_allocation_pct = float(_gui_settings_cache.get("start_allocation_pct", 0.005))
-		if start_allocation_pct < 0.0:
-			start_allocation_pct = 0.0
+        start_allocation_pct = data.get(
+            "start_allocation_pct",
+            _gui_settings_cache.get("start_allocation_pct", 0.005),
+        )
+        try:
+            start_allocation_pct = float(
+                str(start_allocation_pct).replace("%", "").strip()
+            )
+        except Exception:
+            start_allocation_pct = float(
+                _gui_settings_cache.get("start_allocation_pct", 0.005)
+            )
+        if start_allocation_pct < 0.0:
+            start_allocation_pct = 0.0
 
-		dca_multiplier = data.get("dca_multiplier", _gui_settings_cache.get("dca_multiplier", 2.0))
-		try:
-			dca_multiplier = float(str(dca_multiplier).strip())
-		except Exception:
-			dca_multiplier = float(_gui_settings_cache.get("dca_multiplier", 2.0))
-		if dca_multiplier < 0.0:
-			dca_multiplier = 0.0
+        dca_multiplier = data.get(
+            "dca_multiplier", _gui_settings_cache.get("dca_multiplier", 2.0)
+        )
+        try:
+            dca_multiplier = float(str(dca_multiplier).strip())
+        except Exception:
+            dca_multiplier = float(_gui_settings_cache.get("dca_multiplier", 2.0))
+        if dca_multiplier < 0.0:
+            dca_multiplier = 0.0
 
-		dca_levels = data.get("dca_levels", _gui_settings_cache.get("dca_levels", [-2.5, -5.0, -10.0, -20.0, -30.0, -40.0, -50.0]))
-		if not isinstance(dca_levels, list) or not dca_levels:
-			dca_levels = list(_gui_settings_cache.get("dca_levels", [-2.5, -5.0, -10.0, -20.0, -30.0, -40.0, -50.0]))
-		parsed = []
-		for v in dca_levels:
-			try:
-				parsed.append(float(v))
-			except Exception:
-				pass
-		if parsed:
-			dca_levels = parsed
-		else:
-			dca_levels = list(_gui_settings_cache.get("dca_levels", [-2.5, -5.0, -10.0, -20.0, -30.0, -40.0, -50.0]))
+        dca_levels = data.get(
+            "dca_levels",
+            _gui_settings_cache.get(
+                "dca_levels", [-2.5, -5.0, -10.0, -20.0, -30.0, -40.0, -50.0]
+            ),
+        )
+        if not isinstance(dca_levels, list) or not dca_levels:
+            dca_levels = list(
+                _gui_settings_cache.get(
+                    "dca_levels", [-2.5, -5.0, -10.0, -20.0, -30.0, -40.0, -50.0]
+                )
+            )
+        parsed = []
+        for v in dca_levels:
+            try:
+                parsed.append(float(v))
+            except Exception:
+                pass
+        if parsed:
+            dca_levels = parsed
+        else:
+            dca_levels = list(
+                _gui_settings_cache.get(
+                    "dca_levels", [-2.5, -5.0, -10.0, -20.0, -30.0, -40.0, -50.0]
+                )
+            )
 
-		max_dca_buys_per_24h = data.get("max_dca_buys_per_24h", _gui_settings_cache.get("max_dca_buys_per_24h", 2))
-		try:
-			max_dca_buys_per_24h = int(float(max_dca_buys_per_24h))
-		except Exception:
-			max_dca_buys_per_24h = int(_gui_settings_cache.get("max_dca_buys_per_24h", 2))
-		if max_dca_buys_per_24h < 0:
-			max_dca_buys_per_24h = 0
+        max_dca_buys_per_24h = data.get(
+            "max_dca_buys_per_24h", _gui_settings_cache.get("max_dca_buys_per_24h", 2)
+        )
+        try:
+            max_dca_buys_per_24h = int(float(max_dca_buys_per_24h))
+        except Exception:
+            max_dca_buys_per_24h = int(
+                _gui_settings_cache.get("max_dca_buys_per_24h", 2)
+            )
+        if max_dca_buys_per_24h < 0:
+            max_dca_buys_per_24h = 0
 
+        # --- Trailing PM settings ---
+        pm_start_pct_no_dca = data.get(
+            "pm_start_pct_no_dca", _gui_settings_cache.get("pm_start_pct_no_dca", 5.0)
+        )
+        try:
+            pm_start_pct_no_dca = float(
+                str(pm_start_pct_no_dca).replace("%", "").strip()
+            )
+        except Exception:
+            pm_start_pct_no_dca = float(
+                _gui_settings_cache.get("pm_start_pct_no_dca", 5.0)
+            )
+        if pm_start_pct_no_dca < 0.0:
+            pm_start_pct_no_dca = 0.0
 
-		# --- Trailing PM settings ---
-		pm_start_pct_no_dca = data.get("pm_start_pct_no_dca", _gui_settings_cache.get("pm_start_pct_no_dca", 5.0))
-		try:
-			pm_start_pct_no_dca = float(str(pm_start_pct_no_dca).replace("%", "").strip())
-		except Exception:
-			pm_start_pct_no_dca = float(_gui_settings_cache.get("pm_start_pct_no_dca", 5.0))
-		if pm_start_pct_no_dca < 0.0:
-			pm_start_pct_no_dca = 0.0
+        pm_start_pct_with_dca = data.get(
+            "pm_start_pct_with_dca",
+            _gui_settings_cache.get("pm_start_pct_with_dca", 2.5),
+        )
+        try:
+            pm_start_pct_with_dca = float(
+                str(pm_start_pct_with_dca).replace("%", "").strip()
+            )
+        except Exception:
+            pm_start_pct_with_dca = float(
+                _gui_settings_cache.get("pm_start_pct_with_dca", 2.5)
+            )
+        if pm_start_pct_with_dca < 0.0:
+            pm_start_pct_with_dca = 0.0
 
-		pm_start_pct_with_dca = data.get("pm_start_pct_with_dca", _gui_settings_cache.get("pm_start_pct_with_dca", 2.5))
-		try:
-			pm_start_pct_with_dca = float(str(pm_start_pct_with_dca).replace("%", "").strip())
-		except Exception:
-			pm_start_pct_with_dca = float(_gui_settings_cache.get("pm_start_pct_with_dca", 2.5))
-		if pm_start_pct_with_dca < 0.0:
-			pm_start_pct_with_dca = 0.0
+        trailing_gap_pct = data.get(
+            "trailing_gap_pct", _gui_settings_cache.get("trailing_gap_pct", 0.5)
+        )
+        try:
+            trailing_gap_pct = float(str(trailing_gap_pct).replace("%", "").strip())
+        except Exception:
+            trailing_gap_pct = float(_gui_settings_cache.get("trailing_gap_pct", 0.5))
+        if trailing_gap_pct < 0.0:
+            trailing_gap_pct = 0.0
 
-		trailing_gap_pct = data.get("trailing_gap_pct", _gui_settings_cache.get("trailing_gap_pct", 0.5))
-		try:
-			trailing_gap_pct = float(str(trailing_gap_pct).replace("%", "").strip())
-		except Exception:
-			trailing_gap_pct = float(_gui_settings_cache.get("trailing_gap_pct", 0.5))
-		if trailing_gap_pct < 0.0:
-			trailing_gap_pct = 0.0
+        # --- LTH auto-buy from profits (% of realized profit) ---
+        lth_profit_alloc_pct = data.get(
+            "lth_profit_alloc_pct", _gui_settings_cache.get("lth_profit_alloc_pct", 0.0)
+        )
+        try:
+            lth_profit_alloc_pct = float(
+                str(lth_profit_alloc_pct).replace("%", "").strip()
+            )
+        except Exception:
+            lth_profit_alloc_pct = float(
+                _gui_settings_cache.get("lth_profit_alloc_pct", 0.0)
+            )
+        if lth_profit_alloc_pct < 0.0:
+            lth_profit_alloc_pct = 0.0
+        if lth_profit_alloc_pct > 100.0:
+            lth_profit_alloc_pct = 100.0
 
-		# --- LTH auto-buy from profits (% of realized profit) ---
-		lth_profit_alloc_pct = data.get("lth_profit_alloc_pct", _gui_settings_cache.get("lth_profit_alloc_pct", 0.0))
-		try:
-			lth_profit_alloc_pct = float(str(lth_profit_alloc_pct).replace("%", "").strip())
-		except Exception:
-			lth_profit_alloc_pct = float(_gui_settings_cache.get("lth_profit_alloc_pct", 0.0))
-		if lth_profit_alloc_pct < 0.0:
-			lth_profit_alloc_pct = 0.0
-		if lth_profit_alloc_pct > 100.0:
-			lth_profit_alloc_pct = 100.0
+        # --- Long-term (ignored) holdings symbols (NO amounts) ---
+        long_term_holdings = data.get(
+            "long_term_holdings", _gui_settings_cache.get("long_term_holdings", [])
+        )
 
-		# --- Long-term (ignored) holdings symbols (NO amounts) ---
-		long_term_holdings = data.get("long_term_holdings", _gui_settings_cache.get("long_term_holdings", []))
+        # Accept:
+        # - list/tuple/set: ["BTC","ETH"]
+        # - str: "BTC,ETH" (or newline separated)
+        # - dict legacy: {"BTC": 0.01, "ETH": 1.0}  -> keep keys only
+        raw_syms = []
+        if isinstance(long_term_holdings, dict):
+            raw_syms = list(long_term_holdings.keys())
+        elif isinstance(long_term_holdings, str):
+            raw_syms = [
+                x.strip() for x in long_term_holdings.replace("\n", ",").split(",")
+            ]
+        elif isinstance(long_term_holdings, (list, tuple, set)):
+            raw_syms = list(long_term_holdings)
+        else:
+            raw_syms = []
 
-		# Accept:
-		# - list/tuple/set: ["BTC","ETH"]
-		# - str: "BTC,ETH" (or newline separated)
-		# - dict legacy: {"BTC": 0.01, "ETH": 1.0}  -> keep keys only
-		raw_syms = []
-		if isinstance(long_term_holdings, dict):
-			raw_syms = list(long_term_holdings.keys())
-		elif isinstance(long_term_holdings, str):
-			raw_syms = [x.strip() for x in long_term_holdings.replace("\n", ",").split(",")]
-		elif isinstance(long_term_holdings, (list, tuple, set)):
-			raw_syms = list(long_term_holdings)
-		else:
-			raw_syms = []
+        parsed_lth_syms = []
+        seen = set()
+        for v in raw_syms:
+            s = str(v).strip()
+            if not s:
+                continue
 
-		parsed_lth_syms = []
-		seen = set()
-		for v in raw_syms:
-			s = str(v).strip()
-			if not s:
-				continue
+            # If someone still hand-edits "BTC:0.001" or "BTC=0.001", keep symbol only.
+            if ":" in s:
+                s = s.split(":", 1)[0].strip()
+            elif "=" in s:
+                s = s.split("=", 1)[0].strip()
 
-			# If someone still hand-edits "BTC:0.001" or "BTC=0.001", keep symbol only.
-			if ":" in s:
-				s = s.split(":", 1)[0].strip()
-			elif "=" in s:
-				s = s.split("=", 1)[0].strip()
+            sym = s.upper().strip()
+            if not sym or sym in seen:
+                continue
+            seen.add(sym)
+            parsed_lth_syms.append(sym)
 
-			sym = s.upper().strip()
-			if not sym or sym in seen:
-				continue
-			seen.add(sym)
-			parsed_lth_syms.append(sym)
+        _gui_settings_cache["mtime"] = mtime
+        _gui_settings_cache["coins"] = coins
+        _gui_settings_cache["main_neural_dir"] = main_neural_dir
+        _gui_settings_cache["trade_start_level"] = trade_start_level
+        _gui_settings_cache["start_allocation_pct"] = start_allocation_pct
+        _gui_settings_cache["dca_multiplier"] = dca_multiplier
+        _gui_settings_cache["dca_levels"] = dca_levels
+        _gui_settings_cache["max_dca_buys_per_24h"] = max_dca_buys_per_24h
+        _gui_settings_cache["long_term_holdings"] = list(parsed_lth_syms)
 
+        _gui_settings_cache["pm_start_pct_no_dca"] = pm_start_pct_no_dca
+        _gui_settings_cache["pm_start_pct_with_dca"] = pm_start_pct_with_dca
+        _gui_settings_cache["trailing_gap_pct"] = trailing_gap_pct
+        _gui_settings_cache["lth_profit_alloc_pct"] = lth_profit_alloc_pct
 
+        return {
+            "mtime": mtime,
+            "coins": list(coins),
+            "main_neural_dir": main_neural_dir,
+            "trade_start_level": trade_start_level,
+            "start_allocation_pct": start_allocation_pct,
+            "dca_multiplier": dca_multiplier,
+            "dca_levels": list(dca_levels),
+            "max_dca_buys_per_24h": max_dca_buys_per_24h,
+            "long_term_holdings": list(parsed_lth_syms),
+            "pm_start_pct_no_dca": pm_start_pct_no_dca,
+            "pm_start_pct_with_dca": pm_start_pct_with_dca,
+            "trailing_gap_pct": trailing_gap_pct,
+            "lth_profit_alloc_pct": lth_profit_alloc_pct,
+        }
 
-		_gui_settings_cache["mtime"] = mtime
-		_gui_settings_cache["coins"] = coins
-		_gui_settings_cache["main_neural_dir"] = main_neural_dir
-		_gui_settings_cache["trade_start_level"] = trade_start_level
-		_gui_settings_cache["start_allocation_pct"] = start_allocation_pct
-		_gui_settings_cache["dca_multiplier"] = dca_multiplier
-		_gui_settings_cache["dca_levels"] = dca_levels
-		_gui_settings_cache["max_dca_buys_per_24h"] = max_dca_buys_per_24h
-		_gui_settings_cache["long_term_holdings"] = list(parsed_lth_syms)
-
-		_gui_settings_cache["pm_start_pct_no_dca"] = pm_start_pct_no_dca
-		_gui_settings_cache["pm_start_pct_with_dca"] = pm_start_pct_with_dca
-		_gui_settings_cache["trailing_gap_pct"] = trailing_gap_pct
-		_gui_settings_cache["lth_profit_alloc_pct"] = lth_profit_alloc_pct
-
-
-		return {
-			"mtime": mtime,
-			"coins": list(coins),
-			"main_neural_dir": main_neural_dir,
-			"trade_start_level": trade_start_level,
-			"start_allocation_pct": start_allocation_pct,
-			"dca_multiplier": dca_multiplier,
-			"dca_levels": list(dca_levels),
-			"max_dca_buys_per_24h": max_dca_buys_per_24h,
-			"long_term_holdings": list(parsed_lth_syms),
-
-			"pm_start_pct_no_dca": pm_start_pct_no_dca,
-			"pm_start_pct_with_dca": pm_start_pct_with_dca,
-			"trailing_gap_pct": trailing_gap_pct,
-			"lth_profit_alloc_pct": lth_profit_alloc_pct,
-		}
-
-
-
-
-
-
-
-
-	except Exception:
-		return dict(_gui_settings_cache)
-
+    except Exception:
+        return dict(_gui_settings_cache)
 
 
 def _build_base_paths(main_dir_in: str, coins_in: list) -> dict:
-	"""
-	Every coin uses <main_dir>/coins/<SYM>.
-	Only includes the coin if that subfolder exists.
-	"""
-	out = {}
-	coins_root = os.path.join(main_dir_in, "coins")
-	try:
-		for sym in coins_in:
-			sym = str(sym).strip().upper()
-			if not sym:
-				continue
-			sub = os.path.join(coins_root, sym)
-			if os.path.isdir(sub):
-				out[sym] = sub
-	except Exception:
-		pass
-	return out
+    """
+    Every coin uses <main_dir>/coins/<SYM>.
+    Only includes the coin if that subfolder exists.
+    """
+    out = {}
+    coins_root = os.path.join(main_dir_in, "coins")
+    try:
+        for sym in coins_in:
+            sym = str(sym).strip().upper()
+            if not sym:
+                continue
+            sub = os.path.join(coins_root, sym)
+            if os.path.isdir(sub):
+                out[sym] = sub
+    except Exception:
+        pass
+    return out
 
 
 # Live globals (will be refreshed inside manage_trades())
-crypto_symbols = ['BTC', 'ETH', 'XRP', 'BNB', 'DOGE']
+crypto_symbols = ["BTC", "ETH", "XRP", "BNB", "DOGE"]
 
 # Default main_dir behavior if settings are missing
 main_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
@@ -322,116 +352,129 @@ LTH_PROFIT_ALLOC_PCT = 0.0
 LONG_TERM_SYMBOLS: set[str] = set()
 
 
-
 _last_settings_mtime = None
 
 
-
-
-
 def _refresh_paths_and_symbols():
-	"""
-	Hot-reload GUI settings while trader is running.
-	Updates globals: crypto_symbols, main_dir, base_paths,
-	                TRADE_START_LEVEL, START_ALLOC_PCT, DCA_MULTIPLIER, DCA_LEVELS, MAX_DCA_BUYS_PER_24H,
-	                TRAILING_GAP_PCT, PM_START_PCT_NO_DCA, PM_START_PCT_WITH_DCA
-	"""
-	global crypto_symbols, main_dir, base_paths
-	global TRADE_START_LEVEL, START_ALLOC_PCT, DCA_MULTIPLIER, DCA_LEVELS, MAX_DCA_BUYS_PER_24H
-	global TRAILING_GAP_PCT, PM_START_PCT_NO_DCA, PM_START_PCT_WITH_DCA
-	global LTH_PROFIT_ALLOC_PCT, LONG_TERM_SYMBOLS
-	global _last_settings_mtime
+    """
+    Hot-reload GUI settings while trader is running.
+    Updates globals: crypto_symbols, main_dir, base_paths,
+                    TRADE_START_LEVEL, START_ALLOC_PCT, DCA_MULTIPLIER, DCA_LEVELS, MAX_DCA_BUYS_PER_24H,
+                    TRAILING_GAP_PCT, PM_START_PCT_NO_DCA, PM_START_PCT_WITH_DCA
+    """
+    global crypto_symbols, main_dir, base_paths
+    global \
+        TRADE_START_LEVEL, \
+        START_ALLOC_PCT, \
+        DCA_MULTIPLIER, \
+        DCA_LEVELS, \
+        MAX_DCA_BUYS_PER_24H
+    global TRAILING_GAP_PCT, PM_START_PCT_NO_DCA, PM_START_PCT_WITH_DCA
+    global LTH_PROFIT_ALLOC_PCT, LONG_TERM_SYMBOLS
+    global _last_settings_mtime
 
+    s = _load_gui_settings()
+    mtime = s.get("mtime", None)
 
+    # If settings file doesn't exist, keep current defaults
+    if mtime is None:
+        return
 
+    if _last_settings_mtime == mtime:
+        return
 
-	s = _load_gui_settings()
-	mtime = s.get("mtime", None)
+    _last_settings_mtime = mtime
 
-	# If settings file doesn't exist, keep current defaults
-	if mtime is None:
-		return
+    coins = s.get("coins") or list(crypto_symbols)
+    mndir = str(s.get("main_neural_dir") or "state").strip()
+    if mndir and not os.path.isabs(mndir):
+        mndir = os.path.join(os.path.dirname(os.path.abspath(__file__)), mndir)
+    TRADE_START_LEVEL = max(
+        1,
+        min(int(s.get("trade_start_level", TRADE_START_LEVEL) or TRADE_START_LEVEL), 7),
+    )
+    START_ALLOC_PCT = float(
+        s.get("start_allocation_pct", START_ALLOC_PCT) or START_ALLOC_PCT
+    )
+    if START_ALLOC_PCT < 0.0:
+        START_ALLOC_PCT = 0.0
 
-	if _last_settings_mtime == mtime:
-		return
+    DCA_MULTIPLIER = float(s.get("dca_multiplier", DCA_MULTIPLIER) or DCA_MULTIPLIER)
+    if DCA_MULTIPLIER < 0.0:
+        DCA_MULTIPLIER = 0.0
 
-	_last_settings_mtime = mtime
+    DCA_LEVELS = list(s.get("dca_levels", DCA_LEVELS) or DCA_LEVELS)
 
-	coins = s.get("coins") or list(crypto_symbols)
-	mndir = str(s.get("main_neural_dir") or "state").strip()
-	if mndir and not os.path.isabs(mndir):
-		mndir = os.path.join(os.path.dirname(os.path.abspath(__file__)), mndir)
-	TRADE_START_LEVEL = max(1, min(int(s.get("trade_start_level", TRADE_START_LEVEL) or TRADE_START_LEVEL), 7))
-	START_ALLOC_PCT = float(s.get("start_allocation_pct", START_ALLOC_PCT) or START_ALLOC_PCT)
-	if START_ALLOC_PCT < 0.0:
-		START_ALLOC_PCT = 0.0
+    try:
+        MAX_DCA_BUYS_PER_24H = int(
+            float(
+                s.get("max_dca_buys_per_24h", MAX_DCA_BUYS_PER_24H)
+                or MAX_DCA_BUYS_PER_24H
+            )
+        )
+    except Exception:
+        MAX_DCA_BUYS_PER_24H = int(MAX_DCA_BUYS_PER_24H)
+    if MAX_DCA_BUYS_PER_24H < 0:
+        MAX_DCA_BUYS_PER_24H = 0
 
-	DCA_MULTIPLIER = float(s.get("dca_multiplier", DCA_MULTIPLIER) or DCA_MULTIPLIER)
-	if DCA_MULTIPLIER < 0.0:
-		DCA_MULTIPLIER = 0.0
+    # Trailing PM hot-reload values
+    TRAILING_GAP_PCT = float(
+        s.get("trailing_gap_pct", TRAILING_GAP_PCT) or TRAILING_GAP_PCT
+    )
+    if TRAILING_GAP_PCT < 0.0:
+        TRAILING_GAP_PCT = 0.0
 
-	DCA_LEVELS = list(s.get("dca_levels", DCA_LEVELS) or DCA_LEVELS)
+    PM_START_PCT_NO_DCA = float(
+        s.get("pm_start_pct_no_dca", PM_START_PCT_NO_DCA) or PM_START_PCT_NO_DCA
+    )
+    if PM_START_PCT_NO_DCA < 0.0:
+        PM_START_PCT_NO_DCA = 0.0
 
-	try:
-		MAX_DCA_BUYS_PER_24H = int(float(s.get("max_dca_buys_per_24h", MAX_DCA_BUYS_PER_24H) or MAX_DCA_BUYS_PER_24H))
-	except Exception:
-		MAX_DCA_BUYS_PER_24H = int(MAX_DCA_BUYS_PER_24H)
-	if MAX_DCA_BUYS_PER_24H < 0:
-		MAX_DCA_BUYS_PER_24H = 0
+    PM_START_PCT_WITH_DCA = float(
+        s.get("pm_start_pct_with_dca", PM_START_PCT_WITH_DCA) or PM_START_PCT_WITH_DCA
+    )
+    if PM_START_PCT_WITH_DCA < 0.0:
+        PM_START_PCT_WITH_DCA = 0.0
 
+    # LTH profit allocation %
+    try:
+        LTH_PROFIT_ALLOC_PCT = float(
+            str(
+                s.get("lth_profit_alloc_pct", LTH_PROFIT_ALLOC_PCT)
+                or LTH_PROFIT_ALLOC_PCT
+            )
+            .replace("%", "")
+            .strip()
+        )
+    except Exception:
+        LTH_PROFIT_ALLOC_PCT = float(LTH_PROFIT_ALLOC_PCT)
+    if LTH_PROFIT_ALLOC_PCT < 0.0:
+        LTH_PROFIT_ALLOC_PCT = 0.0
+    if LTH_PROFIT_ALLOC_PCT > 100.0:
+        LTH_PROFIT_ALLOC_PCT = 100.0
 
-	# Trailing PM hot-reload values
-	TRAILING_GAP_PCT = float(s.get("trailing_gap_pct", TRAILING_GAP_PCT) or TRAILING_GAP_PCT)
-	if TRAILING_GAP_PCT < 0.0:
-		TRAILING_GAP_PCT = 0.0
+    # Long-term holdings symbols (comma list in settings)
 
-	PM_START_PCT_NO_DCA = float(s.get("pm_start_pct_no_dca", PM_START_PCT_NO_DCA) or PM_START_PCT_NO_DCA)
-	if PM_START_PCT_NO_DCA < 0.0:
-		PM_START_PCT_NO_DCA = 0.0
+    lth = s.get("long_term_holdings", []) or []
+    if isinstance(lth, str):
+        lth = [x.strip() for x in lth.replace("\n", ",").split(",")]
+    if not isinstance(lth, (list, tuple)):
+        lth = []
+    cleaned_syms: set[str] = set()
+    for v in lth:
+        sym = str(v).upper().strip()
+        if sym:
+            cleaned_syms.add(sym)
+    LONG_TERM_SYMBOLS.clear()
+    LONG_TERM_SYMBOLS.update(cleaned_syms)
 
-	PM_START_PCT_WITH_DCA = float(s.get("pm_start_pct_with_dca", PM_START_PCT_WITH_DCA) or PM_START_PCT_WITH_DCA)
-	if PM_START_PCT_WITH_DCA < 0.0:
-		PM_START_PCT_WITH_DCA = 0.0
+    # Keep it safe if folder isn't real on this machine
+    if not os.path.isdir(mndir):
+        mndir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
 
-	# LTH profit allocation %
-	try:
-		LTH_PROFIT_ALLOC_PCT = float(str(s.get("lth_profit_alloc_pct", LTH_PROFIT_ALLOC_PCT) or LTH_PROFIT_ALLOC_PCT).replace("%", "").strip())
-	except Exception:
-		LTH_PROFIT_ALLOC_PCT = float(LTH_PROFIT_ALLOC_PCT)
-	if LTH_PROFIT_ALLOC_PCT < 0.0:
-		LTH_PROFIT_ALLOC_PCT = 0.0
-	if LTH_PROFIT_ALLOC_PCT > 100.0:
-		LTH_PROFIT_ALLOC_PCT = 100.0
-
-	# Long-term holdings symbols (comma list in settings)
-
-	lth = s.get("long_term_holdings", []) or []
-	if isinstance(lth, str):
-		lth = [x.strip() for x in lth.replace("\n", ",").split(",")]
-	if not isinstance(lth, (list, tuple)):
-		lth = []
-	cleaned_syms: set[str] = set()
-	for v in lth:
-		sym = str(v).upper().strip()
-		if sym:
-			cleaned_syms.add(sym)
-	LONG_TERM_SYMBOLS.clear()
-	LONG_TERM_SYMBOLS.update(cleaned_syms)
-
-
-
-
-	# Keep it safe if folder isn't real on this machine
-	if not os.path.isdir(mndir):
-		mndir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
-
-	crypto_symbols = list(coins)
-	main_dir = mndir
-	base_paths = _build_base_paths(main_dir, crypto_symbols)
-
-
-
-
+    crypto_symbols = list(coins)
+    main_dir = mndir
+    base_paths = _build_base_paths(main_dir, crypto_symbols)
 
 
 class CryptoAPITrading:
@@ -441,7 +484,6 @@ class CryptoAPITrading:
 
         self.dca_levels_triggered = {}  # Track DCA levels for each crypto
         self.dca_levels = list(DCA_LEVELS)  # Hard DCA triggers (percent PnL)
-
 
         # --- Trailing profit margin (per-coin state) ---
         # Each coin keeps its own trailing PM line, peak, and "was above line" flag.
@@ -465,7 +507,11 @@ class CryptoAPITrading:
 
         # Hot-reload support: Hub can update bot_order_ids.json while trader is running.
         try:
-            self._bot_order_ids_mtime = os.path.getmtime(BOT_ORDER_IDS_PATH) if os.path.isfile(BOT_ORDER_IDS_PATH) else None
+            self._bot_order_ids_mtime = (
+                os.path.getmtime(BOT_ORDER_IDS_PATH)
+                if os.path.isfile(BOT_ORDER_IDS_PATH)
+                else None
+            )
         except Exception:
             self._bot_order_ids_mtime = None
 
@@ -473,16 +519,14 @@ class CryptoAPITrading:
         self._pnl_ledger = self._load_pnl_ledger()
         self._reconcile_pending_orders()
 
-        self.cost_basis = self.calculate_cost_basis()  # Initialize cost basis at startup
+        self.cost_basis = (
+            self.calculate_cost_basis()
+        )  # Initialize cost basis at startup
         self.initialize_dca_levels()  # Initialize DCA levels based on historical buy orders
 
         # We must seed open_positions from the selected bot order IDs (Hub picker),
         # otherwise avg entry will only reflect buys recorded since this process started.
         self._needs_ledger_seed_from_orders = True
-
-
-
-
 
         # Cache last known bid/ask per symbol so transient API misses don't zero out account value
         self._last_good_bid_ask = {}
@@ -500,16 +544,9 @@ class CryptoAPITrading:
         self.max_dca_buys_per_24h = int(MAX_DCA_BUYS_PER_24H)
         self.dca_window_seconds = 24 * 60 * 60
 
-        self._dca_buy_ts = {}         # { "BTC": [ts, ts, ...] } (DCA buys only)
-        self._dca_last_sell_ts = {}   # { "BTC": ts_of_last_sell }
+        self._dca_buy_ts = {}  # { "BTC": [ts, ts, ...] } (DCA buys only)
+        self._dca_last_sell_ts = {}  # { "BTC": ts_of_last_sell }
         self._seed_dca_window_from_history()
-
-
-
-
-
-
-
 
     def _atomic_read_json(self, path: str) -> Optional[dict]:
         """
@@ -609,7 +646,9 @@ class CryptoAPITrading:
             for sym, ids in (self._bot_order_ids or {}).items():
                 if not sym or not ids:
                     continue
-                data[str(sym).upper().strip()] = sorted({str(x).strip() for x in ids if str(x).strip()})
+                data[str(sym).upper().strip()] = sorted(
+                    {str(x).strip() for x in ids if str(x).strip()}
+                )
             self._atomic_write_json(BOT_ORDER_IDS_PATH, data)
         except Exception:
             pass
@@ -687,7 +726,6 @@ class CryptoAPITrading:
             pass
         return out
 
-
     def _mark_bot_order_id(self, base_symbol: str, order_id: Optional[str]) -> None:
         """
         Track which order_ids belong to the bot's *current open trade* for a coin.
@@ -718,17 +756,25 @@ class CryptoAPITrading:
         except Exception:
             pass
 
-
     def _is_bot_order_id(self, base_symbol: str, order_id: Optional[str]) -> bool:
         base = str(base_symbol).upper().strip()
         oid = str(order_id or "").strip()
         if not base or not oid:
             return False
-        if oid in (self._bot_order_ids.get(base, set()) if isinstance(self._bot_order_ids, dict) else set()):
+        if oid in (
+            self._bot_order_ids.get(base, set())
+            if isinstance(self._bot_order_ids, dict)
+            else set()
+        ):
             return True
-        if oid in (self._bot_order_ids_from_history.get(base, set()) if isinstance(self._bot_order_ids_from_history, dict) else set()):
+        if oid in (
+            self._bot_order_ids_from_history.get(base, set())
+            if isinstance(self._bot_order_ids_from_history, dict)
+            else set()
+        ):
             return True
         return False
+
     def _maybe_reload_bot_order_ids(self) -> bool:
         """
         If the GUI updates bot_order_ids.json while the trader is running,
@@ -736,7 +782,11 @@ class CryptoAPITrading:
         Returns True if a reload occurred.
         """
         try:
-            mtime = os.path.getmtime(BOT_ORDER_IDS_PATH) if os.path.isfile(BOT_ORDER_IDS_PATH) else None
+            mtime = (
+                os.path.getmtime(BOT_ORDER_IDS_PATH)
+                if os.path.isfile(BOT_ORDER_IDS_PATH)
+                else None
+            )
         except Exception:
             mtime = None
 
@@ -753,7 +803,9 @@ class CryptoAPITrading:
 
         try:
             # trade_history.jsonl is bot-only, so keep this fresh too
-            self._bot_order_ids_from_history = self._load_bot_order_ids_from_trade_history()
+            self._bot_order_ids_from_history = (
+                self._load_bot_order_ids_from_trade_history()
+            )
         except Exception:
             self._bot_order_ids_from_history = {}
 
@@ -770,7 +822,6 @@ class CryptoAPITrading:
 
         return True
 
-
     def _load_pnl_ledger(self) -> dict:
         """
         Load pnl_ledger.json with recovery:
@@ -779,13 +830,16 @@ class CryptoAPITrading:
         - if still bad, try .tmp
         Only if all fail do we fall back to zeros.
         """
+
         def _upgrade(d: dict) -> dict:
             if not isinstance(d, dict):
                 d = {}
             d.setdefault("total_realized_profit_usd", 0.0)
             d.setdefault("last_updated_ts", time.time())
-            d.setdefault("open_positions", {})   # { "BTC": {"usd_cost": float, "qty": float} }
-            d.setdefault("pending_orders", {})   # { "<order_id>": {...} }
+            d.setdefault(
+                "open_positions", {}
+            )  # { "BTC": {"usd_cost": float, "qty": float} }
+            d.setdefault("pending_orders", {})  # { "<order_id>": {...} }
             d.setdefault("lth_profit_bucket_usd", 0.0)
             d.setdefault("lth_last_buy", None)
             return d
@@ -817,15 +871,16 @@ class CryptoAPITrading:
             return _upgrade(data)
 
         # 4) final fallback (true reset)
-        return _upgrade({
-            "total_realized_profit_usd": 0.0,
-            "last_updated_ts": time.time(),
-            "open_positions": {},
-            "pending_orders": {},
-            "lth_profit_bucket_usd": 0.0,
-            "lth_last_buy": None,
-        })
-
+        return _upgrade(
+            {
+                "total_realized_profit_usd": 0.0,
+                "last_updated_ts": time.time(),
+                "open_positions": {},
+                "pending_orders": {},
+                "lth_profit_bucket_usd": 0.0,
+                "lth_last_buy": None,
+            }
+        )
 
     def _save_pnl_ledger(self) -> None:
         try:
@@ -833,9 +888,6 @@ class CryptoAPITrading:
             self._atomic_write_json(PNL_LEDGER_PATH, self._pnl_ledger)
         except Exception:
             pass
-
-
-
 
     # -----------------------------
     # Long-term holdings auto-buy (profit allocation -> EMA200 chooser)
@@ -875,7 +927,13 @@ class CryptoAPITrading:
         Returns base symbol like "BTC" or None.
         """
         try:
-            syms = sorted({str(x).upper().strip() for x in (LONG_TERM_SYMBOLS or set()) if str(x).strip()})
+            syms = sorted(
+                {
+                    str(x).upper().strip()
+                    for x in (LONG_TERM_SYMBOLS or set())
+                    if str(x).strip()
+                }
+            )
             if not syms:
                 return None
 
@@ -953,7 +1011,9 @@ class CryptoAPITrading:
         alloc = rp * (pct / 100.0)
 
         try:
-            bucket = float((self._pnl_ledger or {}).get("lth_profit_bucket_usd", 0.0) or 0.0)
+            bucket = float(
+                (self._pnl_ledger or {}).get("lth_profit_bucket_usd", 0.0) or 0.0
+            )
         except Exception:
             bucket = 0.0
 
@@ -1001,7 +1061,9 @@ class CryptoAPITrading:
                 "ts": time.time(),
                 "symbol": pick,
                 "usd": float(spend_now),
-                "pct_from_ema200": (float(pct_from_ema) if pct_from_ema is not None else None),
+                "pct_from_ema200": (
+                    float(pct_from_ema) if pct_from_ema is not None else None
+                ),
             }
             self._save_pnl_ledger()
         else:
@@ -1009,11 +1071,12 @@ class CryptoAPITrading:
             self._pnl_ledger["lth_profit_bucket_usd"] = float(bucket + spend_now)
             self._save_pnl_ledger()
 
-
     # -----------------------------
     # Ledger seeding from selected bot order IDs
     # -----------------------------
-    def _rebuild_open_position_from_selected_bot_buys(self, base_symbol: str, tradable_qty: float) -> None:
+    def _rebuild_open_position_from_selected_bot_buys(
+        self, base_symbol: str, tradable_qty: float
+    ) -> None:
         """
         Rebuild self._pnl_ledger["open_positions"][SYM] from the *selected bot BUY orders* (order IDs),
         ignoring ANY intervening manual orders (buys/sells) that are not bot-owned.
@@ -1037,9 +1100,13 @@ class CryptoAPITrading:
             # If we have no bot IDs for this coin, we can't rebuild anything.
             has_any_ids = False
             try:
-                if sym in (self._bot_order_ids or {}) and (self._bot_order_ids.get(sym) or set()):
+                if sym in (self._bot_order_ids or {}) and (
+                    self._bot_order_ids.get(sym) or set()
+                ):
                     has_any_ids = True
-                if sym in (self._bot_order_ids_from_history or {}) and (self._bot_order_ids_from_history.get(sym) or set()):
+                if sym in (self._bot_order_ids_from_history or {}) and (
+                    self._bot_order_ids_from_history.get(sym) or set()
+                ):
                     has_any_ids = True
             except Exception:
                 has_any_ids = False
@@ -1067,7 +1134,9 @@ class CryptoAPITrading:
                     if not self._is_bot_order_id(sym, oid):
                         continue
 
-                    qty, avg_px, notional_usd, fees_usd = self._extract_amounts_and_fees_from_order(o)
+                    qty, avg_px, notional_usd, fees_usd = (
+                        self._extract_amounts_and_fees_from_order(o)
+                    )
                     qty = float(qty or 0.0)
                     if qty <= 0.0:
                         continue
@@ -1111,7 +1180,7 @@ class CryptoAPITrading:
                     # Partial fill usage of this order’s lot
                     ratio = remaining / q if q > 0 else 0.0
                     qty_used += remaining
-                    cost_used += (c * ratio)
+                    cost_used += c * ratio
 
             if qty_used <= 0.0:
                 self._pnl_ledger.setdefault("open_positions", {}).pop(sym, None)
@@ -1125,7 +1194,6 @@ class CryptoAPITrading:
             self._save_pnl_ledger()
         except Exception:
             pass
-
 
     def _bot_net_qty_from_selected_orders(self, base_symbol: str) -> float:
         """
@@ -1166,7 +1234,9 @@ class CryptoAPITrading:
             # Bot-owned history IDs (from trade_history.jsonl) are in self._bot_order_ids_from_history[sym]
             hist_ids = set()
             try:
-                hist_ids = set(self._bot_order_ids_from_history.get(sym, set()) or set())
+                hist_ids = set(
+                    self._bot_order_ids_from_history.get(sym, set()) or set()
+                )
             except Exception:
                 hist_ids = set()
 
@@ -1201,7 +1271,10 @@ class CryptoAPITrading:
                     if side == "buy" and oid in selected_ids:
                         selected_buy_qty += qty
                         if created:
-                            if earliest_selected_buy_created is None or created < earliest_selected_buy_created:
+                            if (
+                                earliest_selected_buy_created is None
+                                or created < earliest_selected_buy_created
+                            ):
                                 earliest_selected_buy_created = created
 
                     # Sells are NOT selected; infer bot sells from history IDs
@@ -1231,8 +1304,6 @@ class CryptoAPITrading:
             return float(net)
         except Exception:
             return 0.0
-
-
 
     def _seed_open_positions_from_selected_orders(self, holdings_list: list) -> None:
         """
@@ -1268,14 +1339,13 @@ class CryptoAPITrading:
                     if tradable_qty < 0.0:
                         tradable_qty = 0.0
 
-                    self._rebuild_open_position_from_selected_bot_buys(asset, tradable_qty)
+                    self._rebuild_open_position_from_selected_bot_buys(
+                        asset, tradable_qty
+                    )
                 except Exception:
                     continue
         except Exception:
             pass
-
-
-
 
     def _trade_history_has_order_id(self, order_id: str) -> bool:
         try:
@@ -1318,15 +1388,24 @@ class CryptoAPITrading:
                     p = float(ex.get("effective_price", 0.0) or 0.0)
                     if q > 0.0 and p > 0.0:
                         total_qty += q
-                        total_notional += (q * p)
+                        total_notional += q * p
                 except Exception:
                     continue
 
-            avg_price = (total_notional / total_qty) if (total_qty > 0.0 and total_notional > 0.0) else None
+            avg_price = (
+                (total_notional / total_qty)
+                if (total_qty > 0.0 and total_notional > 0.0)
+                else None
+            )
 
             # Fallbacks if executions are not populated yet
             if total_qty <= 0.0:
-                for k in ("filled_asset_quantity", "filled_quantity", "asset_quantity", "quantity"):
+                for k in (
+                    "filled_asset_quantity",
+                    "filled_quantity",
+                    "asset_quantity",
+                    "quantity",
+                ):
                     if k in order:
                         try:
                             v = float(order.get(k) or 0.0)
@@ -1347,7 +1426,9 @@ class CryptoAPITrading:
                         except Exception:
                             continue
 
-            return float(total_qty), (float(avg_price) if avg_price is not None else None)
+            return float(total_qty), (
+                float(avg_price) if avg_price is not None else None
+            )
         except Exception:
             return 0.0, None
 
@@ -1450,7 +1531,7 @@ class CryptoAPITrading:
                         p_d = _to_decimal(ex.get("effective_price", None))
                         if q_d > 0 and p_d > 0:
                             total_qty_d += q_d
-                            total_notional_d += (q_d * p_d)
+                            total_notional_d += q_d * p_d
                     except Exception:
                         continue
 
@@ -1466,13 +1547,15 @@ class CryptoAPITrading:
                 if filled_qty <= 0.0 and total_qty_d > 0:
                     filled_qty = float(total_qty_d)
 
-            return float(filled_qty), (float(avg_fill_price) if avg_fill_price is not None else None), notional_usd, fees_usd
+            return (
+                float(filled_qty),
+                (float(avg_fill_price) if avg_fill_price is not None else None),
+                notional_usd,
+                fees_usd,
+            )
 
         except Exception:
             return 0.0, None, None, None
-
-
-
 
     def _reconcile_pending_orders(self) -> None:
         """
@@ -1544,7 +1627,6 @@ class CryptoAPITrading:
         except Exception:
             pass
 
-
     def _record_trade(
         self,
         side: str,
@@ -1588,7 +1670,7 @@ class CryptoAPITrading:
         position_cost_used = None
         position_cost_after = None
 
-        fees_missing = (fees_usd is None)
+        fees_missing = fees_usd is None
         fee_val_actual = float(fees_usd) if fees_usd is not None else 0.0
 
         # Per-trade fallback: only apply on SELL realized profit if fees were missing.
@@ -1627,7 +1709,6 @@ class CryptoAPITrading:
             except Exception:
                 notional = None
 
-
         # Best-effort net USD (does NOT include fallback fee; fallback is only applied to realized profit).
         net_usd = None
         try:
@@ -1635,7 +1716,7 @@ class CryptoAPITrading:
                 if side_l == "buy":
                     net_usd = -(float(notional) + float(fee_val_actual))
                 elif side_l == "sell":
-                    net_usd = (float(notional) - float(fee_val_actual))
+                    net_usd = float(notional) - float(fee_val_actual)
         except Exception:
             net_usd = None
 
@@ -1654,8 +1735,12 @@ class CryptoAPITrading:
                     try:
                         if net_usd is not None and float(net_usd) < 0.0:
                             usd_used = -float(net_usd)
-                            pos["usd_cost"] = float(pos.get("usd_cost", 0.0) or 0.0) + usd_used
-                            pos["qty"] = float(pos.get("qty", 0.0) or 0.0) + max(0.0, float(qty))
+                            pos["usd_cost"] = (
+                                float(pos.get("usd_cost", 0.0) or 0.0) + usd_used
+                            )
+                            pos["qty"] = float(pos.get("qty", 0.0) or 0.0) + max(
+                                0.0, float(qty)
+                            )
                             self._save_pnl_ledger()
                     except Exception:
                         pass
@@ -1689,22 +1774,36 @@ class CryptoAPITrading:
                             usd_got = None
 
                         if usd_got is not None:
-                            realized = float(usd_got) - float(cost_used) - float(fee_fallback)
-                            self._pnl_ledger["total_realized_profit_usd"] = float(self._pnl_ledger.get("total_realized_profit_usd", 0.0) or 0.0) + float(realized)
+                            realized = (
+                                float(usd_got) - float(cost_used) - float(fee_fallback)
+                            )
+                            self._pnl_ledger["total_realized_profit_usd"] = float(
+                                self._pnl_ledger.get("total_realized_profit_usd", 0.0)
+                                or 0.0
+                            ) + float(realized)
 
                         # Clean up tiny dust
-                        if float(pos.get("qty", 0.0) or 0.0) <= 1e-12 or float(pos.get("usd_cost", 0.0) or 0.0) <= 1e-6:
+                        if (
+                            float(pos.get("qty", 0.0) or 0.0) <= 1e-12
+                            or float(pos.get("usd_cost", 0.0) or 0.0) <= 1e-6
+                        ):
                             open_pos.pop(base, None)
 
                         self._save_pnl_ledger()
 
                         # Keep in-memory cost_basis aligned with the ledger for fallbacks/plots.
                         try:
-                            pos2 = (self._pnl_ledger.get("open_positions", {}) or {}).get(base, None)
+                            pos2 = (
+                                self._pnl_ledger.get("open_positions", {}) or {}
+                            ).get(base, None)
                             if isinstance(pos2, dict):
                                 self.cost_basis[base] = {
-                                    "total_cost": float(pos2.get("usd_cost", 0.0) or 0.0),
-                                    "total_quantity": float(pos2.get("qty", 0.0) or 0.0),
+                                    "total_cost": float(
+                                        pos2.get("usd_cost", 0.0) or 0.0
+                                    ),
+                                    "total_quantity": float(
+                                        pos2.get("qty", 0.0) or 0.0
+                                    ),
                                 }
                         except Exception:
                             pass
@@ -1715,10 +1814,22 @@ class CryptoAPITrading:
             pass
 
         # --- Fallback realized profit calc (if not found on ledger; should be rare) ---
-        if tag_u != "LTH" and realized is None and side_l == "sell" and price is not None and avg_cost_basis is not None:
+        if (
+            tag_u != "LTH"
+            and realized is None
+            and side_l == "sell"
+            and price is not None
+            and avg_cost_basis is not None
+        ):
             try:
-                realized = (float(price) - float(avg_cost_basis)) * float(qty) - float(fee_val_actual) - float(fee_fallback)
-                self._pnl_ledger["total_realized_profit_usd"] = float(self._pnl_ledger.get("total_realized_profit_usd", 0.0)) + float(realized)
+                realized = (
+                    (float(price) - float(avg_cost_basis)) * float(qty)
+                    - float(fee_val_actual)
+                    - float(fee_fallback)
+                )
+                self._pnl_ledger["total_realized_profit_usd"] = float(
+                    self._pnl_ledger.get("total_realized_profit_usd", 0.0)
+                ) + float(realized)
                 self._save_pnl_ledger()
             except Exception:
                 realized = None
@@ -1734,16 +1845,20 @@ class CryptoAPITrading:
             "net_usd": float(net_usd) if net_usd is not None else None,
             "avg_cost_basis": avg_cost_basis,
             "pnl_pct": pnl_pct,
-
             # fees_usd is None when we couldn't find fees in the API payload
             "fees_usd": (float(fees_usd) if fees_usd is not None else None),
             "fees_missing": bool(fees_missing),
-            "fees_fallback_applied_usd": (float(fee_fallback) if fee_fallback > 0.0 else 0.0),
-
+            "fees_fallback_applied_usd": (
+                float(fee_fallback) if fee_fallback > 0.0 else 0.0
+            ),
             "realized_profit_usd": realized,
             "order_id": order_id,
-            "position_cost_used_usd": float(position_cost_used) if position_cost_used is not None else None,
-            "position_cost_after_usd": float(position_cost_after) if position_cost_after is not None else None,
+            "position_cost_used_usd": float(position_cost_used)
+            if position_cost_used is not None
+            else None,
+            "position_cost_after_usd": float(position_cost_after)
+            if position_cost_after is not None
+            else None,
         }
         self._append_jsonl(TRADE_HISTORY_PATH, entry)
 
@@ -1760,9 +1875,13 @@ class CryptoAPITrading:
         # So: whenever we record a non-LTH trade with an order_id, immediately add it to cache.
         try:
             if tag_u != "LTH" and base and base != "USDC" and order_id:
-                if not isinstance(getattr(self, "_bot_order_ids_from_history", None), dict):
+                if not isinstance(
+                    getattr(self, "_bot_order_ids_from_history", None), dict
+                ):
                     self._bot_order_ids_from_history = {}
-                self._bot_order_ids_from_history.setdefault(base, set()).add(str(order_id))
+                self._bot_order_ids_from_history.setdefault(base, set()).add(
+                    str(order_id)
+                )
         except Exception:
             pass
 
@@ -1772,15 +1891,6 @@ class CryptoAPITrading:
                 self._maybe_process_lth_profit_allocation(float(realized))
         except Exception:
             pass
-
-
-
-
-
-
-
-
-
 
     def _write_trader_status(self, status: dict) -> None:
         self._atomic_write_json(TRADER_STATUS_PATH, status)
@@ -1822,7 +1932,6 @@ class CryptoAPITrading:
 
         return s
 
-
     @staticmethod
     def _read_long_dca_signal(symbol: str) -> int:
         """
@@ -1842,7 +1951,6 @@ class CryptoAPITrading:
             return val
         except Exception:
             return 0
-
 
     @staticmethod
     def _read_short_dca_signal(symbol: str) -> int:
@@ -1910,10 +2018,7 @@ class CryptoAPITrading:
         except Exception:
             return []
 
-
-
     def initialize_dca_levels(self):
-
         """
         Initialize per-coin DCA stage state ONLY from the currently selected/current-trade BUY orders.
 
@@ -1940,7 +2045,9 @@ class CryptoAPITrading:
 
             try:
                 pos = (self._pnl_ledger.get("open_positions", {}) or {}).get(symbol)
-                bot_qty = float(pos.get("qty", 0.0) or 0.0) if isinstance(pos, dict) else 0.0
+                bot_qty = (
+                    float(pos.get("qty", 0.0) or 0.0) if isinstance(pos, dict) else 0.0
+                )
             except Exception:
                 bot_qty = 0.0
 
@@ -1950,7 +2057,11 @@ class CryptoAPITrading:
 
             selected_ids = set()
             try:
-                selected_ids = {str(x).strip() for x in (self._bot_order_ids.get(symbol, set()) or set()) if str(x).strip()}
+                selected_ids = {
+                    str(x).strip()
+                    for x in (self._bot_order_ids.get(symbol, set()) or set())
+                    if str(x).strip()
+                }
             except Exception:
                 selected_ids = set()
 
@@ -1989,8 +2100,6 @@ class CryptoAPITrading:
             triggered_levels_count = max(0, len(relevant_buy_orders) - 1)
             self.dca_levels_triggered[symbol] = list(range(triggered_levels_count))
             print(f"Initialized DCA stages for {symbol}: {triggered_levels_count}")
-
-
 
     def _seed_dca_window_from_history(self) -> None:
         """
@@ -2051,8 +2160,9 @@ class CryptoAPITrading:
             kept.sort()
             self._dca_buy_ts[base] = kept
 
-
-    def _dca_window_count(self, base_symbol: str, now_ts: Optional[float] = None) -> int:
+    def _dca_window_count(
+        self, base_symbol: str, now_ts: Optional[float] = None
+    ) -> int:
         """
         Count of DCA buys for this coin within rolling 24h in the *current trade*.
         Current trade boundary = most recent sell we observed for this coin.
@@ -2070,7 +2180,6 @@ class CryptoAPITrading:
         self._dca_buy_ts[base] = ts_list
         return len(ts_list)
 
-
     def _note_dca_buy(self, base_symbol: str, ts: Optional[float] = None) -> None:
         base = str(base_symbol).upper().strip()
         if not base:
@@ -2079,8 +2188,9 @@ class CryptoAPITrading:
         self._dca_buy_ts.setdefault(base, []).append(t)
         self._dca_window_count(base, now_ts=t)  # prune in-place
 
-
-    def _reset_dca_window_for_trade(self, base_symbol: str, sold: bool = False, ts: Optional[float] = None) -> None:
+    def _reset_dca_window_for_trade(
+        self, base_symbol: str, sold: bool = False, ts: Optional[float] = None
+    ) -> None:
         base = str(base_symbol).upper().strip()
         if not base:
             return
@@ -2088,14 +2198,15 @@ class CryptoAPITrading:
             self._dca_last_sell_ts[base] = float(ts if ts is not None else time.time())
         self._dca_buy_ts[base] = []
 
-
     # ------------------------------------------------------------------
     # Exchange adapter wrappers (delegate to self.exchange)
     # ------------------------------------------------------------------
 
     def get_holdings(self) -> dict:
         h = self.exchange.get_holdings()
-        return {"results": [{"asset_code": k, "total_quantity": v} for k, v in h.items()]}
+        return {
+            "results": [{"asset_code": k, "total_quantity": v} for k, v in h.items()]
+        }
 
     def get_orders(self, symbol: str) -> dict:
         return self.exchange.get_orders(symbol)
@@ -2105,7 +2216,9 @@ class CryptoAPITrading:
 
     def calculate_cost_basis(self) -> dict:
         result = self.exchange.calculate_cost_basis_from_orders(
-            self._bot_order_ids, self._bot_order_ids_from_history, self._pnl_ledger,
+            self._bot_order_ids,
+            self._bot_order_ids_from_history,
+            self._pnl_ledger,
         )
         if result:
             return result
@@ -2121,7 +2234,6 @@ class CryptoAPITrading:
             pass
         return cb
 
-
     def place_buy_order(
         self,
         symbol: str,
@@ -2135,10 +2247,14 @@ class CryptoAPITrading:
         try:
             self._pnl_ledger.setdefault("pending_orders", {})
             self._pnl_ledger["pending_orders"][pending_id] = {
-                "symbol": symbol, "side": "buy",
-                "avg_cost_basis": float(avg_cost_basis) if avg_cost_basis is not None else None,
+                "symbol": symbol,
+                "side": "buy",
+                "avg_cost_basis": float(avg_cost_basis)
+                if avg_cost_basis is not None
+                else None,
                 "pnl_pct": float(pnl_pct) if pnl_pct is not None else None,
-                "tag": tag, "created_ts": time.time(),
+                "tag": tag,
+                "created_ts": time.time(),
             }
             self._save_pnl_ledger()
         except Exception:
@@ -2162,14 +2278,18 @@ class CryptoAPITrading:
         order_id = result.order_id
 
         self._record_trade(
-            side="buy", symbol=symbol,
+            side="buy",
+            symbol=symbol,
             qty=result.filled_qty,
             price=result.avg_price,
             notional_usd=result.notional_usd,
             fees_usd=result.fees_usd,
-            avg_cost_basis=float(avg_cost_basis) if avg_cost_basis is not None else None,
+            avg_cost_basis=float(avg_cost_basis)
+            if avg_cost_basis is not None
+            else None,
             pnl_pct=float(pnl_pct) if pnl_pct is not None else None,
-            tag=tag, order_id=order_id,
+            tag=tag,
+            order_id=order_id,
         )
 
         try:
@@ -2181,7 +2301,9 @@ class CryptoAPITrading:
         try:
             base_symbol = self.exchange.base_from_canonical(symbol)
             if str(tag or "").upper().strip() == "DCA":
-                current_levels = list(self.dca_levels_triggered.get(base_symbol, []) or [])
+                current_levels = list(
+                    self.dca_levels_triggered.get(base_symbol, []) or []
+                )
                 current_levels.append(len(current_levels))
                 self.dca_levels_triggered[base_symbol] = current_levels
             else:
@@ -2196,7 +2318,6 @@ class CryptoAPITrading:
 
         return result
 
-
     def place_sell_order(
         self,
         symbol: str,
@@ -2210,10 +2331,14 @@ class CryptoAPITrading:
         try:
             self._pnl_ledger.setdefault("pending_orders", {})
             self._pnl_ledger["pending_orders"][pending_id] = {
-                "symbol": symbol, "side": "sell",
-                "avg_cost_basis": float(avg_cost_basis) if avg_cost_basis is not None else None,
+                "symbol": symbol,
+                "side": "sell",
+                "avg_cost_basis": float(avg_cost_basis)
+                if avg_cost_basis is not None
+                else None,
                 "pnl_pct": float(pnl_pct) if pnl_pct is not None else None,
-                "tag": tag, "created_ts": time.time(),
+                "tag": tag,
+                "created_ts": time.time(),
             }
             self._save_pnl_ledger()
         except Exception:
@@ -2245,14 +2370,18 @@ class CryptoAPITrading:
                 pass
 
         self._record_trade(
-            side="sell", symbol=symbol,
+            side="sell",
+            symbol=symbol,
             qty=result.filled_qty,
             price=result.avg_price,
             notional_usd=result.notional_usd,
             fees_usd=result.fees_usd,
-            avg_cost_basis=float(avg_cost_basis) if avg_cost_basis is not None else None,
+            avg_cost_basis=float(avg_cost_basis)
+            if avg_cost_basis is not None
+            else None,
             pnl_pct=float(actual_pnl_pct) if actual_pnl_pct is not None else None,
-            tag=tag, order_id=order_id,
+            tag=tag,
+            order_id=order_id,
         )
 
         try:
@@ -2269,12 +2398,6 @@ class CryptoAPITrading:
             pass
 
         return result
-
-
-
-
-
-
 
     def manage_trades(self):
         trades_made = False  # Flag to track if any trade was made in this iteration
@@ -2328,12 +2451,13 @@ class CryptoAPITrading:
         except Exception:
             pass
 
-
         # Use the (possibly refreshed) stored cost_basis
         cost_basis = self.cost_basis
 
         # Fetch current prices (canonical format: BTC_USD)
-        symbols = [holding["asset_code"] + "_USD" for holding in holdings.get("results", [])]
+        symbols = [
+            holding["asset_code"] + "_USD" for holding in holdings.get("results", [])
+        ]
 
         for s in crypto_symbols:
             full = f"{s}_USD"
@@ -2355,7 +2479,9 @@ class CryptoAPITrading:
 
         # holdings list (treat missing/invalid holdings payload as transient error)
         try:
-            holdings_list = holdings.get("results", None) if isinstance(holdings, dict) else None
+            holdings_list = (
+                holdings.get("results", None) if isinstance(holdings, dict) else None
+            )
             if not isinstance(holdings_list, list):
                 holdings_list = []
                 snapshot_ok = False
@@ -2384,8 +2510,6 @@ class CryptoAPITrading:
                 self._needs_ledger_seed_from_orders = False
         except Exception:
             pass
-
-
 
         holdings_buy_value = 0.0
         holdings_sell_value = 0.0
@@ -2420,7 +2544,11 @@ class CryptoAPITrading:
                 try:
                     sym = str(asset).upper().strip()
                     pos = (self._pnl_ledger.get("open_positions", {}) or {}).get(sym)
-                    tradable_qty = float(pos.get("qty", 0.0) or 0.0) if isinstance(pos, dict) else 0.0
+                    tradable_qty = (
+                        float(pos.get("qty", 0.0) or 0.0)
+                        if isinstance(pos, dict)
+                        else 0.0
+                    )
                 except Exception:
                     tradable_qty = 0.0
 
@@ -2449,8 +2577,11 @@ class CryptoAPITrading:
                 continue
 
         total_account_value = buying_power + holdings_sell_value
-        in_use = (trade_holdings_sell_value / total_account_value) * 100 if total_account_value > 0 else 0.0
-
+        in_use = (
+            (trade_holdings_sell_value / total_account_value) * 100
+            if total_account_value > 0
+            else 0.0
+        )
 
         # If this tick is incomplete, fall back to last known-good snapshot so the GUI chart never gets a bogus dip.
         if (not snapshot_ok) or (total_account_value <= 0.0):
@@ -2458,8 +2589,12 @@ class CryptoAPITrading:
             if last.get("total_account_value") is not None:
                 total_account_value = float(last["total_account_value"])
                 buying_power = float(last.get("buying_power", buying_power or 0.0))
-                holdings_sell_value = float(last.get("holdings_sell_value", holdings_sell_value or 0.0))
-                holdings_buy_value = float(last.get("holdings_buy_value", holdings_buy_value or 0.0))
+                holdings_sell_value = float(
+                    last.get("holdings_sell_value", holdings_sell_value or 0.0)
+                )
+                holdings_buy_value = float(
+                    last.get("holdings_buy_value", holdings_buy_value or 0.0)
+                )
                 in_use = float(last.get("percent_in_trade", in_use or 0.0))
         else:
             # Save last complete snapshot
@@ -2471,7 +2606,7 @@ class CryptoAPITrading:
                 "percent_in_trade": float(in_use),
             }
 
-        os.system('cls' if os.name == 'nt' else 'clear')
+        os.system("cls" if os.name == "nt" else "clear")
         print("\n--- Account Summary ---")
         print(f"Total Account Value: ${total_account_value:.2f}")
         print(f"Holdings Value: ${holdings_sell_value:.2f}")
@@ -2502,8 +2637,12 @@ class CryptoAPITrading:
             # Bot-managed qty used for ACTIVE TRADE display comes from the ledger.
             # Keep that behavior so the current-trades table stays exactly as before.
             try:
-                pos = (self._pnl_ledger.get("open_positions", {}) or {}).get(str(symbol).upper().strip())
-                quantity = float(pos.get("qty", 0.0) or 0.0) if isinstance(pos, dict) else 0.0
+                pos = (self._pnl_ledger.get("open_positions", {}) or {}).get(
+                    str(symbol).upper().strip()
+                )
+                quantity = (
+                    float(pos.get("qty", 0.0) or 0.0) if isinstance(pos, dict) else 0.0
+                )
             except Exception:
                 quantity = 0.0
 
@@ -2544,15 +2683,8 @@ class CryptoAPITrading:
                     except Exception:
                         pass
 
-
-
-
-
-
-
             # If we're only holding the long-term reserved amount, treat as NOT in-trade.
             if quantity <= 0.0:
-
                 # Make sure bot state doesn't treat this as an active trade.
                 self.trailing_pm.pop(symbol, None)
                 self.dca_levels_triggered.pop(symbol, None)
@@ -2562,8 +2694,13 @@ class CryptoAPITrading:
                 current_sell_price = current_sell_prices.get(full_symbol, 0)
 
                 try:
-                    _cpf = os.path.join(self.path_map.get(symbol, os.path.join(main_dir, "coins", symbol)), f"{symbol}_current_price.txt")
-                    with open(_cpf, 'w') as _f:
+                    _cpf = os.path.join(
+                        self.path_map.get(
+                            symbol, os.path.join(main_dir, "coins", symbol)
+                        ),
+                        f"{symbol}_current_price.txt",
+                    )
+                    with open(_cpf, "w") as _f:
                         _f.write(str(current_buy_price))
                 except Exception:
                     pass
@@ -2585,14 +2722,10 @@ class CryptoAPITrading:
                     "trail_line": 0.0,
                     "trail_peak": 0.0,
                     "dist_to_trail_pct": 0.0,
-
                     # Long-term (reserved) qty (ignored by trader)
                     "lth_reserved_qty": float(reserved_qty),
                 }
                 continue
-
-
-
 
             current_buy_price = current_buy_prices.get(full_symbol, 0)
             current_sell_price = current_sell_prices.get(full_symbol, 0)
@@ -2633,7 +2766,9 @@ class CryptoAPITrading:
 
                     if fresh_cb > 0.0:
                         # If the ledger differs massively from the order-replay basis, trust the replay and repair ledger.
-                        if avg_cost_basis <= 0.0 or (abs((avg_cost_basis / fresh_cb) - 1.0) > 0.5):
+                        if avg_cost_basis <= 0.0 or (
+                            abs((avg_cost_basis / fresh_cb) - 1.0) > 0.5
+                        ):
                             avg_cost_basis = fresh_cb
                             try:
                                 open_pos = self._pnl_ledger.get("open_positions", {})
@@ -2641,7 +2776,10 @@ class CryptoAPITrading:
                                     open_pos = {}
                                     self._pnl_ledger["open_positions"] = open_pos
                                 base_key = str(symbol).upper().split("_")[0].strip()
-                                open_pos[base_key] = {"usd_cost": float(avg_cost_basis) * float(quantity), "qty": float(quantity)}
+                                open_pos[base_key] = {
+                                    "usd_cost": float(avg_cost_basis) * float(quantity),
+                                    "qty": float(quantity),
+                                }
 
                                 self._save_pnl_ledger()
                             except Exception:
@@ -2652,14 +2790,19 @@ class CryptoAPITrading:
             if avg_cost_basis <= 0.0:
                 avg_cost_basis = cost_basis.get(symbol, 0) or 0.0
 
-
             if avg_cost_basis > 0:
-                gain_loss_percentage_buy = ((current_buy_price - avg_cost_basis) / avg_cost_basis) * 100
-                gain_loss_percentage_sell = ((current_sell_price - avg_cost_basis) / avg_cost_basis) * 100
+                gain_loss_percentage_buy = (
+                    (current_buy_price - avg_cost_basis) / avg_cost_basis
+                ) * 100
+                gain_loss_percentage_sell = (
+                    (current_sell_price - avg_cost_basis) / avg_cost_basis
+                ) * 100
             else:
                 gain_loss_percentage_buy = 0
                 gain_loss_percentage_sell = 0
-                print(f"  Warning: Average Cost Basis is 0 for {symbol}, Gain/Loss calculation skipped.")
+                print(
+                    f"  Warning: Average Cost Basis is 0 for {symbol}, Gain/Loss calculation skipped."
+                )
 
             value = quantity * current_sell_price
             triggered_levels_count = len(self.dca_levels_triggered.get(symbol, []))
@@ -2670,7 +2813,11 @@ class CryptoAPITrading:
             next_stage = triggered_levels_count  # stage 0 == first DCA after entry (trade starts at neural level 3)
 
             # Hardcoded % for this stage (repeat -50% after we reach it)
-            hard_next = self.dca_levels[next_stage] if next_stage < len(self.dca_levels) else self.dca_levels[-1]
+            hard_next = (
+                self.dca_levels[next_stage]
+                if next_stage < len(self.dca_levels)
+                else self.dca_levels[-1]
+            )
 
             # Neural DCA applies to the levels BELOW the trade-start level.
             # Example: trade_start_level=3 => stages 0..3 map to N4..N7 (4 total).
@@ -2699,26 +2846,28 @@ class CryptoAPITrading:
 
                 if next_stage < neural_dca_max:
                     neural_level_needed_disp = start_level + 1 + next_stage
-                    neural_levels = self._read_long_price_levels(symbol)  # highest->lowest == N1..N7
+                    neural_levels = self._read_long_price_levels(
+                        symbol
+                    )  # highest->lowest == N1..N7
 
                     neural_line_price = 0.0
                     if len(neural_levels) >= neural_level_needed_disp:
-                        neural_line_price = float(neural_levels[neural_level_needed_disp - 1])
+                        neural_line_price = float(
+                            neural_levels[neural_level_needed_disp - 1]
+                        )
 
                     # Whichever is higher will be hit first as price drops
                     if neural_line_price > dca_line_price:
                         dca_line_price = neural_line_price
                         dca_line_source = f"NEURAL N{neural_level_needed_disp}"
 
-
                 # PnL% shown alongside DCA is the normal buy-side PnL%
                 # (same calculation as GUI "Buy Price PnL": current buy/ask vs avg cost basis)
                 dca_line_pct = gain_loss_percentage_buy
 
-
-
-
-            dca_line_price_disp = self._fmt_price(dca_line_price) if avg_cost_basis > 0 else "N/A"
+            dca_line_price_disp = (
+                self._fmt_price(dca_line_price) if avg_cost_basis > 0 else "N/A"
+            )
 
             # Set color code:
             # - DCA is green if we're above the chosen DCA line, red if we're below it
@@ -2744,7 +2893,11 @@ class CryptoAPITrading:
             dist_to_trail_pct = 0.0
 
             if avg_cost_basis > 0:
-                pm_start_pct_disp = self.pm_start_pct_no_dca if int(triggered_levels) == 0 else self.pm_start_pct_with_dca
+                pm_start_pct_disp = (
+                    self.pm_start_pct_no_dca
+                    if int(triggered_levels) == 0
+                    else self.pm_start_pct_with_dca
+                )
                 base_pm_line_disp = avg_cost_basis * (1.0 + (pm_start_pct_disp / 100.0))
 
                 state = self.trailing_pm.get(symbol)
@@ -2762,11 +2915,15 @@ class CryptoAPITrading:
                 trail_status = "ON" if (active_disp or above_disp) else "OFF"
 
                 if trail_line_disp > 0:
-                    dist_to_trail_pct = ((current_sell_price - trail_line_disp) / trail_line_disp) * 100.0
+                    dist_to_trail_pct = (
+                        (current_sell_price - trail_line_disp) / trail_line_disp
+                    ) * 100.0
 
-
-            _cpf = os.path.join(self.path_map.get(symbol, os.path.join(main_dir, "coins", symbol)), f"{symbol}_current_price.txt")
-            with open(_cpf, 'w') as _f:
+            _cpf = os.path.join(
+                self.path_map.get(symbol, os.path.join(main_dir, "coins", symbol)),
+                f"{symbol}_current_price.txt",
+            )
+            with open(_cpf, "w") as _f:
                 _f.write(str(current_buy_price))
             positions[symbol] = {
                 "quantity": quantity,
@@ -2784,14 +2941,12 @@ class CryptoAPITrading:
                 "trail_active": True if (trail_status == "ON") else False,
                 "trail_line": float(trail_line_disp) if trail_line_disp else 0.0,
                 "trail_peak": float(trail_peak_disp) if trail_peak_disp else 0.0,
-                "dist_to_trail_pct": float(dist_to_trail_pct) if dist_to_trail_pct else 0.0,
-
+                "dist_to_trail_pct": float(dist_to_trail_pct)
+                if dist_to_trail_pct
+                else 0.0,
                 # Long-term (reserved) qty (ignored by trader)
                 "lth_reserved_qty": float(reserved_qty),
             }
-
-
-
 
             print(
                 f"\nSymbol: {symbol}"
@@ -2800,9 +2955,6 @@ class CryptoAPITrading:
                 f"  |  DCA Levels Triggered: {triggered_levels}"
                 f"  |  Trade Value: ${value:.2f}"
             )
-
-
-
 
             if avg_cost_basis > 0:
                 print(
@@ -2813,14 +2965,16 @@ class CryptoAPITrading:
             else:
                 print("  PM/Trail: N/A (avg_cost_basis is 0)")
 
-
-
             # --- Trailing profit margin (0.5% trail gap) ---
             # PM "start line" is the normal 5% / 2.5% line (depending on DCA levels hit).
             # Trailing activates once price is ABOVE the PM start line, then line follows peaks up
             # by 0.5%. Forced sell happens ONLY when price goes from ABOVE the trailing line to BELOW it.
             if avg_cost_basis > 0:
-                pm_start_pct = self.pm_start_pct_no_dca if int(triggered_levels) == 0 else self.pm_start_pct_with_dca
+                pm_start_pct = (
+                    self.pm_start_pct_no_dca
+                    if int(triggered_levels) == 0
+                    else self.pm_start_pct_with_dca
+                )
                 base_pm_line = avg_cost_basis * (1.0 + (pm_start_pct / 100.0))
                 trail_gap = self.trailing_gap_pct / 100.0  # 0.5% => 0.005
 
@@ -2890,7 +3044,9 @@ class CryptoAPITrading:
 
                         if response is not None:
                             trades_made = True
-                            self.trailing_pm.pop(symbol, None)  # clear per-coin trailing state on exit
+                            self.trailing_pm.pop(
+                                symbol, None
+                            )  # clear per-coin trailing state on exit
 
                             # Trade ended -> reset rolling 24h DCA window for this coin
                             self._reset_dca_window_for_trade(symbol, sold=True)
@@ -2900,11 +3056,8 @@ class CryptoAPITrading:
                             holdings = self.get_holdings()
                             continue
 
-
                 # Save this tick’s position relative to the line (needed for “above -> below” detection)
                 state["was_above"] = above_now
-
-
 
             # DCA (NEURAL or hardcoded %, whichever hits first for the current stage)
             #
@@ -2922,7 +3075,11 @@ class CryptoAPITrading:
             current_stage = len(self.dca_levels_triggered.get(symbol, []))
 
             # Hardcoded loss % for this stage (repeat last level after list ends)
-            hard_level = self.dca_levels[current_stage] if current_stage < len(self.dca_levels) else self.dca_levels[-1]
+            hard_level = (
+                self.dca_levels[current_stage]
+                if current_stage < len(self.dca_levels)
+                else self.dca_levels[-1]
+            )
             hard_hit = gain_loss_percentage_buy <= hard_level
 
             # Neural trigger for as many stages as exist above start_level
@@ -2996,7 +3153,6 @@ class CryptoAPITrading:
 
                     print(f"  Buy Response: {response}")
                     if response is not None:
-
                         self._note_dca_buy(symbol)
 
                         self.trailing_pm.pop(symbol, None)
@@ -3026,8 +3182,11 @@ class CryptoAPITrading:
                 current_sell_price = current_sell_prices.get(full_symbol, 0.0)
 
                 try:
-                    _cpf = os.path.join(self.path_map.get(sym, os.path.join(main_dir, "coins", sym)), f"{sym}_current_price.txt")
-                    with open(_cpf, 'w') as _f:
+                    _cpf = os.path.join(
+                        self.path_map.get(sym, os.path.join(main_dir, "coins", sym)),
+                        f"{sym}_current_price.txt",
+                    )
+                    with open(_cpf, "w") as _f:
                         _f.write(str(current_buy_price))
                 except Exception:
                     pass
@@ -3043,7 +3202,9 @@ class CryptoAPITrading:
                     "gain_loss_pct_buy": 0.0,
                     "gain_loss_pct_sell": 0.0,
                     "value_usd": 0.0,
-                    "dca_triggered_stages": int(len(self.dca_levels_triggered.get(sym, []))),
+                    "dca_triggered_stages": int(
+                        len(self.dca_levels_triggered.get(sym, []))
+                    ),
                     "next_dca_display": "",
                     "dca_line_price": 0.0,
                     "dca_line_source": "N/A",
@@ -3052,7 +3213,6 @@ class CryptoAPITrading:
                     "trail_line": 0.0,
                     "trail_peak": 0.0,
                     "dist_to_trail_pct": 0.0,
-
                     # Long-term (reserved) qty (ignored by trader)
                     "lth_reserved_qty": float(reserved_qty),
                 }
@@ -3063,13 +3223,10 @@ class CryptoAPITrading:
         if not trading_pairs:
             return
 
-
-
         alloc_pct = float(START_ALLOC_PCT or 0.005)
         allocation_in_usd = total_account_value * (alloc_pct / 100.0)
         if allocation_in_usd < 0.5:
             allocation_in_usd = 0.5
-
 
         holding_full_symbols = []
         for h in holdings.get("results", []):
@@ -3082,7 +3239,11 @@ class CryptoAPITrading:
                 # Only include symbols where the bot actually has a ledger qty.
                 try:
                     pos = (self._pnl_ledger.get("open_positions", {}) or {}).get(asset)
-                    bot_qty = float(pos.get("qty", 0.0) or 0.0) if isinstance(pos, dict) else 0.0
+                    bot_qty = (
+                        float(pos.get("qty", 0.0) or 0.0)
+                        if isinstance(pos, dict)
+                        else 0.0
+                    )
                 except Exception:
                     bot_qty = 0.0
 
@@ -3113,9 +3274,6 @@ class CryptoAPITrading:
                 start_index += 1
                 continue
 
-
-
-
             self.dca_levels_triggered[base_symbol] = []
             self.trailing_pm.pop(base_symbol, None)
 
@@ -3135,7 +3293,6 @@ class CryptoAPITrading:
                 # Reset trailing PM state for this coin (fresh trade, fresh trailing logic)
                 self.trailing_pm.pop(base_symbol, None)
 
-
                 print(
                     f"Starting new trade for {full_symbol} (AI start signal long={buy_count}, short={sell_count}). "
                     f"Allocating ${allocation_in_usd:.2f}."
@@ -3151,8 +3308,14 @@ class CryptoAPITrading:
 
                         # Only include symbols where the bot actually has a ledger qty.
                         try:
-                            pos = (self._pnl_ledger.get("open_positions", {}) or {}).get(asset)
-                            bot_qty = float(pos.get("qty", 0.0) or 0.0) if isinstance(pos, dict) else 0.0
+                            pos = (
+                                self._pnl_ledger.get("open_positions", {}) or {}
+                            ).get(asset)
+                            bot_qty = (
+                                float(pos.get("qty", 0.0) or 0.0)
+                                if isinstance(pos, dict)
+                                else 0.0
+                            )
                         except Exception:
                             bot_qty = 0.0
 
@@ -3160,8 +3323,6 @@ class CryptoAPITrading:
                             holding_full_symbols.append(f"{asset}_USD")
                     except Exception:
                         continue
-
-
 
             start_index += 1
 
@@ -3175,7 +3336,6 @@ class CryptoAPITrading:
                 print("Cost basis recalculated successfully.")
             else:
                 print("Failed to recalculcate cost basis.")
-            
 
         # --- GUI HUB STATUS WRITE ---
         try:
@@ -3188,8 +3348,12 @@ class CryptoAPITrading:
                     "holdings_buy_value": holdings_buy_value,
                     "percent_in_trade": in_use,
                     # trailing PM config (matches what's printed above current trades)
-                    "pm_start_pct_no_dca": float(getattr(self, "pm_start_pct_no_dca", 0.0)),
-                    "pm_start_pct_with_dca": float(getattr(self, "pm_start_pct_with_dca", 0.0)),
+                    "pm_start_pct_no_dca": float(
+                        getattr(self, "pm_start_pct_no_dca", 0.0)
+                    ),
+                    "pm_start_pct_with_dca": float(
+                        getattr(self, "pm_start_pct_with_dca", 0.0)
+                    ),
                     "trailing_gap_pct": float(getattr(self, "trailing_gap_pct", 0.0)),
                 },
                 "positions": positions,
@@ -3202,9 +3366,6 @@ class CryptoAPITrading:
         except Exception:
             pass
 
-
-
-
     def run(self):
         while True:
             try:
@@ -3212,6 +3373,7 @@ class CryptoAPITrading:
                 time.sleep(0.5)
             except Exception as e:
                 print(traceback.format_exc())
+
 
 if __name__ == "__main__":
     exchange = load_exchange_adapter(EXCHANGE_KEY)
