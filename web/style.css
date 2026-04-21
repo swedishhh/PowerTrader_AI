@@ -161,6 +161,22 @@ body {
   align-items: flex-end;
 }
 
+.acct-block.clickable {
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+}
+
+.acct-block.clickable:hover {
+  background: var(--bg-surface);
+}
+
+.acct-block.clickable.active {
+  background: var(--bg-elevated);
+  border: 1px solid var(--gold-dim);
+}
+
 .acct-label {
   font-size: 10px;
   font-weight: 500;

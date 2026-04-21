@@ -15,8 +15,11 @@ const state = {
   traderRunning: false,
   chart: null,
   candleSeries: null,
+  areaSeries: null,
   priceLines: [],
   chartRefreshTimer: null,
+  chartMode: 'candle',  // 'candle' | 'account'
+  accountRange: 0,       // 0 = ALL, or hours
   settings: {},
 };
 
@@ -26,6 +29,10 @@ const TF_REFRESH_MS = {
   '1hour': 60_000, '2hour': 90_000, '4hour': 120_000,
   '8hour': 180_000, '12hour': 300_000, '1day': 300_000, '1week': 600_000,
 };
+const ACCT_RANGES = [
+  {label: '1D', hours: 24}, {label: '3D', hours: 72}, {label: '1W', hours: 168},
+  {label: '2W', hours: 336}, {label: '1M', hours: 720}, {label: 'ALL', hours: 0},
+];
 const CHART_COLORS = {
   bg: '#0B0B14',
   text: '#555570',
@@ -345,15 +352,37 @@ function updateSignalPositionChips() {
 // ── Coin Selection & Chart ──
 
 function selectCoin(coin) {
+  const wasAccount = state.chartMode === 'account';
   state.selectedCoin = coin;
+  state.chartMode = 'candle';
 
   $$('.signal-card').forEach(c => c.classList.toggle('active', c.dataset.coin === coin));
+  $('#acct-block-portfolio').classList.remove('active');
 
   $('#chart-coin-label').textContent = coin;
+  $('#tf-selector').style.display = '';
   $('#panel-chart').classList.add('mobile-active');
+
+  if (wasAccount) rebuildTimeframeButtons();
 
   loadChart(coin, state.selectedTf);
   updateCoinPosition(coin);
+}
+
+function selectAccountChart(hours) {
+  state.chartMode = 'account';
+  state.accountRange = hours != null ? hours : state.accountRange;
+  state.selectedCoin = null;
+
+  $$('.signal-card').forEach(c => c.classList.remove('active'));
+  $('#acct-block-portfolio').classList.add('active');
+
+  $('#chart-coin-label').textContent = 'PORTFOLIO';
+  $('#tf-selector').style.display = 'none';
+  $('#coin-position').classList.add('hidden');
+  $('#panel-chart').classList.add('mobile-active');
+
+  loadAccountChart(state.accountRange);
 }
 
 async function loadChart(coin, tf) {
@@ -440,6 +469,123 @@ async function loadChart(coin, tf) {
     }
   });
   resizeObserver.observe(container);
+}
+
+async function loadAccountChart(hours) {
+  const container = $('#chart-container');
+
+  if (state.chartRefreshTimer) {
+    clearInterval(state.chartRefreshTimer);
+    state.chartRefreshTimer = null;
+  }
+  if (state.chart) {
+    state.chart.remove();
+    state.chart = null;
+    state.candleSeries = null;
+    state.areaSeries = null;
+    state.priceLines = [];
+  }
+
+  state.chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: container.clientHeight,
+    layout: {
+      background: {type: 'solid', color: CHART_COLORS.bg},
+      textColor: CHART_COLORS.text,
+      fontFamily: "'Azeret Mono', monospace",
+      fontSize: 10,
+    },
+    grid: {
+      vertLines: {color: CHART_COLORS.grid},
+      horzLines: {color: CHART_COLORS.grid},
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine: {color: '#3A3A60', style: 2, width: 1},
+      horzLine: {color: '#3A3A60', style: 2, width: 1},
+    },
+    timeScale: {
+      borderColor: CHART_COLORS.border,
+      timeVisible: true,
+      secondsVisible: false,
+    },
+    rightPriceScale: {
+      borderColor: CHART_COLORS.border,
+    },
+    localization: {
+      priceFormatter: v => '$' + v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}),
+    },
+  });
+
+  state.areaSeries = state.chart.addAreaSeries({
+    topColor: 'rgba(240, 180, 41, 0.25)',
+    bottomColor: 'rgba(240, 180, 41, 0.02)',
+    lineColor: '#F0B429',
+    lineWidth: 2,
+    priceFormat: {type: 'price', precision: 2, minMove: 0.01},
+  });
+
+  await _applyAccountData(hours);
+
+  // Trade event markers
+  try {
+    const trades = await api('trades?limit=500');
+    if (trades.trades && trades.trades.length > 0) {
+      const cutoff = hours > 0 ? (Date.now() / 1000) - hours * 3600 : 0;
+      const markers = trades.trades
+        .filter(t => t.ts >= cutoff)
+        .map(t => ({
+          time: Math.floor(t.ts),
+          position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
+          color: t.side === 'buy' ? '#00D4FF' : '#00CC66',
+          shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown',
+          text: (t.symbol || '').replace('_USD', '') + (t.tag ? ' ' + t.tag : ''),
+        }));
+      if (markers.length > 0) {
+        markers.sort((a, b) => a.time - b.time);
+        state.areaSeries.setMarkers(markers);
+      }
+    }
+  } catch {}
+
+  state.chart.timeScale().fitContent();
+
+  // Range buttons in place of timeframe selector
+  const tfContainer = $('#tf-selector');
+  tfContainer.style.display = '';
+  tfContainer.innerHTML = '';
+  ACCT_RANGES.forEach(r => {
+    const btn = document.createElement('button');
+    btn.className = 'tf-btn' + (r.hours === hours ? ' active' : '');
+    btn.textContent = r.label;
+    btn.addEventListener('click', () => selectAccountChart(r.hours));
+    tfContainer.appendChild(btn);
+  });
+
+  // Auto-refresh every 30s
+  state.chartRefreshTimer = setInterval(async () => {
+    if (state.chartMode !== 'account') return;
+    await _applyAccountData(state.accountRange);
+  }, 30_000);
+
+  const resizeObserver = new ResizeObserver(() => {
+    if (state.chart) {
+      state.chart.applyOptions({width: container.clientWidth, height: container.clientHeight});
+    }
+  });
+  resizeObserver.observe(container);
+}
+
+async function _applyAccountData(hours) {
+  if (!state.areaSeries) return;
+  try {
+    const qs = hours > 0 ? `?hours=${hours}` : '';
+    const data = await api('account-history' + qs);
+    if (data.history && data.history.length > 0) {
+      const points = data.history.map(h => ({time: Math.floor(h.ts), value: h.total_account_value}));
+      state.areaSeries.setData(points);
+    }
+  } catch {}
 }
 
 function updateChartPriceLines() {
@@ -859,12 +1005,15 @@ function setupButtons() {
   });
 
   $('#btn-refresh-logs').addEventListener('click', refreshLogs);
+
+  $('#acct-block-portfolio').addEventListener('click', () => selectAccountChart(0));
 }
 
 // ── Timeframes ──
 
-function setupTimeframes() {
+function rebuildTimeframeButtons() {
   const container = $('#tf-selector');
+  container.innerHTML = '';
   TF_LIST.forEach(tf => {
     const btn = document.createElement('button');
     btn.className = 'tf-btn' + (tf === state.selectedTf ? ' active' : '');
@@ -877,6 +1026,8 @@ function setupTimeframes() {
     container.appendChild(btn);
   });
 }
+
+function setupTimeframes() { rebuildTimeframeButtons(); }
 
 // ── Boot ──
 document.addEventListener('DOMContentLoaded', init);

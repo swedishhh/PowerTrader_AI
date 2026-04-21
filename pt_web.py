@@ -115,9 +115,32 @@ async def api_trades(limit: int = 250):
 
 
 @app.get("/api/account-history")
-async def api_account_history(limit: int = 500):
+async def api_account_history(hours: float = 0, max_points: int = 500):
+    """Return account value history, optionally filtered by hours and downsampled."""
     acct = AccountModel(env)
-    return {"history": acct.account_value_history(limit=limit)}
+    raw = acct.account_value_history(limit=0)
+
+    if hours > 0:
+        cutoff = time.time() - hours * 3600
+        raw = [r for r in raw if r.get("ts", 0) >= cutoff]
+
+    if not raw:
+        return {"history": []}
+
+    if len(raw) <= max_points:
+        return {"history": raw}
+
+    bucket_size = len(raw) / max_points
+    downsampled = []
+    for i in range(max_points):
+        start = int(i * bucket_size)
+        end = int((i + 1) * bucket_size)
+        chunk = raw[start:end]
+        if chunk:
+            avg_ts = sum(r["ts"] for r in chunk) / len(chunk)
+            avg_val = sum(r["total_account_value"] for r in chunk) / len(chunk)
+            downsampled.append({"ts": avg_ts, "total_account_value": avg_val})
+    return {"history": downsampled}
 
 
 @app.get("/api/settings")

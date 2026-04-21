@@ -24,7 +24,7 @@ def _read_jsonl(path: Path, limit: int = 250) -> list[dict]:
     try:
         with open(path) as f:
             lines = f.readlines()
-        tail = lines[-limit:] if len(lines) > limit else lines
+        tail = lines if limit <= 0 else (lines[-limit:] if len(lines) > limit else lines)
         out = []
         for line in tail:
             line = line.strip()
