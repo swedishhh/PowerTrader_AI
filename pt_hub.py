@@ -472,7 +472,7 @@ def _compute_dca_24h_by_coin(path: str, now_ts: Optional[float] = None) -> Dict[
         last_sell_ts: Dict[str, float] = {}
         for tr in trades:
             sym = str(tr.get("symbol", "")).upper().strip()
-            base = sym.split("-")[0].strip() if sym else ""
+            base = sym.split("_")[0].strip() if sym else ""
             if not base:
                 continue
 
@@ -491,7 +491,7 @@ def _compute_dca_24h_by_coin(path: str, now_ts: Optional[float] = None) -> Dict[
 
         for tr in trades:
             sym = str(tr.get("symbol", "")).upper().strip()
-            base = sym.split("-")[0].strip() if sym else ""
+            base = sym.split("_")[0].strip() if sym else ""
             if not base:
                 continue
 
@@ -1202,7 +1202,7 @@ class CandleChart(ttk.Frame):
 
                 for tr in trades:
                     sym = str(tr.get("symbol", "")).upper()
-                    base = sym.split("-")[0].strip() if sym else ""
+                    base = sym.split("_")[0].strip() if sym else ""
                     if base != coin_upper:
                         continue
 
@@ -1558,7 +1558,7 @@ class AccountValueChart(ttk.Frame):
                         continue
 
                     sym = str(tr.get("symbol", "")).upper().strip()
-                    coin_tag = (sym.split("-")[0].split("/")[0].strip() if sym else "") or (sym or "?")
+                    coin_tag = (sym.split("_")[0].strip() if sym else "") or (sym or "?")
                     label = f"{coin_tag} {action_label}"
 
                     i = bisect.bisect_left(ts_list, tts)
@@ -1736,7 +1736,7 @@ class PowerTraderHub(tk.Tk):
 
         self.settings = self._load_settings()
         self._apply_ui_font_size()
-        w, h = self._scaled_geometry(1400, 820)
+        w, h = self._scaled_geometry(1820, 1066)
         self.geometry(f"{w}x{h}")
         mw, mh = self._scaled_geometry(980, 640)
         self.minsize(mw, mh)
@@ -2247,6 +2247,10 @@ class PowerTraderHub(tk.Tk):
                 self._live_log_font.configure(size=size)
             except Exception:
                 pass
+        try:
+            ttk.Style(self).configure("Treeview", rowheight=int(size * 1.8))
+        except Exception:
+            pass
 
     def _settings_getter(self) -> dict:
         return self.settings
@@ -2412,7 +2416,7 @@ class PowerTraderHub(tk.Tk):
 
                 min_left = 360
                 min_right = 520
-                desired_left = 470  # ~matches your screenshot
+                desired_left = int(total * 0.40)
                 target = max(min_left, min(total - min_right, desired_left))
                 outer.sashpos(0, int(target))
 
@@ -3491,16 +3495,16 @@ class PowerTraderHub(tk.Tk):
 
     def start_trader(self) -> None:
 
-        # Before starting the trader, ensure we have a clean separation between:
-        #   - user manual / long-term holdings
-        #   - bot-owned (active-trade) holdings
-        # This allows cost basis + DCA stages to be reconstructed correctly after restarts.
-        try:
-            ok = self._ensure_bot_order_ids_for_current_holdings()
-            if not ok:
-                return
-        except Exception:
-            pass
+        # Bot-order picker: lets user separate manual/long-term holdings from
+        # bot-owned positions. Skipped for demo (bot owns everything).
+        _xk = str(self.settings.get("exchange", "demo")).strip().lower()
+        if _xk != "demo":
+            try:
+                ok = self._ensure_bot_order_ids_for_current_holdings()
+                if not ok:
+                    return
+            except Exception:
+                pass
 
         self._start_process(self.proc_trader, log_q=self.trader_log_q, prefix="[TRADER] ")
 
@@ -3541,6 +3545,25 @@ class PowerTraderHub(tk.Tk):
         self._neural_should_be_running = False
         self._neural_user_stopped_from_hub = True
         self._write_neural_autorestart_state()
+
+    # -----------------------------
+    # Exchange adapter (lazy-loaded for hub-side queries: holdings, orders)
+    # -----------------------------
+
+    def _get_exchange_adapter(self):
+        from trader_api import load_exchange_adapter
+        _xk = str(self.settings.get("exchange", "demo")).strip().lower()
+        cached = getattr(self, "_hub_adapter", None)
+        cached_key = getattr(self, "_hub_adapter_key", None)
+        if cached is not None and cached_key == _xk:
+            return cached
+        try:
+            adapter = load_exchange_adapter(_xk)
+            self._hub_adapter = adapter
+            self._hub_adapter_key = _xk
+            return adapter
+        except Exception:
+            return None
 
     # -----------------------------
     # Bot order ownership picker (startup: choose bot-owned orders for currently-held coins)
@@ -3615,7 +3638,7 @@ class PowerTraderHub(tk.Tk):
                         continue
 
                     sym_full = str(obj.get("symbol") or "").strip().upper()
-                    base = sym_full.split("-")[0].strip() if sym_full else ""
+                    base = sym_full.split("_")[0].strip() if sym_full else ""
                     if not base:
                         continue
 
@@ -3640,7 +3663,7 @@ class PowerTraderHub(tk.Tk):
                     continue
 
                 sym_full = str(obj.get("symbol") or "").strip().upper()
-                base = sym_full.split("-")[0].strip() if sym_full else ""
+                base = sym_full.split("_")[0].strip() if sym_full else ""
                 if not base:
                     continue
 
@@ -3657,105 +3680,6 @@ class PowerTraderHub(tk.Tk):
         return out
 
 
-    def _rh_load_api_creds(self) -> Optional[tuple]:
-        """Read r_key.txt + r_secret.txt (saved by the Setup Wizard)."""
-        try:
-            key_path = os.path.join(self.project_dir, "r_key.txt")
-            sec_path = os.path.join(self.project_dir, "r_secret.txt")
-            if not os.path.isfile(key_path) or not os.path.isfile(sec_path):
-                return None
-            with open(key_path, "r", encoding="utf-8") as f:
-                api_key = (f.read() or "").strip()
-            with open(sec_path, "r", encoding="utf-8") as f:
-                priv_b64 = (f.read() or "").strip()
-            if not api_key or not priv_b64:
-                return None
-            return (api_key, priv_b64)
-        except Exception:
-            return None
-
-    def _rh_make_request(self, method: str, path: str, body: str = "") -> Optional[dict]:
-        """Signed Robinhood API request (read-only for this feature)."""
-        try:
-            import requests
-        except Exception:
-            requests = None
-
-        try:
-            import base64
-        except Exception:
-            base64 = None
-
-        try:
-            from cryptography.hazmat.primitives.asymmetric import ed25519
-        except Exception:
-            ed25519 = None
-
-        if not requests or not ed25519 or not base64:
-            return None
-
-        creds = self._rh_load_api_creds()
-        if not creds:
-            return None
-        api_key, priv_b64 = creds
-
-        try:
-            ts = int(time.time())
-            msg = f"{api_key}{ts}{path}{method}{body}".encode("utf-8")
-
-            raw = base64.b64decode(priv_b64)
-            # Accept 32 (seed) or 64 (seed+pub) just like the wizard does
-            if len(raw) == 64:
-                seed = raw[:32]
-            elif len(raw) == 32:
-                seed = raw
-            else:
-                return None
-            pk = ed25519.Ed25519PrivateKey.from_private_bytes(seed)
-            sig_b64 = base64.b64encode(pk.sign(msg)).decode("utf-8")
-
-            headers = {
-                "x-api-key": api_key,
-                "x-timestamp": str(ts),
-                "x-signature": sig_b64,
-                "Content-Type": "application/json",
-            }
-
-            base_url = "https://trading.robinhood.com"
-            url = f"{base_url}{path}"
-
-            if str(method).upper() == "GET":
-                resp = requests.get(url, headers=headers, timeout=15)
-            else:
-                resp = requests.request(str(method).upper(), url, headers=headers, data=body, timeout=15)
-
-            if resp.status_code >= 400:
-                return None
-            return resp.json()
-        except Exception:
-            return None
-
-    def _rh_get_holdings(self) -> Optional[list]:
-        data = self._rh_make_request("GET", "/api/v1/crypto/trading/holdings/")
-        if not data or not isinstance(data, dict):
-            return None
-        res = data.get("results", None)
-        if not isinstance(res, list):
-            return None
-        return res
-
-    def _rh_get_orders(self, full_symbol: str, limit: int = 50) -> Optional[list]:
-        sym = str(full_symbol).upper().strip()
-        if not sym:
-            return None
-        data = self._rh_make_request("GET", f"/api/v1/crypto/trading/orders/?symbol={sym}")
-        if not data or not isinstance(data, dict):
-            return None
-        res = data.get("results", None)
-        if not isinstance(res, list):
-            return None
-        return res[: int(limit) if limit else 50]
-
     def _pick_bot_orders_for_coin(self, base_symbol: str, preselect_ids: Optional[List[str]] = None) -> Optional[set]:
         """
         Fetch the recent order history for this coin and open the selection modal.
@@ -3768,9 +3692,19 @@ class PowerTraderHub(tk.Tk):
         if not sym:
             return set()
 
-        symbol_full = f"{sym}-USD"
+        symbol_full = f"{sym}_USD"
 
-        orders = self._rh_get_orders(symbol_full, limit=50)
+        adapter = self._get_exchange_adapter()
+        orders = None
+        if adapter is not None:
+            try:
+                data = adapter.get_orders(symbol_full)
+                if isinstance(data, dict):
+                    orders = data.get("results", [])
+                    if not isinstance(orders, list):
+                        orders = None
+            except Exception:
+                orders = None
         if orders is None:
             try:
                 messagebox.showwarning(
@@ -3854,10 +3788,14 @@ class PowerTraderHub(tk.Tk):
             px = None
             try:
                 exs = o.get("executions", []) or []
-                for ex in exs:
-                    qty += float(ex.get("quantity") or 0.0)
-                    if px is None:
-                        px = float(ex.get("effective_price") or 0.0)
+                if exs:
+                    for ex in exs:
+                        qty += float(ex.get("quantity") or 0.0)
+                        if px is None:
+                            px = float(ex.get("effective_price") or 0.0)
+                else:
+                    qty = float(o.get("qty") or o.get("quantity") or 0.0)
+                    px = float(o.get("price") or o.get("avg_price") or 0.0) or None
             except Exception:
                 pass
 
@@ -3968,36 +3906,21 @@ class PowerTraderHub(tk.Tk):
             existing = self._load_bot_order_ids()
             from_hist = self._bot_order_ids_from_trade_history()
 
-            # NOTE: _rh_get_holdings() returns a LIST of holdings objects (not a dict with "results").
-            holdings_list = self._rh_get_holdings()
-
+            adapter = self._get_exchange_adapter()
             held_coins: List[str] = []
 
-            if holdings_list is not None and isinstance(holdings_list, list):
-                for h in (holdings_list or []):
-                    if not isinstance(h, dict):
-                        continue
-
-                    sym = str(h.get("asset_code") or "").upper().strip()
-                    if not sym or sym in ("USD", "USDT", "USDC"):
-                        continue
-
-                    # Some RH payloads use different keys; accept any of these.
-                    raw_qty = h.get("total_quantity", None)
-                    if raw_qty is None:
-                        raw_qty = h.get("quantity", None)
-                    if raw_qty is None:
-                        raw_qty = h.get("quantity_available", None)
-
-                    try:
-                        qty = float(raw_qty or 0.0)
-                    except Exception:
-                        qty = 0.0
-
-                    if qty > 1e-12:
-                        held_coins.append(sym)
+            if adapter is not None:
+                try:
+                    holdings = adapter.get_holdings()
+                    for sym, qty in (holdings or {}).items():
+                        sym = str(sym).upper().strip()
+                        if not sym or sym in ("USD", "USDT", "USDC"):
+                            continue
+                        if float(qty or 0.0) > 1e-12:
+                            held_coins.append(sym)
+                except Exception:
+                    held_coins = sorted(set(list(existing.keys()) + list(from_hist.keys())))
             else:
-                # Hub couldn't fetch holdings (creds/session). Still show the popups using local state.
                 held_coins = sorted(set(list(existing.keys()) + list(from_hist.keys())))
 
             if not held_coins:
@@ -6859,7 +6782,7 @@ class PowerTraderHub(tk.Tk):
                 self.settings["auto_start_scripts"] = bool(auto_start_var.get())
                 self._save_settings()
                 self._apply_ui_font_size()
-                _nw, _nh = self._scaled_geometry(1400, 820)
+                _nw, _nh = self._scaled_geometry(1820, 1066)
                 self.geometry(f"{_nw}x{_nh}")
                 _nmw, _nmh = self._scaled_geometry(980, 640)
                 self.minsize(_nmw, _nmh)
