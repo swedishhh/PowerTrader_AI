@@ -239,6 +239,7 @@ function updateTraderStatus(data) {
     state.positions = data.positions;
     renderPositions(data.positions);
     updateSignalPositionChips();
+    if ($('#tab-lth').classList.contains('active')) renderLTH();
     if (state.selectedCoin) updateCoinPosition(state.selectedCoin);
   }
 }
@@ -836,6 +837,45 @@ async function loadTradeHistory() {
   }).join('');
 }
 
+// ── LTH Tab ──
+
+function renderLTH() {
+  const container = $('#lth-list');
+  const positions = state.positions;
+  const lthCoins = Object.entries(positions).filter(([_, p]) => p.lth_reserved_qty > 0);
+
+  if (lthCoins.length === 0) {
+    container.innerHTML = '<div class="empty-state">No long-term holdings</div>';
+    return;
+  }
+
+  lthCoins.sort((a, b) => {
+    const va = a[1].lth_reserved_qty * (a[1].current_buy_price || 0);
+    const vb = b[1].lth_reserved_qty * (b[1].current_buy_price || 0);
+    return vb - va;
+  });
+
+  container.innerHTML = lthCoins.map(([coin, p]) => {
+    const value = p.lth_reserved_qty * (p.current_buy_price || 0);
+    return `
+      <div class="pos-card">
+        <div class="pos-card-header">
+          <span class="pos-coin">${coin}</span>
+          <span class="pos-pnl" style="color: var(--gold)">${fmtUSD(value)}</span>
+        </div>
+        <div class="pos-field">
+          <span class="pos-field-label">Quantity</span>
+          <span class="pos-field-value">${fmtQty(p.lth_reserved_qty, coin)}</span>
+        </div>
+        <div class="pos-field">
+          <span class="pos-field-label">Price</span>
+          <span class="pos-field-value">${fmtPrice(p.current_buy_price)}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
 // ── Training Tab ──
 
 function renderTraining(coins) {
@@ -993,6 +1033,7 @@ function setupTabs() {
       $$('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-' + tab));
 
       if (tab === 'history') loadTradeHistory();
+      if (tab === 'lth') renderLTH();
       if (tab === 'logs') refreshLogs();
     });
   });
