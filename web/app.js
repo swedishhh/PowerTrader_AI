@@ -819,12 +819,18 @@ async function loadTradeHistory() {
     const coin = (t.symbol || '').replace('_USD', '');
     const tagClass = t.tag || '';
     const tagHtml = t.tag ? `<span class="hist-tag ${tagClass}">${t.tag}</span>` : '';
+    let pnlHtml = '';
+    if (t.side === 'sell' && t.pnl_pct != null) {
+      const pnlClass = t.pnl_pct >= 0 ? 'positive' : 'negative';
+      const profitStr = t.realized_profit_usd != null ? ' ' + fmtUSD(t.realized_profit_usd) : '';
+      pnlHtml = `<span class="hist-pnl ${pnlClass}">${fmtPct(t.pnl_pct)}${profitStr}</span>`;
+    }
     return `
       <div class="hist-row">
         <span class="hist-time">${fmtTime(t.ts)}</span>
         <span class="hist-side ${t.side}">${t.side}</span>
         <span>${coin} ${fmtQty(t.qty, coin)} ${tagHtml}</span>
-        <span class="hist-amount">${fmtUSD(t.notional_usd)}</span>
+        <span class="hist-amount">${fmtUSD(t.notional_usd)} ${pnlHtml}</span>
       </div>
     `;
   }).join('');

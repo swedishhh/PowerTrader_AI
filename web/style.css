@@ -650,6 +650,9 @@ body {
 .hist-tag.TRAIL_SELL { background: var(--green-dim); color: var(--green); }
 .hist-tag.LTH { background: var(--gold-dim); color: var(--gold); }
 .hist-amount { text-align: right; }
+.hist-pnl { font-size: 10px; margin-left: 4px; }
+.hist-pnl.positive { color: var(--green); }
+.hist-pnl.negative { color: var(--red); }
 
 /* ── Training ── */
 .training-list {
