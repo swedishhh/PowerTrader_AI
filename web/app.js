@@ -520,7 +520,7 @@ async function loadAccountChart(hours) {
   });
 
   state.areaSeries = state.chart.addLineSeries({
-    color: '#E4E4F0',
+    color: '#8888A8',
     lineWidth: 2,
     priceFormat: {type: 'price', precision: 2, minMove: 0.01},
   });
