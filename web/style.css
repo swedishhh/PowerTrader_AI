@@ -538,10 +538,11 @@ body {
   display: none;
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
   padding: 12px 16px;
 }
 
-.tab-content.active { display: block; }
+.tab-content.active { display: flex; flex-direction: column; }
 
 /* ── Positions ── */
 .positions-list {
