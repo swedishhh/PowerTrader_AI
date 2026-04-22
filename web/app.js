@@ -519,17 +519,14 @@ async function loadAccountChart(hours) {
     },
   });
 
-  state.areaSeries = state.chart.addAreaSeries({
-    topColor: 'rgba(240, 180, 41, 0.25)',
-    bottomColor: 'rgba(240, 180, 41, 0.02)',
-    lineColor: '#F0B429',
+  state.areaSeries = state.chart.addLineSeries({
+    color: '#E4E4F0',
     lineWidth: 2,
     priceFormat: {type: 'price', precision: 2, minMove: 0.01},
   });
 
   await _applyAccountData(hours);
 
-  // Trade event markers
   try {
     const trades = await api('trades?limit=500');
     if (trades.trades && trades.trades.length > 0) {
@@ -539,7 +536,7 @@ async function loadAccountChart(hours) {
         .map(t => ({
           time: Math.floor(t.ts),
           position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
-          color: t.side === 'buy' ? '#00D4FF' : '#00CC66',
+          color: t.side === 'buy' ? '#FF4466' : '#00CC66',
           shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown',
           text: (t.symbol || '').replace('_USD', '') + (t.tag ? ' ' + t.tag : ''),
         }));
