@@ -312,6 +312,7 @@ body {
   transition: var(--transition);
   position: relative;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .signal-card:hover {
