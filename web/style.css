@@ -421,17 +421,19 @@ body {
   flex-shrink: 0;
 }
 
-.signal-val-long {
+.signal-val-pair {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 1px;
   font-family: var(--font-mono);
-  font-size: 16px;
   font-weight: 600;
-  color: var(--cyan);
+  font-size: 15px;
 }
 
-.signal-val-short {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-muted);
+.signal-val-long { color: var(--cyan); }
+.signal-val-short { color: var(--red); }
+.signal-val-sep { color: var(--text-muted); font-weight: 400; font-size: 12px; margin: 0 1px; }
 }
 
 .signal-pos-chip {

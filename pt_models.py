@@ -175,6 +175,37 @@ class AccountModel:
     def account_value_history(self, limit: int = 500) -> list[dict]:
         return _read_jsonl(self.env.account_history_path(self.exchange), limit)
 
+    def dca_24h_by_coin(self) -> dict[str, int]:
+        trades = self.trade_history(limit=0)
+        now = time.time()
+        window_floor = now - 86400
+
+        last_sell_ts: dict[str, float] = {}
+        for tr in trades:
+            sym = (tr.get("symbol") or "").upper()
+            base = sym.split("_")[0] if sym else ""
+            if not base or (tr.get("side") or "").lower() != "sell":
+                continue
+            ts = float(tr.get("ts", 0))
+            if ts > last_sell_ts.get(base, 0):
+                last_sell_ts[base] = ts
+
+        out: dict[str, int] = {}
+        for tr in trades:
+            sym = (tr.get("symbol") or "").upper()
+            base = sym.split("_")[0] if sym else ""
+            if not base:
+                continue
+            if (tr.get("side") or "").lower() != "buy":
+                continue
+            if (tr.get("tag") or "").upper() != "DCA":
+                continue
+            ts = float(tr.get("ts", 0))
+            start_ts = max(window_floor, last_sell_ts.get(base, 0))
+            if ts >= start_ts:
+                out[base] = out.get(base, 0) + 1
+        return out
+
 
 class SystemModel:
     """Read-only view of system-level state: runner readiness, script health."""

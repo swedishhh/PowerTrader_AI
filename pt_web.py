@@ -108,7 +108,7 @@ async def api_coin_detail(coin: str):
 @app.get("/api/positions")
 async def api_positions():
     acct = AccountModel(env)
-    return {"positions": acct.positions()}
+    return {"positions": acct.positions(), "dca_24h": acct.dca_24h_by_coin()}
 
 
 @app.get("/api/trades")

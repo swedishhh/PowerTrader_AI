@@ -22,6 +22,7 @@ const state = {
   accountRange: 0,       // 0 = ALL, or hours
   logRefreshTimer: null,
   settings: {},
+  dca24h: {},
 };
 
 const TF_LIST = ['1min','5min','15min','30min','1hour','2hour','4hour','8hour','12hour','1day','1week'];
@@ -171,7 +172,14 @@ async function refreshAll() {
     if (coinsData.coins) {
       state.coins = coinsData.coins;
       renderSignalGrid(coinsData.coins);
-      updatePositionsFromCoins(coinsData.coins);
+    }
+
+    const posData = await api('positions');
+    if (posData.positions) {
+      state.positions = posData.positions;
+      state.dca24h = posData.dca_24h || {};
+      renderPositions(posData.positions);
+      updateSignalPositionChips();
     }
 
     const settingsData = await api('settings');
@@ -274,7 +282,7 @@ function renderSignalGrid(coins) {
           <div class="signal-coin">${coin.coin}</div>
           <div class="signal-price" data-field="price"></div>
         </div>
-        <div class="signal-bar-wrap">
+        <div class="signal-bar-wrap" title="Bar = signal strength (0–7)&#10;Marker = trade start level">
           <div class="signal-bar-label"><span>LONG</span><span data-field="long-pct"></span></div>
           <div class="signal-bar">
             <div class="signal-bar-fill long" data-field="long-fill"></div>
@@ -285,9 +293,12 @@ function renderSignalGrid(coins) {
             <div class="signal-bar-fill short" data-field="short-fill"></div>
           </div>
         </div>
-        <div class="signal-values">
-          <div class="signal-val-long" data-field="long-val"></div>
-          <div class="signal-val-short" data-field="short-val"></div>
+        <div class="signal-values" title="Long / Short signal strength (0–7)&#10;Long ≥ trade start level → buy eligible&#10;Short > 0 → sells / suppresses buys">
+          <div class="signal-val-pair">
+            <span class="signal-val-long" data-field="long-val"></span>
+            <span class="signal-val-sep">/</span>
+            <span class="signal-val-short" data-field="short-val"></span>
+          </div>
           <div data-field="pos-chip"></div>
         </div>
       `;
@@ -304,7 +315,7 @@ function renderSignalGrid(coins) {
     card.querySelector('[data-field="long-fill"]').style.width = longPct + '%';
     card.querySelector('[data-field="short-fill"]').style.width = shortPct + '%';
     card.querySelector('[data-field="long-val"]').textContent = coin.long_signal;
-    card.querySelector('[data-field="short-val"]').textContent = 'S:' + coin.short_signal;
+    card.querySelector('[data-field="short-val"]').textContent = coin.short_signal;
 
     const tsl = state.tradeStartLevel || 1;
     const markerPos = (tsl / 7) * 100;
@@ -767,9 +778,14 @@ function renderPositions(positions) {
 
   active.sort((a, b) => (b[1].value_usd || 0) - (a[1].value_usd || 0));
 
+  const maxDca = state.settings.max_dca_buys_per_24h || 1;
+
   container.innerHTML = active.map(([coin, p]) => {
     const pnl = p.gain_loss_pct_buy;
     const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+    const dca24 = state.dca24h[coin] || 0;
+    const sellPrice = p.trail_line > 0 ? fmtPrice(p.trail_line) : '—';
+
     return `
       <div class="pos-card" data-coin="${coin}">
         <div class="pos-card-header">
@@ -781,24 +797,32 @@ function renderPositions(positions) {
           <span class="pos-field-value">${fmtUSD(p.value_usd)}</span>
         </div>
         <div class="pos-field">
-          <span class="pos-field-label">Avg Cost</span>
-          <span class="pos-field-value">${fmtPrice(p.avg_cost_basis)}</span>
-        </div>
-        <div class="pos-field">
-          <span class="pos-field-label">Current</span>
-          <span class="pos-field-value">${fmtPrice(p.current_buy_price)}</span>
-        </div>
-        <div class="pos-field">
-          <span class="pos-field-label">DCA</span>
-          <span class="pos-field-value">${p.dca_triggered_stages > 0 ? '<span class="pos-dca-chip">DCA ' + p.dca_triggered_stages + '</span>' : '—'} ${p.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''}</span>
-        </div>
-        <div class="pos-field">
           <span class="pos-field-label">Quantity</span>
           <span class="pos-field-value">${fmtQty(p.quantity, coin)}</span>
         </div>
         <div class="pos-field">
+          <span class="pos-field-label">Avg Cost</span>
+          <span class="pos-field-value">${fmtPrice(p.avg_cost_basis)}</span>
+        </div>
+        <div class="pos-field">
+          <span class="pos-field-label">Bid / Ask</span>
+          <span class="pos-field-value">${fmtPrice(p.current_buy_price)} / ${fmtPrice(p.current_sell_price)}</span>
+        </div>
+        <div class="pos-field">
+          <span class="pos-field-label">Sell Level</span>
+          <span class="pos-field-value">${sellPrice}</span>
+        </div>
+        <div class="pos-field">
           <span class="pos-field-label">Next DCA</span>
           <span class="pos-field-value">${p.next_dca_display || '—'}</span>
+        </div>
+        <div class="pos-field">
+          <span class="pos-field-label">DCA Stage</span>
+          <span class="pos-field-value">${p.dca_triggered_stages > 0 ? '<span class="pos-dca-chip">DCA ' + p.dca_triggered_stages + '</span>' : '—'} ${p.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''}</span>
+        </div>
+        <div class="pos-field">
+          <span class="pos-field-label">DCA 24h</span>
+          <span class="pos-field-value">${dca24} / ${maxDca}</span>
         </div>
       </div>
     `;
