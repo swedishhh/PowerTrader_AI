@@ -827,7 +827,7 @@ async function loadTradeHistory() {
       pnlHtml = `<span class="hist-pnl ${pnlClass}">${fmtPct(t.pnl_pct)}${profitStr}</span>`;
     }
     return `
-      <div class="hist-row">
+      <div class="hist-row" data-coin="${coin}" style="cursor:pointer">
         <span class="hist-time">${fmtTime(t.ts)}</span>
         <span class="hist-side ${t.side}">${t.side}</span>
         <span>${coin} ${fmtQty(t.qty, coin)} ${tagHtml}</span>
@@ -835,6 +835,10 @@ async function loadTradeHistory() {
       </div>
     `;
   }).join('');
+
+  $$('.hist-row[data-coin]', container).forEach(row => {
+    row.addEventListener('click', () => selectCoin(row.dataset.coin));
+  });
 }
 
 // ── LTH Tab ──
