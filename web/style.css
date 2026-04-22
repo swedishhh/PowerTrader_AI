@@ -150,7 +150,7 @@ body {
 
 .topbar-account {
   display: flex;
-  gap: 20px;
+  gap: 16px;
   margin-left: auto;
   flex-shrink: 0;
 }
@@ -255,10 +255,23 @@ body {
 #app {
   flex: 1;
   display: grid;
-  grid-template-columns: 280px 1fr 360px;
+  grid-template-columns: 280px 1fr 4px var(--rh-width, 650px);
   gap: 1px;
   overflow: hidden;
   background: var(--border);
+}
+
+.sash {
+  width: 4px;
+  cursor: col-resize;
+  background: var(--border);
+  transition: background 150ms;
+  z-index: 10;
+}
+
+.sash:hover,
+.sash.dragging {
+  background: var(--gold);
 }
 
 .panel {
@@ -711,6 +724,89 @@ body {
 .train-status.FAILED { background: var(--red-dim); color: var(--red); }
 .train-status.UNKNOWN { background: var(--bg-elevated); color: var(--text-muted); }
 
+.train-log-panel {
+  padding: 0 12px 8px;
+}
+
+.train-log-output {
+  margin: 0;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.train-failure {
+  padding: 6px 12px;
+  margin: 0 0 4px 0;
+  border-left: 2px solid var(--red-dim);
+  background: var(--bg-surface);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  cursor: pointer;
+}
+
+.train-failure-summary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--red);
+}
+
+.train-failure-detail {
+  display: none;
+  margin-top: 8px;
+}
+
+.train-failure.open .train-failure-detail { display: block; }
+
+.fail-table {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+
+.fail-table td {
+  padding: 2px 8px 2px 0;
+  color: var(--text-secondary);
+  vertical-align: top;
+}
+
+.fail-key {
+  color: var(--text-muted);
+  white-space: nowrap;
+  width: 1%;
+}
+
+.fail-tb-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.train-failure-tb {
+  margin: 0;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
 .train-bar {
   height: 3px;
   border-radius: 2px;
@@ -789,6 +885,19 @@ body {
 }
 
 .settings-field:last-child { margin-bottom: 0; }
+
+.settings-field-toggle {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-field-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--gold);
+  cursor: pointer;
+}
 
 .settings-field label {
   font-size: 11px;
@@ -884,6 +993,7 @@ body {
    ═══════════════════════════════════════════════════════════ */
 
 @media (max-width: 1024px) {
+  .sash { display: none; }
   #app {
     grid-template-columns: 240px 1fr;
   }

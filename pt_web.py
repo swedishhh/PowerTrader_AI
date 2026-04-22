@@ -80,6 +80,9 @@ async def api_coins():
         pos = positions.get(coin, {})
         snap["position"] = pos if pos.get("quantity", 0) > 0 else None
         snap["training_running"] = ctrl_status["training"].get(coin, {}).get("running", False)
+        fail = cm.training_failure()
+        if fail and fail.get("exception_type"):
+            snap["training_failure"] = fail
         coins.append(snap)
     return {"coins": coins}
 

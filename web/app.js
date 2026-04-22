@@ -150,6 +150,7 @@ async function init() {
   setupMobileNav();
   setupButtons();
   setupTimeframes();
+  setupSash();
 
   await refreshAll();
   connectWS();
@@ -212,8 +213,15 @@ function updateSystemStatus(sys) {
 
 function updateAccountDisplay(account, pnl) {
   if (account) {
-    $('#acct-total').textContent = fmtUSD(account.total_account_value);
-    $('#acct-power').textContent = fmtUSD(account.buying_power);
+    const total = account.total_account_value || 0;
+    const power = account.buying_power || 0;
+    const holdings = total - power;
+    const pct = total > 0 ? (holdings / total) * 100 : 0;
+
+    $('#acct-total').textContent = fmtUSD(total);
+    $('#acct-power').textContent = fmtUSD(power);
+    $('#acct-holdings').textContent = fmtUSD(holdings);
+    $('#acct-in-trade').textContent = pct.toFixed(1) + '%';
   }
   if (pnl) {
     const el = $('#acct-pnl');
@@ -895,21 +903,69 @@ function renderLTH() {
 
 // ── Training Tab ──
 
+async function loadAndRenderTraining() {
+  try {
+    const data = await api('coins');
+    if (data.coins) renderTraining(data.coins);
+  } catch (e) {
+    console.error('loadAndRenderTraining failed:', e);
+  }
+}
+
 function renderTraining(coins) {
   const container = $('#training-list');
+  container.querySelectorAll('.train-log-panel').forEach(el => {
+    if (el.dataset.timer) clearInterval(Number(el.dataset.timer));
+  });
   if (!coins || coins.length === 0) {
     container.innerHTML = '<div class="empty-state">No coins configured</div>';
     return;
   }
 
-  container.innerHTML = coins.map(c => {
-    const tState = c.training_state || 'UNKNOWN';
-    const trained = c.is_trained;
+  const sorted = [...coins].sort((a, b) => {
+    const aFail = (a.training_state === 'FAILED') ? 0 : 1;
+    const bFail = (b.training_state === 'FAILED') ? 0 : 1;
+    if (aFail !== bFail) return aFail - bFail;
+    return a.coin.localeCompare(b.coin);
+  });
+
+  container.innerHTML = sorted.map(c => {
+    const tState = c.training_running ? 'TRAINING' : (c.training_state || 'UNKNOWN');
+    const trained = !c.training_running && c.is_trained;
     const lastTs = c.last_trained_ts;
     const ageText = lastTs > 0 ? fmtDate(lastTs) : 'Never';
+    const fail = c.training_running ? null : c.training_failure;
+
+    let failHtml = '';
+    if (fail && fail.exception_type) {
+      const esc = s => String(s).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const utc = ts => ts ? new Date(ts * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC') : '—';
+
+      const tsKeys = new Set(['start_time', 'end_time']);
+      const fmtVal = (k, v) => tsKeys.has(k) && /^\d{9,}$/.test(String(v)) ? utc(Number(v)) : esc(v);
+
+      const stateRows = fail.trainer_state ? Object.entries(fail.trainer_state)
+        .filter(([, v]) => !Array.isArray(v))
+        .map(([k, v]) => `<tr><td class="fail-key">${esc(k)}</td><td>${fmtVal(k, v)}</td></tr>`)
+        .join('') : '';
+
+      failHtml = `
+        <div class="train-failure" onclick="this.classList.toggle('open')">
+          <div class="train-failure-summary">${esc(fail.exception_type)}: ${esc(fail.exception_message || '')}</div>
+          <div class="train-failure-detail">
+            <table class="fail-table">
+              <tr><td class="fail-key">Failed at</td><td>${utc(fail.timestamp)}</td></tr>
+              <tr><td class="fail-key">Started at</td><td>${utc(fail.started_at)}</td></tr>
+              ${stateRows}
+            </table>
+            <div class="fail-tb-label">Traceback</div>
+            <pre class="train-failure-tb">${esc(fail.traceback || '')}</pre>
+          </div>
+        </div>`;
+    }
 
     return `
-      <div class="train-row">
+      <div class="train-row" data-train-coin="${c.coin}">
         <span class="train-coin">${c.coin}</span>
         <div>
           <span style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted)">
@@ -918,19 +974,65 @@ function renderTraining(coins) {
         </div>
         <div class="train-actions">
           <span class="train-status ${tState}">${trained ? 'TRAINED' : tState}</span>
+          <button class="btn btn-small btn-secondary" onclick="toggleTrainerLog('${c.coin}')">Log</button>
           <button class="btn btn-small btn-secondary" onclick="trainCoin('${c.coin}')">Train</button>
         </div>
-      </div>
+      </div>${failHtml}
     `;
   }).join('');
 }
 
 window.trainCoin = async function(coin) {
   await apiPost(`train/${coin}`);
-  setTimeout(refreshAll, 1000);
+  setTimeout(loadAndRenderTraining, 1000);
+};
+
+window.toggleTrainerLog = function(coin) {
+  const id = `train-log-${coin}`;
+  const existing = document.getElementById(id);
+  if (existing) {
+    const timer = existing.dataset.timer;
+    if (timer) clearInterval(Number(timer));
+    existing.remove();
+    return;
+  }
+
+  const row = document.querySelector(`[data-train-coin="${coin}"]`);
+  if (!row) return;
+
+  const logEl = document.createElement('div');
+  logEl.id = id;
+  logEl.className = 'train-log-panel';
+  logEl.innerHTML = '<pre class="train-log-output">Loading...</pre>';
+  row.after(logEl);
+
+  const refresh = async () => {
+    try {
+      const data = await api(`logs/trainer-${coin.toLowerCase()}`);
+      const pre = logEl.querySelector('pre');
+      if (pre) {
+        pre.textContent = (data.lines || []).join('\n') || '(no output)';
+        pre.scrollTop = pre.scrollHeight;
+      }
+    } catch {}
+  };
+
+  refresh();
+  const timer = setInterval(refresh, 3000);
+  logEl.dataset.timer = timer;
 };
 
 // ── Settings Tab ──
+
+async function loadAndRenderSettings() {
+  try {
+    const s = await api('settings');
+    state.settings = s;
+    renderSettings(s);
+  } catch (e) {
+    console.error('loadAndRenderSettings failed:', e);
+  }
+}
 
 function renderSettings(s) {
   if (!s) return;
@@ -997,6 +1099,24 @@ function renderSettings(s) {
         <input type="number" id="set-lth-pct" value="${s.lth_profit_alloc_pct || 50}" step="5">
       </div>
     </div>
+    <div class="settings-group">
+      <div class="settings-group-title">Demo / Simulation</div>
+      <div class="settings-field">
+        <label>Starting USD</label>
+        <input type="number" id="set-demo-usd" value="${s.demo_starting_usd || 10000}" step="1000">
+      </div>
+      <div class="settings-field">
+        <label>Slippage Factor</label>
+        <input type="number" id="set-demo-slip" value="${s.demo_slippage_factor || 0}" step="0.001">
+      </div>
+    </div>
+    <div class="settings-group">
+      <div class="settings-group-title">Startup</div>
+      <div class="settings-field settings-field-toggle">
+        <label>Auto-start scripts on launch</label>
+        <input type="checkbox" id="set-autostart" ${s.auto_start_scripts ? 'checked' : ''}>
+      </div>
+    </div>
     <div class="settings-save">
       <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
     </div>
@@ -1021,6 +1141,9 @@ async function saveSettings() {
   updated.trailing_gap_pct = parseFloat($('#set-gap').value) || 0.1;
   updated.long_term_holdings = $('#set-lth').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
   updated.lth_profit_alloc_pct = parseFloat($('#set-lth-pct').value) || 50;
+  updated.demo_starting_usd = parseFloat($('#set-demo-usd').value) || 10000;
+  updated.demo_slippage_factor = parseFloat($('#set-demo-slip').value) || 0;
+  updated.auto_start_scripts = $('#set-autostart').checked;
 
   const result = await apiPut('settings', updated);
   if (result.ok) {
@@ -1052,6 +1175,8 @@ function setupTabs() {
       if (state.logRefreshTimer) { clearInterval(state.logRefreshTimer); state.logRefreshTimer = null; }
       if (tab === 'history') loadTradeHistory();
       if (tab === 'lth') renderLTH();
+      if (tab === 'training') loadAndRenderTraining();
+      if (tab === 'settings') loadAndRenderSettings();
       if (tab === 'logs') {
         refreshLogs();
         state.logRefreshTimer = setInterval(refreshLogs, 3000);
@@ -1135,6 +1260,47 @@ function rebuildTimeframeButtons() {
 }
 
 function setupTimeframes() { rebuildTimeframeButtons(); }
+
+// ── Sash (drag to resize RH panel) ──
+
+function setupSash() {
+  const sash = $('#sash');
+  const app = $('#app');
+  if (!sash) return;
+
+  const MIN_RH = 280;
+  const MAX_RH = 700;
+  const stored = localStorage.getItem('pt-rh-width');
+  if (stored) app.style.setProperty('--rh-width', stored + 'px');
+
+  let dragging = false;
+
+  sash.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    dragging = true;
+    sash.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const rh = window.innerWidth - e.clientX;
+    const clamped = Math.max(MIN_RH, Math.min(MAX_RH, rh));
+    app.style.setProperty('--rh-width', clamped + 'px');
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    sash.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    const val = getComputedStyle(app).getPropertyValue('--rh-width').trim();
+    localStorage.setItem('pt-rh-width', parseInt(val));
+    if (state.chart) state.chart.applyOptions({ autoSize: true });
+  });
+}
 
 // ── Boot ──
 document.addEventListener('DOMContentLoaded', init);
