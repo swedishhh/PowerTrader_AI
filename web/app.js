@@ -20,6 +20,7 @@ const state = {
   chartRefreshTimer: null,
   chartMode: 'candle',  // 'candle' | 'account'
   accountRange: 0,       // 0 = ALL, or hours
+  logRefreshTimer: null,
   settings: {},
 };
 
@@ -251,7 +252,8 @@ function renderSignalGrid(coins) {
   const existingCards = {};
   $$('.signal-card', grid).forEach(c => { existingCards[c.dataset.coin] = c; });
 
-  coins.forEach((coin, i) => {
+  const sorted = [...coins].sort((a, b) => a.coin.localeCompare(b.coin));
+  sorted.forEach((coin, i) => {
     let card = existingCards[coin.coin];
     const isNew = !card;
 
@@ -313,7 +315,8 @@ function renderSignalGrid(coins) {
     const chipEl = card.querySelector('[data-field="pos-chip"]');
     if (pos && pos.quantity > 0) {
       const pnl = pos.gain_loss_pct_buy;
-      chipEl.innerHTML = `<span class="signal-pos-chip in-trade">${fmtPct(pnl)}</span>`;
+      const chipClass = pnl >= 0 ? 'pos-up' : 'pos-down';
+      chipEl.innerHTML = `<span class="signal-pos-chip ${chipClass}">${fmtPct(pnl)}</span>`;
     } else {
       chipEl.innerHTML = '';
     }
@@ -817,18 +820,31 @@ async function loadTradeHistory() {
     const coin = (t.symbol || '').replace('_USD', '');
     const tagClass = t.tag || '';
     const tagHtml = t.tag ? `<span class="hist-tag ${tagClass}">${t.tag}</span>` : '';
-    let pnlHtml = '';
-    if (t.side === 'sell' && t.pnl_pct != null) {
-      const pnlClass = t.pnl_pct >= 0 ? 'positive' : 'negative';
-      const profitStr = t.realized_profit_usd != null ? ' ' + fmtUSD(t.realized_profit_usd) : '';
-      pnlHtml = `<span class="hist-pnl ${pnlClass}">${fmtPct(t.pnl_pct)}${profitStr}</span>`;
+    const isSell = t.side === 'sell';
+    const hasPnl = isSell && t.pnl_pct != null;
+    const pnlClass = hasPnl ? (t.pnl_pct >= 0 ? 'positive' : 'negative') : '';
+
+    if (isSell && hasPnl) {
+      return `
+        <div class="hist-row hist-row-sell" data-coin="${coin}">
+          <span class="hist-time">${fmtTime(t.ts)}</span>
+          <span class="hist-side sell">sell</span>
+          <span>${coin} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
+          <span class="hist-amount">${fmtUSD(t.notional_usd)}</span>
+          <span class="hist-sell-detail">
+            <span class="hist-pnl ${pnlClass}">${fmtPct(t.pnl_pct)}</span>
+            ${t.realized_profit_usd != null ? `<span class="hist-pnl ${pnlClass}">${fmtUSD(t.realized_profit_usd)}</span>` : ''}
+          </span>
+        </div>
+      `;
     }
+
     return `
-      <div class="hist-row" data-coin="${coin}" style="cursor:pointer">
+      <div class="hist-row" data-coin="${coin}">
         <span class="hist-time">${fmtTime(t.ts)}</span>
         <span class="hist-side ${t.side}">${t.side}</span>
-        <span>${coin} ${fmtQty(t.qty, coin)} ${tagHtml}</span>
-        <span class="hist-amount">${fmtUSD(t.notional_usd)} ${pnlHtml}</span>
+        <span>${coin} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
+        <span class="hist-amount">${fmtUSD(t.notional_usd)}</span>
       </div>
     `;
   }).join('');
@@ -1033,9 +1049,13 @@ function setupTabs() {
       $$('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
       $$('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-' + tab));
 
+      if (state.logRefreshTimer) { clearInterval(state.logRefreshTimer); state.logRefreshTimer = null; }
       if (tab === 'history') loadTradeHistory();
       if (tab === 'lth') renderLTH();
-      if (tab === 'logs') refreshLogs();
+      if (tab === 'logs') {
+        refreshLogs();
+        state.logRefreshTimer = setInterval(refreshLogs, 3000);
+      }
     });
   });
 }

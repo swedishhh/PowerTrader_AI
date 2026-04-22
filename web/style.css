@@ -431,9 +431,14 @@ body {
   font-weight: 500;
 }
 
-.signal-pos-chip.in-trade {
-  background: var(--purple);
-  color: #fff;
+.signal-pos-chip.pos-up {
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+.signal-pos-chip.pos-down {
+  background: var(--red-dim);
+  color: var(--red);
 }
 
 /* ── Chart Panel ── */
@@ -639,7 +644,7 @@ body {
 
 .hist-time { color: var(--text-muted); font-size: 10px; }
 .hist-side { font-weight: 600; text-transform: uppercase; }
-.hist-side.buy { color: var(--cyan); }
+.hist-side.buy { color: var(--red); }
 .hist-side.sell { color: var(--green); }
 .hist-tag {
   font-size: 9px;
@@ -652,9 +657,23 @@ body {
 .hist-tag.TRAIL_SELL { background: var(--green-dim); color: var(--green); }
 .hist-tag.LTH { background: var(--gold-dim); color: var(--gold); }
 .hist-amount { text-align: right; }
-.hist-pnl { font-size: 10px; margin-left: 4px; }
+
+.hist-row-sell {
+  grid-template-columns: 60px 36px 1fr auto;
+  grid-template-rows: auto auto;
+}
+
+.hist-sell-detail {
+  grid-column: 3 / -1;
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+}
+
 .hist-pnl.positive { color: var(--green); }
 .hist-pnl.negative { color: var(--red); }
+
+.hist-row { cursor: pointer; }
 
 /* ── Training ── */
 .training-list {
