@@ -37,8 +37,8 @@ class KrakenAdapter(ExchangeAdapter):
     # ------------------------------------------------------------------
 
     def to_exchange_symbol(self, canonical: str) -> str:
-        base, quote = canonical.split("_")
-        return f"{base}/{quote}"
+        base, _ = canonical.split("_")
+        return f"{base}/USDT"
 
     def to_canonical_symbol(self, exchange_sym: str) -> str:
         base, quote = exchange_sym.split("/")
@@ -51,26 +51,28 @@ class KrakenAdapter(ExchangeAdapter):
     def get_account_value(self) -> Optional[float]:
         try:
             balance = self._exchange.fetch_balance()
-            total_usd = float(balance.get("total", {}).get("USD", 0) or 0)
-            for currency, amount in (balance.get("total", {}) or {}).items():
+            free = balance.get("free", {}) or {}
+            total_usdt = float(free.get("USDT", 0) or 0)
+            totals = balance.get("total", {}) or {}
+            for currency, amount in totals.items():
                 amount = float(amount or 0)
-                if amount <= 0 or currency in ("USD", "USDT", "USDC"):
+                if amount < 0.01 or currency in ("USD", "USDT"):
                     continue
                 try:
-                    ticker = self._exchange.fetch_ticker(f"{currency}/USD")
+                    ticker = self._exchange.fetch_ticker(f"{currency}/USDT")
                     bid = float(ticker.get("bid", 0) or 0)
                     if bid > 0:
-                        total_usd += amount * bid
+                        total_usdt += amount * bid
                 except Exception:
                     pass
-            return total_usd
+            return total_usdt
         except Exception:
             return None
 
     def get_buying_power(self) -> Optional[float]:
         try:
             balance = self._exchange.fetch_balance()
-            return float(balance.get("free", {}).get("USD", 0) or 0)
+            return float(balance.get("free", {}).get("USDT", 0) or 0)
         except Exception:
             return None
 
@@ -80,7 +82,7 @@ class KrakenAdapter(ExchangeAdapter):
             out: Dict[str, float] = {}
             for currency, amount in (balance.get("total", {}) or {}).items():
                 amount = float(amount or 0)
-                if amount <= 0 or currency in ("USD", "USDT", "USDC"):
+                if amount < 0.01 or currency in ("USD", "USDT"):
                     continue
                 out[currency] = amount
             return out
@@ -94,7 +96,7 @@ class KrakenAdapter(ExchangeAdapter):
 
         for canonical in symbols:
             base = self.base_from_canonical(canonical)
-            if base in ("USD", "USDC"):
+            if base in ("USDT", "USD"):
                 continue
             exchange_sym = self.to_exchange_symbol(canonical)
             try:
@@ -385,8 +387,12 @@ def create_adapter() -> KrakenAdapter:
         if os.path.isfile(settings_path):
             with open(settings_path, "r", encoding="utf-8") as f:
                 data = json.load(f) or {}
-            api_key = str(data.get("kraken_api_key", "")).strip()
-            api_secret = str(data.get("kraken_api_secret", "")).strip()
+            k = str(data.get("kraken_api_key", "")).strip()
+            s = str(data.get("kraken_api_secret", "")).strip()
+            if k:
+                api_key = k
+            if s:
+                api_secret = s
     except Exception:
         pass
 

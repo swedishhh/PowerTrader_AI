@@ -14,46 +14,29 @@
 
 <!-- ── Top Bar ── -->
 <header id="topbar">
-  <div class="topbar-brand">
-    <span class="brand-mark">⚡</span>
-    <span class="brand-name">POWERTRADER</span>
-  </div>
-  <div class="topbar-vitals">
-    <div class="vital-pill" id="pill-neural">
-      <span class="pill-dot"></span>
-      <span class="pill-label">Neural</span>
+  <div class="topbar-row topbar-row-main">
+    <div class="topbar-brand">
+      <span class="brand-mark">⚡</span>
+      <span class="brand-name">POWERTRADER</span>
     </div>
-    <div class="vital-pill" id="pill-trader">
-      <span class="pill-dot"></span>
-      <span class="pill-label">Trader</span>
+    <div class="topbar-vitals">
+      <div class="vital-pill" id="pill-neural">
+        <span class="pill-dot"></span>
+        <span class="pill-label">Neural</span>
+      </div>
+      <div class="vital-pill" id="pill-trader">
+        <span class="pill-dot"></span>
+        <span class="pill-label">Trader</span>
+      </div>
     </div>
-  </div>
-  <div class="topbar-account">
-    <div class="acct-block clickable" id="acct-block-portfolio" title="View account chart">
-      <span class="acct-label">Portfolio ◈</span>
-      <span class="acct-value" id="acct-total">—</span>
+    <div id="topbar-account"></div>
+    <div class="topbar-actions">
+      <button class="btn btn-primary" id="btn-start-all">Start All</button>
+      <button class="btn btn-danger" id="btn-stop-all" style="display:none">Stop All</button>
+      <button class="btn btn-danger" id="btn-close-all" disabled>Close All</button>
+      <button class="btn btn-secondary" id="btn-sync-control" disabled>Sync Control</button>
+      <button class="btn btn-secondary" id="btn-train-all">Train All</button>
     </div>
-    <div class="acct-block">
-      <span class="acct-label">Realized P&L</span>
-      <span class="acct-value" id="acct-pnl">—</span>
-    </div>
-    <div class="acct-block">
-      <span class="acct-label">Buying Power</span>
-      <span class="acct-value" id="acct-power">—</span>
-    </div>
-    <div class="acct-block">
-      <span class="acct-label">Holdings</span>
-      <span class="acct-value" id="acct-holdings">—</span>
-    </div>
-    <div class="acct-block">
-      <span class="acct-label">In Trade</span>
-      <span class="acct-value" id="acct-in-trade">—</span>
-    </div>
-  </div>
-  <div class="topbar-actions">
-    <button class="btn btn-primary" id="btn-start-all">Start All</button>
-    <button class="btn btn-danger" id="btn-stop-all" style="display:none">Stop All</button>
-    <button class="btn btn-secondary" id="btn-train-all">Train All</button>
   </div>
 </header>
 
@@ -63,6 +46,7 @@
   <section id="panel-signals" class="panel">
     <div class="panel-header">
       <h2>Coins</h2>
+      <button class="btn-portfolio" id="acct-block-portfolio" title="View portfolio chart">Portfolio ◈</button>
       <div class="view-toggle" id="view-toggle" title="Toggle simple / detailed view">
         <button class="vtog-btn active" data-mode="simple">◇</button>
         <button class="vtog-btn" data-mode="detail">◈</button>
@@ -94,6 +78,7 @@
     <div class="panel-header">
       <div class="tab-bar" id="trades-tabs">
         <button class="tab-btn active" data-tab="history">History</button>
+        <button class="tab-btn" data-tab="compare">Compare</button>
         <button class="tab-btn" data-tab="lth">LTH</button>
         <button class="tab-btn" data-tab="training">Training</button>
         <button class="tab-btn" data-tab="logs">Logs</button>
@@ -102,6 +87,9 @@
     </div>
     <div class="tab-content active" id="tab-history">
       <div id="history-list" class="history-list"></div>
+    </div>
+    <div class="tab-content" id="tab-compare">
+      <div id="compare-content" class="compare-content"></div>
     </div>
     <div class="tab-content" id="tab-lth">
       <div id="lth-list" class="positions-list"></div>
@@ -113,7 +101,6 @@
       <div class="log-controls">
         <select id="log-source">
           <option value="neural">Neural Runner</option>
-          <option value="trader">Trader</option>
         </select>
         <button class="btn btn-small" id="btn-refresh-logs">Refresh</button>
       </div>

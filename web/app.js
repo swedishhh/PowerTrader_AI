@@ -1,13 +1,20 @@
 /* ═══════════════════════════════════════════════════════════
    PowerTrader · Obsidian Command · Frontend
+   Multi-exchange: control (zero-friction baseline) vs kraken (real)
    ═══════════════════════════════════════════════════════════ */
 
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
 const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
 
+const XK_COLORS = { control: '#00D4FF', kraken: '#F0B429' };
+const XK_LABELS = { control: 'C', kraken: 'K' };
+
 const state = {
   coins: [],
-  positions: {},
+  exchangeList: [],
+  exchangeData: {},  // { control: {account, pnl}, kraken: {account, pnl} }
+  positions: {},     // { control: {...}, kraken: {...} }
+  dca24h: {},        // { control: {...}, kraken: {...} }
   tradeStartLevel: 1,
   selectedCoin: null,
   selectedTf: '1hour',
@@ -15,14 +22,13 @@ const state = {
   traderRunning: false,
   chart: null,
   candleSeries: null,
-  areaSeries: null,
+  acctSeries: {},    // { control: LineSeries, kraken: LineSeries }
   priceLines: [],
   chartRefreshTimer: null,
-  chartMode: 'candle',  // 'candle' | 'account'
-  accountRange: 0,       // 0 = ALL, or hours
+  chartMode: 'candle',
+  accountRange: 0,
   logRefreshTimer: null,
   settings: {},
-  dca24h: {},
   cardMode: 'simple',
   historyFilterCoin: null,
 };
@@ -146,13 +152,13 @@ function connectWS() {
 function handleWSMessage(msg) {
   switch (msg.type) {
     case 'trader_status':
-      updateTraderStatus(msg.data);
+      updateTraderStatus(msg.exchange, msg.data);
       break;
     case 'signals':
       updateSignals(msg.data);
       break;
     case 'pnl':
-      updatePnl(msg.data);
+      updatePnl(msg.exchange, msg.data);
       break;
     case 'system':
       updateSystemStatus(msg.data);
@@ -186,9 +192,14 @@ async function refreshAll() {
 
     state.settings = settingsData;
     state.tradeStartLevel = settingsData.trade_start_level || 1;
+    state.exchangeList = statusData.exchange_list || ['control'];
+
+    if (statusData.exchanges) {
+      state.exchangeData = statusData.exchanges;
+    }
 
     updateSystemStatus(statusData.system);
-    updateAccountDisplay(statusData.account, statusData.pnl);
+    renderTopbarAccounts();
 
     if (coinsData.coins) {
       state.coins = coinsData.coins;
@@ -201,7 +212,9 @@ async function refreshAll() {
 
     mergePositionsIntoCoins();
     renderCoinGrid();
+    populateLogSourceDropdown();
 
+    if ($('#tab-compare').classList.contains('active')) loadCompare();
     renderTraining(coinsData.coins);
     renderSettings(settingsData);
   } catch (e) {
@@ -215,6 +228,7 @@ function updateSystemStatus(sys) {
   if (!sys) return;
   state.neuralRunning = sys.neural_running;
   state.traderRunning = sys.trader_running;
+  if (sys.traders) state.tradersStatus = sys.traders;
 
   const pillNeural = $('#pill-neural');
   const pillTrader = $('#pill-trader');
@@ -222,54 +236,120 @@ function updateSystemStatus(sys) {
   pillNeural.className = 'vital-pill ' + (sys.neural_running ? 'running' : 'stopped');
   pillTrader.className = 'vital-pill ' + (sys.trader_running ? 'running' : 'stopped');
 
+  const running = sys.neural_running || sys.trader_running;
   const btnStart = $('#btn-start-all');
   const btnStop = $('#btn-stop-all');
-  if (sys.neural_running || sys.trader_running) {
-    btnStart.style.display = 'none';
-    btnStop.style.display = '';
-  } else {
-    btnStart.style.display = '';
-    btnStop.style.display = 'none';
+  btnStart.style.display = running ? 'none' : '';
+  btnStop.style.display = running ? '' : 'none';
+
+  const hasPositions = Object.values(state.positions || {}).some(xkPos =>
+    Object.values(xkPos || {}).some(p => p && p.quantity > 0)
+  );
+
+  const btnClose = $('#btn-close-all');
+  if (btnClose) btnClose.disabled = !hasPositions;
+
+  const btnSync = $('#btn-sync-control');
+  if (btnSync) {
+    btnSync.disabled = sys.trader_running || hasPositions;
   }
 }
 
-// ── Account Display ──
+// ── Topbar Account Display ──
 
-function updateAccountDisplay(account, pnl) {
+function renderTopbarAccounts() {
+  const container = $('#topbar-account');
+  if (!container) return;
+  const xks = state.exchangeList;
+
+  let html = '<table class="xk-table"><thead><tr><th></th><th>Portfolio</th><th>Buying Power</th><th>Holdings</th><th>Inv %</th><th>P&L</th>';
+  if (xks.length >= 2) html += '<th>Δ</th>';
+  html += '</tr></thead><tbody>';
+
+  xks.forEach((xk, i) => {
+    const xd = state.exchangeData[xk] || {};
+    const acct = xd.account || {};
+    const pnl = xd.pnl || {};
+    const total = acct.total_account_value || 0;
+    const bp = acct.buying_power || 0;
+    const holdings = acct.holdings_sell_value || 0;
+    const pctInv = acct.percent_in_trade || 0;
+    const realized = pnl.total_realized_profit_usd || 0;
+    const rClass = realized >= 0 ? 'positive' : 'negative';
+    const color = XK_COLORS[xk] || '#888';
+
+    html += `<tr>
+      <td class="xk-table-name"><span class="xk-dot" style="background:${color}"></span>${xk}</td>
+      <td class="xk-table-val" data-xk-total="${xk}">${fmtUSD(total)}</td>
+      <td class="xk-table-val" data-xk-bp="${xk}">${fmtUSD(bp)}</td>
+      <td class="xk-table-val" data-xk-hold="${xk}">${fmtUSD(holdings)}</td>
+      <td class="xk-table-val" data-xk-inv="${xk}">${pctInv.toFixed(1)}%</td>
+      <td class="xk-table-val ${rClass}" data-xk-pnl="${xk}">${(realized >= 0 ? '+' : '') + fmtUSD(realized)}</td>`;
+
+    if (xks.length >= 2) {
+      if (i === 0) {
+        html += '<td class="xk-table-val xk-table-dash">—</td>';
+      } else {
+        const t0 = (state.exchangeData[xks[0]]?.account?.total_account_value || 0);
+        const t1 = (state.exchangeData[xks[1]]?.account?.total_account_value || 0);
+        const delta = t1 - t0;
+        const dPct = t0 > 0 ? (delta / t0) * 100 : 0;
+        const dClass = delta >= 0 ? 'positive' : 'negative';
+        html += `<td class="xk-table-val ${dClass}" id="acct-delta">${(delta >= 0 ? '+' : '') + fmtUSD(delta)}</td>`;
+      }
+    }
+    html += '</tr>';
+  });
+
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+function updateTopbarExchange(xk, account, pnl) {
   if (account) {
-    const total = account.total_account_value || 0;
-    const power = account.buying_power || 0;
-    const holdings = total - power;
-    const pct = total > 0 ? (holdings / total) * 100 : 0;
-
-    $('#acct-total').textContent = fmtUSD(total);
-    $('#acct-power').textContent = fmtUSD(power);
-    $('#acct-holdings').textContent = fmtUSD(holdings);
-    $('#acct-in-trade').textContent = pct.toFixed(1) + '%';
+    if (state.exchangeData[xk]) state.exchangeData[xk].account = account;
+    const setEl = (attr, val) => { const el = $(`[${attr}="${xk}"]`); if (el) el.textContent = val; };
+    setEl('data-xk-total', fmtUSD(account.total_account_value || 0));
+    setEl('data-xk-bp', fmtUSD(account.buying_power || 0));
+    setEl('data-xk-hold', fmtUSD(account.holdings_sell_value || 0));
+    setEl('data-xk-inv', (account.percent_in_trade || 0).toFixed(1) + '%');
   }
   if (pnl) {
-    const el = $('#acct-pnl');
+    if (state.exchangeData[xk]) state.exchangeData[xk].pnl = pnl;
     const v = pnl.total_realized_profit_usd || 0;
-    el.textContent = (v >= 0 ? '+' : '') + fmtUSD(v);
-    el.className = 'acct-value ' + (v >= 0 ? 'positive' : 'negative');
+    const el = $(`[data-xk-pnl="${xk}"]`);
+    if (el) {
+      el.textContent = (v >= 0 ? '+' : '') + fmtUSD(v);
+      el.className = 'xk-table-val ' + (v >= 0 ? 'positive' : 'negative');
+    }
+  }
+
+  if (state.exchangeList.length >= 2) {
+    const xks = state.exchangeList;
+    const t0 = (state.exchangeData[xks[0]]?.account?.total_account_value || 0);
+    const t1 = (state.exchangeData[xks[1]]?.account?.total_account_value || 0);
+    const delta = t1 - t0;
+    const el = $('#acct-delta');
+    if (el) {
+      el.textContent = (delta >= 0 ? '+' : '') + fmtUSD(delta);
+      el.className = 'xk-table-val ' + (delta >= 0 ? 'positive' : 'negative');
+    }
   }
 }
 
-function updatePnl(pnl) {
-  if (!pnl) return;
-  const el = $('#acct-pnl');
-  const v = pnl.total_realized_profit_usd || 0;
-  el.textContent = (v >= 0 ? '+' : '') + fmtUSD(v);
-  el.className = 'acct-value ' + (v >= 0 ? 'positive' : 'negative');
+function updatePnl(xk, pnl) {
+  if (!pnl || !xk) return;
+  updateTopbarExchange(xk, null, pnl);
 }
 
 // ── Trader Status (from WS) ──
 
-function updateTraderStatus(data) {
-  if (!data) return;
-  if (data.account) updateAccountDisplay(data.account, null);
+function updateTraderStatus(xk, data) {
+  if (!data || !xk) return;
+  if (data.account) updateTopbarExchange(xk, data.account, null);
   if (data.positions) {
-    state.positions = data.positions;
+    if (!state.positions[xk]) state.positions[xk] = {};
+    state.positions[xk] = data.positions;
     mergePositionsIntoCoins();
     renderCoinGrid();
     if ($('#tab-lth').classList.contains('active')) renderLTH();
@@ -277,6 +357,7 @@ function updateTraderStatus(data) {
       updateCoinPosition(state.selectedCoin);
       updateMidPriceLine();
     }
+    if ($('#tab-compare').classList.contains('active')) loadCompare();
   }
 }
 
@@ -291,10 +372,10 @@ function _createSimpleCard(coin) {
   card.innerHTML = `
     <span class="cc-name">${coin}</span>
     <span class="cc-field"><span class="cc-mid" data-f="mid"></span></span>
+    <span class="cc-field cc-pos-fields" data-f="pos-fields"></span>
     <span class="cc-field cc-ls" title="Long / Short (0–7)">
       <span class="cc-long" data-f="long"></span><span class="cc-sep">/</span><span class="cc-short" data-f="short"></span>
-    </span>
-    <span class="cc-field cc-pos-fields" data-f="pos-fields"></span>`;
+    </span>`;
   card.addEventListener('click', () => selectCoin(coin));
   return card;
 }
@@ -321,15 +402,16 @@ function _createDetailCard(coin) {
 
 function _updateCard(card, c, modeOverride) {
   const mode = modeOverride || (card.classList.contains('detail') ? 'detail' : 'simple');
-  const pos = c.position;
-  const hasPos = pos && pos.quantity > 0;
-  const mid = c.mid_price || (pos ? (pos.current_buy_price || 0) : 0);
+  const xks = state.exchangeList;
+  const positions = c.positions || {};
+  const hasAnyPos = xks.some(xk => positions[xk] && positions[xk].quantity > 0);
+  const mid = c.mid_price || 0;
   const tsl = state.tradeStartLevel || 1;
   const isTradeReady = c.long_signal >= tsl && c.short_signal === 0;
 
   card.classList.toggle('active', state.selectedCoin === c.coin);
   card.classList.toggle('trade-ready', isTradeReady);
-  card.classList.toggle('has-position', hasPos);
+  card.classList.toggle('has-position', hasAnyPos);
 
   const f = key => card.querySelector(`[data-f="${key}"]`);
 
@@ -339,13 +421,17 @@ function _updateCard(card, c, modeOverride) {
 
   if (mode === 'simple') {
     const container = f('pos-fields');
-    if (hasPos) {
-      const pnl = pos.gain_loss_pct_buy;
-      const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-      container.innerHTML =
-        `<span class="cc-val">${fmtUSD(pos.value_usd)}</span> ` +
-        `<span class="cc-val">${fmtPrice(pos.avg_cost_basis)}</span> ` +
-        `<span class="cc-pnl ${pnlClass}">${fmtPct(pnl)}</span>`;
+    if (hasAnyPos) {
+      let html = '';
+      xks.forEach(xk => {
+        const pos = positions[xk];
+        if (!pos || pos.quantity <= 0) return;
+        const pnl = pos.gain_loss_pct_buy;
+        const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+        const color = XK_COLORS[xk] || '#888';
+        html += `<span class="cc-xk-pos"><span class="cc-xk-tag" style="color:${color}">${XK_LABELS[xk] || xk[0].toUpperCase()}</span>${fmtUSD(pos.value_usd)} <span class="cc-pnl ${pnlClass}">${fmtPct(pnl)}</span></span>`;
+      });
+      container.innerHTML = html;
     } else {
       container.innerHTML = '';
     }
@@ -358,26 +444,35 @@ function _updateCard(card, c, modeOverride) {
     f('marker').style.left = markerPos + '%';
 
     const posEl = f('pos-section');
-    if (hasPos) {
+    let posHtml = '';
+    xks.forEach(xk => {
+      const pos = positions[xk];
+      if (!pos || pos.quantity <= 0) return;
       const pnl = pos.gain_loss_pct_buy;
       const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+      const color = XK_COLORS[xk] || '#888';
       const maxDca = state.settings.max_dca_buys_per_24h || 1;
-      const dca24 = state.dca24h[c.coin] || 0;
+      const dca24 = (state.dca24h[xk] || {})[c.coin] || 0;
       const sellPrice = pos.trail_line > 0 ? fmtPrice(pos.trail_line) : '—';
-      posEl.style.display = '';
-      posEl.innerHTML = `
-        <div class="cc-pos-header">
-          <span class="cc-pos-value">${fmtUSD(pos.value_usd)}</span>
-          <span class="cc-pos-pnl ${pnlClass}">${fmtPct(pnl)}</span>
-        </div>
-        <div class="cc-pos-grid">
-          <div class="cc-pf"><span class="cc-pf-l">Qty</span><span class="cc-pf-v">${fmtQty(pos.quantity, c.coin)}</span></div>
-          <div class="cc-pf"><span class="cc-pf-l">Avg Cost</span><span class="cc-pf-v">${fmtPrice(pos.avg_cost_basis)}</span></div>
-          <div class="cc-pf"><span class="cc-pf-l">Bid / Ask</span><span class="cc-pf-v">${fmtPrice(pos.current_buy_price)} / ${fmtPrice(pos.current_sell_price)}</span></div>
-          <div class="cc-pf"><span class="cc-pf-l">Sell Level</span><span class="cc-pf-v">${sellPrice}</span></div>
-          <div class="cc-pf"><span class="cc-pf-l">Next DCA</span><span class="cc-pf-v">${pos.next_dca_display || '—'}</span></div>
-          <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${pos.dca_triggered_stages > 0 ? '<span class="pos-dca-chip">stg ' + pos.dca_triggered_stages + '</span>' : '—'} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>
+      posHtml += `
+        <div class="cc-xk-section">
+          <div class="cc-pos-header">
+            <span class="cc-xk-label" style="color:${color}">${xk}</span>
+            <span class="cc-pos-value">${fmtUSD(pos.value_usd)}</span>
+            <span class="cc-pos-pnl ${pnlClass}">${fmtPct(pnl)}</span>
+          </div>
+          <div class="cc-pos-grid">
+            <div class="cc-pf"><span class="cc-pf-l">Qty</span><span class="cc-pf-v">${fmtQty(pos.quantity, c.coin)}</span></div>
+            <div class="cc-pf"><span class="cc-pf-l">Avg Cost</span><span class="cc-pf-v">${fmtPrice(pos.avg_cost_basis)}</span></div>
+            <div class="cc-pf"><span class="cc-pf-l">Bid / Ask</span><span class="cc-pf-v">${fmtPrice(pos.current_sell_price)} / ${fmtPrice(pos.current_buy_price)}</span></div>
+            <div class="cc-pf"><span class="cc-pf-l">Sell Level</span><span class="cc-pf-v">${sellPrice}</span></div>
+            <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${pos.dca_triggered_stages > 0 ? '<span class="pos-dca-chip">stg ' + pos.dca_triggered_stages + '</span>' : '—'} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>
+          </div>
         </div>`;
+    });
+    if (posHtml) {
+      posEl.style.display = '';
+      posEl.innerHTML = posHtml;
     } else {
       posEl.style.display = 'none';
       posEl.innerHTML = '';
@@ -437,8 +532,11 @@ function updateSignals(signals) {
 
 function mergePositionsIntoCoins() {
   state.coins.forEach(coin => {
-    const pos = state.positions[coin.coin];
-    coin.position = (pos && pos.quantity > 0) ? pos : null;
+    if (!coin.positions) coin.positions = {};
+    state.exchangeList.forEach(xk => {
+      const xkPos = (state.positions[xk] || {})[coin.coin];
+      coin.positions[xk] = (xkPos && xkPos.quantity > 0) ? xkPos : null;
+    });
   });
 }
 
@@ -464,7 +562,8 @@ function selectCoin(coin) {
   }
 
   $$('.coin-card').forEach(c => c.classList.toggle('active', c.dataset.coin === coin));
-  $('#acct-block-portfolio').classList.remove('active');
+  const pb = $('#acct-block-portfolio');
+  if (pb) pb.classList.remove('active');
 
   $('#chart-coin-label').textContent = coin;
   $('#tf-selector').style.display = '';
@@ -506,7 +605,8 @@ function selectAccountChart(hours) {
   state.selectedCoin = null;
 
   $$('.coin-card').forEach(c => c.classList.remove('active'));
-  $('#acct-block-portfolio').classList.add('active');
+  const pb = $('#acct-block-portfolio');
+  if (pb) pb.classList.add('active');
 
   $('#chart-coin-label').textContent = 'PORTFOLIO';
   $('#tf-selector').style.display = 'none';
@@ -622,7 +722,7 @@ async function loadAccountChart(hours) {
     state.chart.remove();
     state.chart = null;
     state.candleSeries = null;
-    state.areaSeries = null;
+    state.acctSeries = {};
     state.priceLines = [];
   }
 
@@ -657,37 +757,19 @@ async function loadAccountChart(hours) {
     },
   });
 
-  state.areaSeries = state.chart.addLineSeries({
-    color: '#8888A8',
-    lineWidth: 2,
-    priceFormat: {type: 'price', precision: 2, minMove: 0.01},
+  state.exchangeList.forEach(xk => {
+    state.acctSeries[xk] = state.chart.addLineSeries({
+      color: XK_COLORS[xk] || '#8888A8',
+      lineWidth: 2,
+      title: xk,
+      priceFormat: {type: 'price', precision: 2, minMove: 0.01},
+    });
   });
 
   await _applyAccountData(hours);
 
-  try {
-    const trades = await api('trades?limit=500');
-    if (trades.trades && trades.trades.length > 0) {
-      const cutoff = hours > 0 ? (Date.now() / 1000) - hours * 3600 : 0;
-      const markers = trades.trades
-        .filter(t => t.ts >= cutoff)
-        .map(t => ({
-          time: Math.floor(t.ts),
-          position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
-          color: t.side === 'buy' ? '#FF4466' : '#00CC66',
-          shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown',
-          text: (t.symbol || '').replace('_USD', '') + (t.tag ? ' ' + t.tag : ''),
-        }));
-      if (markers.length > 0) {
-        markers.sort((a, b) => a.time - b.time);
-        state.areaSeries.setMarkers(markers);
-      }
-    }
-  } catch {}
-
   state.chart.timeScale().fitContent();
 
-  // Range buttons in place of timeframe selector
   const tfContainer = $('#tf-selector');
   tfContainer.style.display = '';
   tfContainer.innerHTML = '';
@@ -699,7 +781,6 @@ async function loadAccountChart(hours) {
     tfContainer.appendChild(btn);
   });
 
-  // Auto-refresh every 30s
   state.chartRefreshTimer = setInterval(async () => {
     if (state.chartMode !== 'account') return;
     await _applyAccountData(state.accountRange);
@@ -714,14 +795,15 @@ async function loadAccountChart(hours) {
 }
 
 async function _applyAccountData(hours) {
-  if (!state.areaSeries) return;
   try {
     const qs = hours > 0 ? `?hours=${hours}` : '';
     const data = await api('account-history' + qs);
-    if (data.history && data.history.length > 0) {
-      const points = data.history.map(h => ({time: Math.floor(h.ts), value: h.total_account_value}));
-      state.areaSeries.setData(points);
-    }
+    const histByXk = data.history || {};
+    state.exchangeList.forEach(xk => {
+      const series = state.acctSeries[xk];
+      const points = (histByXk[xk] || []).map(h => ({time: Math.floor(h.ts), value: h.total_account_value}));
+      if (series && points.length > 0) series.setData(points);
+    });
   } catch {}
 }
 
@@ -729,33 +811,33 @@ async function updateChartTradeMarkers(coin) {
   if (!state.candleSeries || !coin) return;
   try {
     const data = await api(`coins/${coin}`);
-    const trades = data.trades || [];
-    if (trades.length === 0) { state.candleSeries.setMarkers([]); return; }
+    const allTrades = [];
+    const tradesByXk = data.trades || {};
+    state.exchangeList.forEach(xk => {
+      (tradesByXk[xk] || []).forEach(t => allTrades.push({...t, _xk: xk}));
+    });
 
-    const markers = trades.map(t => {
+    if (allTrades.length === 0) { state.candleSeries.setMarkers([]); return; }
+
+    const markers = allTrades.map(t => {
       const side = (t.side || '').toLowerCase();
       const tag = (t.tag || '').toUpperCase();
+      const xkLabel = XK_LABELS[t._xk] || t._xk[0].toUpperCase();
       let label, color, shape, position;
 
       if (side === 'buy') {
-        label = tag === 'DCA' ? 'DCA' : 'BUY';
+        label = tag === 'DCA' ? `${xkLabel}:DCA` : `${xkLabel}:BUY`;
         color = tag === 'DCA' ? '#A855F7' : '#FF4466';
         shape = 'arrowUp';
         position = 'belowBar';
       } else {
-        label = 'SELL';
+        label = `${xkLabel}:SELL`;
         color = '#00CC66';
         shape = 'arrowDown';
         position = 'aboveBar';
       }
 
-      return {
-        time: Math.floor(t.ts),
-        position,
-        color,
-        shape,
-        text: label,
-      };
+      return { time: Math.floor(t.ts), position, color, shape, text: label };
     });
 
     markers.sort((a, b) => a.time - b.time);
@@ -802,42 +884,34 @@ function updateChartPriceLines() {
     state.priceLines.push(pl);
   });
 
-  const pos = state.positions[state.selectedCoin];
-  if (pos && pos.quantity > 0) {
+  state.exchangeList.forEach(xk => {
+    const pos = (state.positions[xk] || {})[state.selectedCoin];
+    if (!pos || pos.quantity <= 0) return;
+    const color = XK_COLORS[xk] || '#888';
+    const label = XK_LABELS[xk] || xk[0].toUpperCase();
+
     if (pos.avg_cost_basis) {
       const pl = state.candleSeries.createPriceLine({
-        price: pos.avg_cost_basis,
-        color: '#F0B429',
-        lineWidth: 1,
-        lineStyle: 0,
-        axisLabelVisible: true,
-        title: 'AVG',
+        price: pos.avg_cost_basis, color, lineWidth: 1, lineStyle: 0,
+        axisLabelVisible: true, title: `${label}:AVG`,
       });
       state.priceLines.push(pl);
     }
     if (pos.trail_line && pos.trail_line > 0) {
       const pl = state.candleSeries.createPriceLine({
-        price: pos.trail_line,
-        color: '#00CC66',
-        lineWidth: 2,
-        lineStyle: 0,
-        axisLabelVisible: true,
-        title: 'SELL',
+        price: pos.trail_line, color: '#00CC66', lineWidth: 2, lineStyle: 0,
+        axisLabelVisible: true, title: `${label}:SELL`,
       });
       state.priceLines.push(pl);
     }
     if (pos.dca_line_price) {
       const pl = state.candleSeries.createPriceLine({
-        price: pos.dca_line_price,
-        color: '#A855F7',
-        lineWidth: 1,
-        lineStyle: 2,
-        axisLabelVisible: true,
-        title: 'DCA',
+        price: pos.dca_line_price, color: '#A855F7', lineWidth: 1, lineStyle: 2,
+        axisLabelVisible: true, title: `${label}:DCA`,
       });
       state.priceLines.push(pl);
     }
-  }
+  });
 }
 
 function updateMidPriceLine() {
@@ -877,43 +951,34 @@ function updateMidPriceLine() {
 
 function updateCoinPosition(coin) {
   const container = $('#coin-position');
-  const pos = state.positions[coin];
+  const xks = state.exchangeList;
+  const anyPos = xks.some(xk => {
+    const pos = (state.positions[xk] || {})[coin];
+    return pos && pos.quantity > 0;
+  });
 
-  if (!pos || pos.quantity <= 0) {
+  if (!anyPos) {
     container.classList.add('hidden');
     return;
   }
 
   container.classList.remove('hidden');
-  const pnl = pos.gain_loss_pct_buy;
-  const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-
-  container.innerHTML = `
-    <div class="pos-stat">
-      <span class="pos-stat-label">Quantity</span>
-      <span class="pos-stat-value">${fmtQty(pos.quantity, coin)}</span>
-    </div>
-    <div class="pos-stat">
-      <span class="pos-stat-label">Value</span>
-      <span class="pos-stat-value">${fmtUSD(pos.value_usd)}</span>
-    </div>
-    <div class="pos-stat">
-      <span class="pos-stat-label">Avg Cost</span>
-      <span class="pos-stat-value">${fmtPrice(pos.avg_cost_basis)}</span>
-    </div>
-    <div class="pos-stat">
-      <span class="pos-stat-label">P&L</span>
-      <span class="pos-stat-value ${pnlClass}">${fmtPct(pnl)}</span>
-    </div>
-    <div class="pos-stat">
-      <span class="pos-stat-label">DCA Stage</span>
-      <span class="pos-stat-value">${pos.dca_triggered_stages} ${pos.trail_active ? '<span class="pos-trail-active">⬡ TRAILING</span>' : ''}</span>
-    </div>
-    <div class="pos-stat">
-      <span class="pos-stat-label">Next DCA</span>
-      <span class="pos-stat-value">${pos.next_dca_display || '—'}</span>
-    </div>
-  `;
+  let html = '';
+  xks.forEach(xk => {
+    const pos = (state.positions[xk] || {})[coin];
+    if (!pos || pos.quantity <= 0) return;
+    const pnl = pos.gain_loss_pct_buy;
+    const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+    const color = XK_COLORS[xk] || '#888';
+    html += `
+      <div class="pos-stat-group">
+        <span class="pos-stat-xk" style="color:${color}">${xk}</span>
+        <div class="pos-stat"><span class="pos-stat-label">Value</span><span class="pos-stat-value">${fmtUSD(pos.value_usd)}</span></div>
+        <div class="pos-stat"><span class="pos-stat-label">P&L</span><span class="pos-stat-value ${pnlClass}">${fmtPct(pnl)}</span></div>
+        <div class="pos-stat"><span class="pos-stat-label">Avg Cost</span><span class="pos-stat-value">${fmtPrice(pos.avg_cost_basis)}</span></div>
+      </div>`;
+  });
+  container.innerHTML = html;
 }
 
 // ── Trade History Tab ──
@@ -923,29 +988,38 @@ async function loadTradeHistory() {
   if (!data.trades) return;
 
   const container = $('#history-list');
-  let trades = data.trades.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  let allTrades = [];
+  const tradesByXk = data.trades;
+  state.exchangeList.forEach(xk => {
+    (tradesByXk[xk] || []).forEach(t => allTrades.push({...t, _xk: xk}));
+  });
+
+  allTrades.sort((a, b) => (b.ts || 0) - (a.ts || 0));
   const filter = state.historyFilterCoin;
   if (filter) {
-    trades = trades.filter(t => (t.symbol || '').startsWith(filter + '_'));
+    allTrades = allTrades.filter(t => (t.symbol || '').startsWith(filter + '_'));
   }
 
-  if (trades.length === 0) {
+  if (allTrades.length === 0) {
     container.innerHTML = '<div class="empty-state">No trade history</div>';
     return;
   }
 
-  container.innerHTML = trades.map(t => {
+  container.innerHTML = allTrades.map(t => {
     const coin = (t.symbol || '').replace('_USD', '');
     const tagClass = t.tag || '';
     const tagHtml = t.tag ? `<span class="hist-tag ${tagClass}">${t.tag}</span>` : '';
     const isSell = t.side === 'sell';
     const hasPnl = isSell && t.pnl_pct != null;
     const pnlClass = hasPnl ? (t.pnl_pct >= 0 ? 'positive' : 'negative') : '';
+    const xkColor = XK_COLORS[t._xk] || '#888';
+    const xkBadge = `<span class="hist-xk" style="color:${xkColor}">${XK_LABELS[t._xk] || t._xk[0].toUpperCase()}</span>`;
 
     if (isSell && hasPnl) {
       return `
         <div class="hist-row hist-row-sell" data-coin="${coin}">
           <span class="hist-time">${fmtDateTime(t.ts)}</span>
+          ${xkBadge}
           <span class="hist-side sell">sell</span>
           <span>${coin} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
           <span class="hist-amount">${fmtUSD(t.notional_usd)}</span>
@@ -960,6 +1034,7 @@ async function loadTradeHistory() {
     return `
       <div class="hist-row" data-coin="${coin}">
         <span class="hist-time">${fmtDateTime(t.ts)}</span>
+        ${xkBadge}
         <span class="hist-side ${t.side}">${t.side}</span>
         <span>${coin} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
         <span class="hist-amount">${fmtUSD(t.notional_usd)}</span>
@@ -972,11 +1047,97 @@ async function loadTradeHistory() {
   });
 }
 
+// ── Compare Tab ──
+
+function cmpVal(v) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toFixed(2);
+}
+function cmpPct(v) {
+  if (v == null || isNaN(v)) return '—';
+  const n = Number(v);
+  return (n >= 0 ? '+' : '') + n.toFixed(2);
+}
+
+async function loadCompare() {
+  const container = $('#compare-content');
+  try {
+    const data = await api('comparison');
+    if (!data.coins) return;
+
+    const xks = data.exchanges || state.exchangeList;
+    const multi = xks.length >= 2;
+    const c0 = XK_COLORS[xks[0]] || '#888';
+    const c1 = multi ? (XK_COLORS[xks[1]] || '#888') : c0;
+
+    let html = '<table class="compare-table"><thead>';
+    html += '<tr class="compare-hdr-top"><th rowspan="2">Coin</th>';
+    html += '<th colspan="2">Value $</th><th colspan="2">P&L %</th>';
+    if (multi) html += '<th colspan="2">Δ</th><th rowspan="2">Fees $</th>';
+    html += '</tr><tr class="compare-hdr-sub">';
+    html += `<th style="color:${c0}">${xks[0]}</th><th style="color:${c1}">${multi ? xks[1] : ''}</th>`;
+    html += `<th style="color:${c0}">${xks[0]}</th><th style="color:${c1}">${multi ? xks[1] : ''}</th>`;
+    if (multi) html += '<th>$</th><th>%</th>';
+    html += '</tr></thead><tbody>';
+
+    data.coins.forEach(row => {
+      const hasPos = xks.some(xk => (row[xk]?.value_usd || 0) > 0) || row.coin === 'USDT';
+      const dimClass = hasPos ? '' : ' compare-dim';
+      html += `<tr class="${dimClass}"><td class="compare-coin">${row.coin}</td>`;
+      xks.forEach(xk => {
+        const d = row[xk] || {};
+        html += `<td>${cmpVal(d.value_usd)}</td>`;
+      });
+      xks.forEach(xk => {
+        const d = row[xk] || {};
+        const pnlClass = hasPos ? ((d.pnl_pct || 0) >= 0 ? 'positive' : 'negative') : '';
+        html += `<td class="${pnlClass}">${cmpPct(d.pnl_pct)}</td>`;
+      });
+      if (multi) {
+        const d0 = row[xks[0]] || {};
+        const d1 = row[xks[1]] || {};
+        const dVal = (d1.value_usd || 0) - (d0.value_usd || 0);
+        const dvClass = hasPos ? (dVal >= 0 ? 'positive' : 'negative') : '';
+        const dPnl = (d1.pnl_pct || 0) - (d0.pnl_pct || 0);
+        const dpClass = hasPos ? (dPnl >= 0 ? 'positive' : 'negative') : '';
+        html += `<td class="${dvClass}">${cmpVal(dVal)}</td>`;
+        html += `<td class="${dpClass}">${cmpPct(dPnl)}</td>`;
+        html += `<td>${cmpVal(d1.total_fees)}</td>`;
+      }
+      html += '</tr>';
+    });
+
+    if (data.totals && multi) {
+      const t0 = data.totals[xks[0]] || {};
+      const t1 = data.totals[xks[1]] || {};
+      html += `<tr class="compare-totals"><td>TOTAL</td>`;
+      html += '<td>—</td><td>—</td>';
+      xks.forEach(xk => {
+        const t = data.totals[xk] || {};
+        const rClass = (t.realized_profit || 0) >= 0 ? 'positive' : 'negative';
+        html += `<td class="${rClass}">${cmpVal(t.realized_profit)}</td>`;
+      });
+      const delta = (t1.realized_profit || 0) - (t0.realized_profit || 0);
+      const dClass = delta >= 0 ? 'positive' : 'negative';
+      html += '<td>—</td>';
+      html += `<td class="${dClass}">${cmpVal(delta)}</td>`;
+      html += `<td>${cmpVal(t1.total_fees)}</td>`;
+      html += '</tr>';
+    }
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state">Failed to load comparison</div>';
+  }
+}
+
 // ── LTH Tab ──
 
 function renderLTH() {
   const container = $('#lth-list');
-  const positions = state.positions;
+  const primaryXk = state.exchangeList[0] || 'control';
+  const positions = state.positions[primaryXk] || {};
   const lthCoins = Object.entries(positions).filter(([_, p]) => p.lth_reserved_qty > 0);
 
   if (lthCoins.length === 0) {
@@ -1050,10 +1211,8 @@ function renderTraining(coins) {
     if (fail && fail.exception_type) {
       const esc = s => String(s).replace(/</g, '&lt;').replace(/>/g, '&gt;');
       const utc = ts => ts ? new Date(ts * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC') : '—';
-
       const tsKeys = new Set(['start_time', 'end_time']);
       const fmtVal = (k, v) => tsKeys.has(k) && /^\d{9,}$/.test(String(v)) ? utc(Number(v)) : esc(v);
-
       const stateRows = fail.trainer_state ? Object.entries(fail.trainer_state)
         .filter(([, v]) => !Array.isArray(v))
         .map(([k, v]) => `<tr><td class="fail-key">${esc(k)}</td><td>${fmtVal(k, v)}</td></tr>`)
@@ -1156,8 +1315,15 @@ function renderSettings(s) {
         <input type="text" id="set-coins" value="${(s.coins || []).join(', ')}">
       </div>
       <div class="settings-field">
-        <label>Exchange</label>
-        <input type="text" id="set-exchange" value="${s.exchange || 'demo'}">
+        <label>Exchanges (comma-separated)</label>
+        <input type="text" id="set-exchanges" value="${(s.exchanges || ['control']).join(', ')}">
+      </div>
+      <div class="settings-field">
+        <label>Live Price Source</label>
+        <select id="set-price-source">
+          <option value="kraken" ${(s.live_price_source || 'kraken') === 'kraken' ? 'selected' : ''}>Kraken</option>
+          <option value="kucoin" ${s.live_price_source === 'kucoin' ? 'selected' : ''}>KuCoin</option>
+        </select>
       </div>
     </div>
     <div class="settings-group">
@@ -1210,14 +1376,10 @@ function renderSettings(s) {
       </div>
     </div>
     <div class="settings-group">
-      <div class="settings-group-title">Demo / Simulation</div>
+      <div class="settings-group-title">Control Exchange</div>
       <div class="settings-field">
-        <label>Starting USD</label>
-        <input type="number" id="set-demo-usd" value="${s.demo_starting_usd || 10000}" step="1000">
-      </div>
-      <div class="settings-field">
-        <label>Slippage Factor</label>
-        <input type="number" id="set-demo-slip" value="${s.demo_slippage_factor || 0}" step="0.001">
+        <label title="0 = auto-sync from Kraken balance on first run">Starting USD (0 = sync from Kraken)</label>
+        <input type="number" id="set-ctrl-usd" value="${s.control_starting_usd || 0}" step="1000">
       </div>
     </div>
     <div class="settings-group">
@@ -1240,7 +1402,9 @@ async function saveSettings() {
   const updated = {...current};
 
   updated.coins = $('#set-coins').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-  updated.exchange = $('#set-exchange').value.trim().toLowerCase();
+  updated.exchanges = $('#set-exchanges').value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+  updated.exchange = updated.exchanges[0] || 'control';
+  updated.live_price_source = $('#set-price-source').value;
   updated.trade_start_level = parseInt($('#set-tsl').value) || 1;
   updated.start_allocation_pct = parseFloat($('#set-alloc').value) || 0.5;
   updated.dca_levels = $('#set-dca').value.split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
@@ -1251,8 +1415,7 @@ async function saveSettings() {
   updated.trailing_gap_pct = parseFloat($('#set-gap').value) || 0.1;
   updated.long_term_holdings = $('#set-lth').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
   updated.lth_profit_alloc_pct = parseFloat($('#set-lth-pct').value) || 50;
-  updated.demo_starting_usd = parseFloat($('#set-demo-usd').value) || 10000;
-  updated.demo_slippage_factor = parseFloat($('#set-demo-slip').value) || 0;
+  updated.control_starting_usd = parseFloat($('#set-ctrl-usd').value) || 0;
   updated.auto_start_scripts = $('#set-autostart').checked;
 
   const result = await apiPut('settings', updated);
@@ -1264,6 +1427,17 @@ async function saveSettings() {
 }
 
 // ── Logs Tab ──
+
+function populateLogSourceDropdown() {
+  const select = $('#log-source');
+  if (!select) return;
+  const currentVal = select.value;
+  select.innerHTML = '<option value="neural">Neural Runner</option>';
+  state.exchangeList.forEach(xk => {
+    select.innerHTML += `<option value="trader-${xk}">Trader: ${xk}</option>`;
+  });
+  if (currentVal) select.value = currentVal;
+}
 
 async function refreshLogs() {
   const source = $('#log-source').value;
@@ -1284,6 +1458,7 @@ function setupTabs() {
 
       if (state.logRefreshTimer) { clearInterval(state.logRefreshTimer); state.logRefreshTimer = null; }
       if (tab === 'history') { state.historyFilterCoin = null; _updateHistoryTabLabel(); loadTradeHistory(); }
+      if (tab === 'compare') loadCompare();
       if (tab === 'lth') renderLTH();
       if (tab === 'training') loadAndRenderTraining();
       if (tab === 'settings') loadAndRenderSettings();
@@ -1344,6 +1519,22 @@ function setupButtons() {
     await apiPost('train-all');
     setTimeout(refreshAll, 2000);
     setTimeout(() => { $('#btn-train-all').disabled = false; }, 5000);
+  });
+
+  $('#btn-close-all').addEventListener('click', async () => {
+    if (!confirm('Close ALL positions on ALL exchanges?')) return;
+    $('#btn-close-all').disabled = true;
+    await apiPost('close-all');
+    setTimeout(refreshAll, 2000);
+    setTimeout(() => { $('#btn-close-all').disabled = false; }, 5000);
+  });
+
+  $('#btn-sync-control').addEventListener('click', async () => {
+    $('#btn-sync-control').disabled = true;
+    const res = await apiPost('sync-control');
+    if (res && !res.ok) alert(res.error || 'Sync failed');
+    setTimeout(refreshAll, 1000);
+    setTimeout(() => { $('#btn-sync-control').disabled = false; }, 3000);
   });
 
   $('#btn-refresh-logs').addEventListener('click', refreshLogs);

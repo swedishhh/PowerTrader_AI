@@ -4,7 +4,7 @@ import uuid
 import time
 import math
 import shutil
-from decimal import Decimal, ROUND_HALF_UP, ROUND_CEILING, ROUND_FLOOR
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Optional, List
 import os
 import colorama
@@ -1676,26 +1676,6 @@ class CryptoAPITrading:
         # Per-trade fallback: only apply on SELL realized profit if fees were missing.
         fee_fallback = 0.02 if (fees_missing and side_l == "sell") else 0.0
 
-        # Prefer API-provided notional; fall back to qty*price if needed.
-        #
-        # IMPORTANT (matches RH app/accounting precisely):
-        # Robinhood settles USD debits/credits to the cent. If we keep fractional-cent
-        # notional from price*qty math, we will systematically overstate profit.
-        #
-        # Settlement rounding behavior:
-        # - BUY: cost is rounded UP to the nearest cent (more debit)
-        # - SELL: proceeds are rounded DOWN to the nearest cent (less credit)
-        def _round_usd_to_cents(amount: float, side_lower: str) -> float:
-            try:
-                d = Decimal(str(amount))
-                if side_lower == "buy":
-                    return float(d.quantize(Decimal("0.01"), rounding=ROUND_CEILING))
-                if side_lower == "sell":
-                    return float(d.quantize(Decimal("0.01"), rounding=ROUND_FLOOR))
-                return float(d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
-            except Exception:
-                return float(amount)
-
         notional = None
         if notional_usd is not None:
             try:
@@ -1705,7 +1685,7 @@ class CryptoAPITrading:
 
         if notional is None and price is not None:
             try:
-                notional = _round_usd_to_cents(float(price) * float(qty), side_l)
+                notional = float(price) * float(qty)
             except Exception:
                 notional = None
 

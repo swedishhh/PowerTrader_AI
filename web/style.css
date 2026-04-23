@@ -65,14 +65,18 @@ body {
 /* ── Top Bar ── */
 #topbar {
   display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 0 20px;
-  height: 56px;
-  min-height: 56px;
+  flex-direction: column;
   background: var(--bg-base);
   border-bottom: 1px solid var(--border);
   z-index: 100;
+}
+
+.topbar-row-main {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 4px 20px;
+  min-height: 42px;
 }
 
 .topbar-brand {
@@ -148,59 +152,89 @@ body {
   50% { opacity: 0.5; }
 }
 
-.topbar-account {
-  display: flex;
-  gap: 16px;
-  margin-left: auto;
-  flex-shrink: 0;
-}
-
-.acct-block {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-
-.acct-block.clickable {
-  cursor: pointer;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  transition: var(--transition);
-}
-
-.acct-block.clickable:hover {
-  background: var(--bg-surface);
-}
-
-.acct-block.clickable.active {
-  background: var(--bg-elevated);
-  border: 1px solid var(--gold-dim);
-}
-
-.acct-label {
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-.acct-value {
-  font-family: var(--font-mono);
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.acct-value.positive { color: var(--green); }
-.acct-value.negative { color: var(--red); }
-
 .topbar-actions {
   display: flex;
   gap: 8px;
   flex-shrink: 0;
-  margin-left: 12px;
+  margin-left: auto;
 }
+
+/* ── Exchange table (topbar) ── */
+#topbar-account {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.xk-table {
+  border-collapse: collapse;
+  width: auto;
+}
+
+.xk-table th {
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 0 12px 2px 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.xk-table th:first-child {
+  text-align: left;
+  padding-right: 14px;
+}
+
+.xk-table-name {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding-right: 14px;
+  white-space: nowrap;
+}
+
+.xk-table-val {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+  text-align: right;
+  padding: 1px 12px 1px 0;
+  white-space: nowrap;
+}
+
+.xk-table-val.positive { color: var(--green); }
+.xk-table-val.negative { color: var(--red); }
+
+.xk-table-sub {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.7;
+}
+
+/* ── Portfolio button (left pane) ── */
+.btn-portfolio {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: var(--transition);
+  margin-left: auto;
+  margin-right: 8px;
+}
+
+.btn-portfolio:hover { background: var(--bg-hover); color: var(--text-secondary); }
+.btn-portfolio.active { background: var(--gold-dim); border-color: var(--gold); color: var(--gold); }
 
 /* ── Buttons ── */
 .btn {
@@ -400,7 +434,7 @@ body {
 }
 
 .coin-card.simple .cc-mid { color: var(--text-muted); }
-.coin-card.simple .cc-ls { margin-left: auto; }
+.coin-card.simple .cc-pos-fields { margin-left: auto; }
 .coin-card.simple .cc-long { color: var(--cyan); font-weight: 600; }
 .coin-card.simple .cc-short { color: var(--red); font-weight: 600; }
 .coin-card.simple .cc-sep { color: var(--text-muted); margin: 0 1px; font-size: 10px; }
@@ -764,7 +798,7 @@ body {
 
 .hist-row {
   display: grid;
-  grid-template-columns: 110px 32px 1fr auto;
+  grid-template-columns: 110px 18px 32px 1fr auto;
   gap: 6px;
   align-items: center;
   padding: 6px 8px;
@@ -793,12 +827,12 @@ body {
 .hist-amount { text-align: right; }
 
 .hist-row-sell {
-  grid-template-columns: 110px 32px 1fr auto;
+  grid-template-columns: 110px 18px 32px 1fr auto;
   grid-template-rows: auto auto;
 }
 
 .hist-sell-detail {
-  grid-column: 3 / -1;
+  grid-column: 4 / -1;
   display: flex;
   gap: 8px;
   font-size: 10px;
@@ -1109,6 +1143,153 @@ body {
 .coin-card:nth-child(8) { animation-delay: 210ms; }
 .coin-card:nth-child(n+9) { animation-delay: 240ms; }
 
+/* ── Exchange badge (topbar) ── */
+.xk-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+  box-shadow: 0 0 6px currentColor;
+}
+
+
+/* ── Exchange badges (coin cards, simple mode) ── */
+.cc-pos-fields {
+  display: flex;
+  gap: 8px;
+}
+
+.cc-xk-pos {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+}
+
+.cc-xk-tag {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 10px;
+  margin-right: 2px;
+}
+
+/* ── Exchange sections (coin cards, detail mode) ── */
+.cc-xk-section {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.cc-xk-section:first-child {
+  margin-top: 8px;
+  padding-top: 8px;
+}
+
+.cc-xk-label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* ── Below-chart position (per exchange) ── */
+.pos-stat-group {
+  display: grid;
+  grid-template-columns: 70px repeat(auto-fit, minmax(100px, 1fr));
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.pos-stat-group:last-child {
+  border-bottom: none;
+}
+
+.pos-stat-xk {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+/* ── Exchange badge (trade history) ── */
+.hist-xk {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 10px;
+  text-align: center;
+}
+
+/* ── Compare Tab ── */
+.compare-content {
+  overflow-x: auto;
+}
+
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.compare-table th {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 4px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-bright);
+  white-space: nowrap;
+}
+
+.compare-hdr-top th { text-align: center; border-bottom: 1px solid var(--border); padding-bottom: 2px; }
+.compare-hdr-top th:first-child { text-align: left; }
+.compare-hdr-sub th { font-size: 9px; padding-top: 2px; text-align: right; }
+
+.compare-table td {
+  padding: 6px 10px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  text-align: right;
+}
+
+.compare-dim td { color: var(--text-muted); }
+.compare-dim .compare-coin { color: var(--text-muted); }
+.compare-dim .positive, .compare-dim .negative { color: var(--text-muted); }
+
+.compare-table tr:hover td {
+  background: var(--bg-surface);
+}
+
+.compare-coin {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.compare-totals td {
+  font-weight: 600;
+  border-top: 2px solid var(--border-bright);
+  border-bottom: none;
+  color: var(--text-primary);
+  padding-top: 10px;
+}
+
+.compare-table .positive { color: var(--green); }
+.compare-table .negative { color: var(--red); }
+
 /* ═══════════════════════════════════════════════════════════
    Responsive
    ═══════════════════════════════════════════════════════════ */
@@ -1140,7 +1321,7 @@ body {
     overflow-x: auto;
   }
 
-  .topbar-account { display: none; }
+  .topbar-row-data { display: none; }
   .topbar-actions { margin-left: auto; }
   .brand-name { font-size: 13px; letter-spacing: 2px; }
 

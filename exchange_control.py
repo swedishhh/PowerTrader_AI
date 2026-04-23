@@ -1,9 +1,11 @@
 """
-Demo exchange adapter.
+Control exchange adapter.
 
-Simulates trading using KuCoin market data prices with configurable slippage.
-No real money is involved — all balances and fills are tracked in memory and
-persisted to per-exchange data files by pt_trader.py.
+Simulates zero-friction trading as a baseline for comparing against real exchanges.
+Uses the same price source as the live exchange (Kraken by default) but with zero
+fees and zero bid/ask spread — trades execute at mid-price.
+
+Balances and fills are tracked in memory and persisted to a state file.
 """
 
 from __future__ import annotations
@@ -14,23 +16,56 @@ import time
 import uuid
 from typing import Dict, List, Optional, Tuple
 
-from kucoin.client import Market
-
 from exchange_api import ExchangeAdapter, OrderResult
 
-_market = Market(url="https://api.kucoin.com")
-
-# Default simulated account
 _DEFAULT_STARTING_USD = 10000.0
-_DEFAULT_SLIPPAGE_FACTOR = 0.001  # 0.1% per trade
 
 
-class DemoAdapter(ExchangeAdapter):
+def _load_settings() -> dict:
+    settings_path = os.environ.get("POWERTRADER_GUI_SETTINGS") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "gui_settings.json"
+    )
+    try:
+        if os.path.isfile(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as f:
+                return json.load(f) or {}
+    except Exception:
+        pass
+    return {}
+
+
+def _kraken_mid_price(base: str) -> Optional[float]:
+    try:
+        import ccxt
+        _kraken = ccxt.kraken({"enableRateLimit": True})
+        ticker = _kraken.fetch_ticker(f"{base}/USDT")
+        bid = float(ticker.get("bid", 0) or 0)
+        ask = float(ticker.get("ask", 0) or 0)
+        if bid > 0 and ask > 0:
+            return (bid + ask) / 2.0
+    except Exception:
+        pass
+    return None
+
+
+def _kucoin_mid_price(base: str) -> Optional[float]:
+    try:
+        from kucoin.client import Market
+        market = Market(url="https://api.kucoin.com")
+        data = market.get_kline(f"{base}-USDT", "1min")
+        if data and len(data) > 0 and len(data[0]) >= 3:
+            return float(data[0][2])
+    except Exception:
+        pass
+    return None
+
+
+class ControlAdapter(ExchangeAdapter):
 
     def __init__(self, starting_usd: float = _DEFAULT_STARTING_USD,
-                 slippage_factor: float = _DEFAULT_SLIPPAGE_FACTOR,
+                 price_source: str = "kraken",
                  state_path: Optional[str] = None):
-        self._slippage = slippage_factor
+        self._price_source = price_source
         self._state_path = state_path
 
         self._usd_balance: float = starting_usd
@@ -39,10 +74,6 @@ class DemoAdapter(ExchangeAdapter):
 
         if state_path:
             self._load_state()
-
-    # ------------------------------------------------------------------
-    # State persistence
-    # ------------------------------------------------------------------
 
     def _load_state(self) -> None:
         if not self._state_path or not os.path.isfile(self._state_path):
@@ -72,26 +103,13 @@ class DemoAdapter(ExchangeAdapter):
         except Exception:
             pass
 
-    # ------------------------------------------------------------------
-    # Price from KuCoin
-    # ------------------------------------------------------------------
-
-    def _kucoin_price(self, base: str) -> Optional[float]:
-        try:
-            kucoin_sym = f"{base}-USDT"
-            data = _market.get_kline(kucoin_sym, "1min")
-            if data and len(data) > 0 and len(data[0]) >= 3:
-                return float(data[0][2])  # close of most recent 1-min candle
-        except Exception:
-            pass
-        return None
-
-    # ------------------------------------------------------------------
-    # ExchangeAdapter interface
-    # ------------------------------------------------------------------
+    def _get_price(self, base: str) -> Optional[float]:
+        if self._price_source == "kucoin":
+            return _kucoin_mid_price(base)
+        return _kraken_mid_price(base) or _kucoin_mid_price(base)
 
     def to_exchange_symbol(self, canonical: str) -> str:
-        return canonical  # demo uses canonical format internally
+        return canonical
 
     def to_canonical_symbol(self, exchange_sym: str) -> str:
         return exchange_sym
@@ -99,7 +117,7 @@ class DemoAdapter(ExchangeAdapter):
     def get_account_value(self) -> Optional[float]:
         total = self._usd_balance
         for base, qty in self._holdings.items():
-            price = self._kucoin_price(base)
+            price = self._get_price(base)
             if price and qty > 0:
                 total += qty * price
         return total
@@ -117,29 +135,28 @@ class DemoAdapter(ExchangeAdapter):
 
         for canonical in symbols:
             base = self.base_from_canonical(canonical)
-            if base == "USDC":
+            if base in ("USD", "USDT"):
                 continue
-            price = self._kucoin_price(base)
+            price = self._get_price(base)
             if price and price > 0:
-                buy_prices[canonical] = price * (1.0 + self._slippage)
-                sell_prices[canonical] = price * (1.0 - self._slippage)
+                buy_prices[canonical] = price
+                sell_prices[canonical] = price
                 valid.append(canonical)
 
         return buy_prices, sell_prices, valid
 
     def place_buy(self, symbol: str, amount_usd: float) -> Optional[OrderResult]:
         base = self.base_from_canonical(symbol)
-        price = self._kucoin_price(base)
+        price = self._get_price(base)
         if not price or price <= 0:
             return None
 
-        buy_price = price * (1.0 + self._slippage)
-        qty = amount_usd / buy_price
-        cost = qty * buy_price
+        qty = amount_usd / price
+        cost = qty * price
 
         if cost > self._usd_balance:
-            qty = self._usd_balance / buy_price
-            cost = qty * buy_price
+            qty = self._usd_balance / price
+            cost = qty * price
 
         if qty <= 0 or cost <= 0:
             return None
@@ -150,8 +167,8 @@ class DemoAdapter(ExchangeAdapter):
         order_id = str(uuid.uuid4())
         order_rec = {
             "id": order_id, "side": "buy", "symbol": symbol,
-            "state": "filled", "qty": qty, "price": buy_price,
-            "notional": round(cost, 2), "fees": 0.0,
+            "state": "filled", "qty": qty, "price": price,
+            "notional": cost, "fees": 0.0,
             "ts": time.time(),
         }
         self._orders.setdefault(symbol, []).append(order_rec)
@@ -159,8 +176,8 @@ class DemoAdapter(ExchangeAdapter):
 
         return OrderResult(
             order_id=order_id, state="filled",
-            filled_qty=qty, avg_price=buy_price,
-            notional_usd=round(cost, 2), fees_usd=0.0,
+            filled_qty=qty, avg_price=price,
+            notional_usd=cost, fees_usd=0.0,
             raw=order_rec,
         )
 
@@ -172,12 +189,11 @@ class DemoAdapter(ExchangeAdapter):
         if qty <= 0:
             return None
 
-        price = self._kucoin_price(base)
+        price = self._get_price(base)
         if not price or price <= 0:
             return None
 
-        sell_price = price * (1.0 - self._slippage)
-        proceeds = qty * sell_price
+        proceeds = qty * price
 
         self._holdings[base] = held - qty
         if self._holdings[base] < 1e-12:
@@ -187,8 +203,8 @@ class DemoAdapter(ExchangeAdapter):
         order_id = str(uuid.uuid4())
         order_rec = {
             "id": order_id, "side": "sell", "symbol": symbol,
-            "state": "filled", "qty": qty, "price": sell_price,
-            "notional": round(proceeds, 2), "fees": 0.0,
+            "state": "filled", "qty": qty, "price": price,
+            "notional": proceeds, "fees": 0.0,
             "ts": time.time(),
         }
         self._orders.setdefault(symbol, []).append(order_rec)
@@ -196,8 +212,8 @@ class DemoAdapter(ExchangeAdapter):
 
         return OrderResult(
             order_id=order_id, state="filled",
-            filled_qty=qty, avg_price=sell_price,
-            notional_usd=round(proceeds, 2), fees_usd=0.0,
+            filled_qty=qty, avg_price=price,
+            notional_usd=proceeds, fees_usd=0.0,
             raw=order_rec,
         )
 
@@ -205,31 +221,32 @@ class DemoAdapter(ExchangeAdapter):
         return {"results": list(self._orders.get(symbol, []))}
 
 
-def create_adapter() -> DemoAdapter:
+def create_adapter() -> ControlAdapter:
     hub_data = os.environ.get(
         "POWERTRADER_HUB_DIR",
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "state", "hub_data"),
     )
-    state_path = os.path.join(hub_data, "demo_exchange_state.json")
+    state_path = os.path.join(hub_data, "control_exchange_state.json")
 
-    settings_path = os.environ.get("POWERTRADER_GUI_SETTINGS") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "gui_settings.json"
-    )
+    settings = _load_settings()
+    price_source = settings.get("live_price_source", "kraken")
+    starting_usd = float(settings.get("control_starting_usd", 0))
 
-    starting_usd = _DEFAULT_STARTING_USD
-    slippage = _DEFAULT_SLIPPAGE_FACTOR
+    if starting_usd <= 0 and not os.path.isfile(state_path):
+        try:
+            from exchange_kraken import create_adapter as create_kraken
+            kraken = create_kraken()
+            starting_usd = kraken.get_account_value() or _DEFAULT_STARTING_USD
+            print(f"[Control] Starting balance synced from Kraken: ${starting_usd:,.2f}")
+        except Exception:
+            starting_usd = _DEFAULT_STARTING_USD
+            print(f"[Control] Kraken unavailable, using default: ${starting_usd:,.2f}")
 
-    try:
-        if os.path.isfile(settings_path):
-            with open(settings_path, "r", encoding="utf-8") as f:
-                data = json.load(f) or {}
-            starting_usd = float(data.get("demo_starting_usd", starting_usd))
-            slippage = float(data.get("demo_slippage_factor", slippage))
-    except Exception:
-        pass
+    if starting_usd <= 0:
+        starting_usd = _DEFAULT_STARTING_USD
 
-    return DemoAdapter(
+    return ControlAdapter(
         starting_usd=starting_usd,
-        slippage_factor=slippage,
+        price_source=price_source,
         state_path=state_path,
     )

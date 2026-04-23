@@ -3,6 +3,7 @@
 Run:  python pt_web.py [--port 8080]
 
 Provides REST API + WebSocket for real-time updates, serving the web/ frontend.
+Supports multiple exchanges running simultaneously (e.g. control + kraken).
 """
 
 import asyncio
@@ -26,6 +27,23 @@ env = PTEnv(project_dir=PROJECT_DIR)
 ctrl = ProcessController(env)
 app = FastAPI(title="PowerTrader Web")
 
+_adapters: dict = {}
+
+
+def _get_adapter(xk: str):
+    if xk not in _adapters:
+        try:
+            if xk == "kraken":
+                from exchange_kraken import create_adapter
+                _adapters[xk] = create_adapter()
+            elif xk == "control":
+                from exchange_control import create_adapter
+                _adapters[xk] = create_adapter()
+        except Exception as e:
+            print(f"[Adapter] failed to create {xk}: {e}")
+            return None
+    return _adapters.get(xk)
+
 
 # ── Static files ──
 
@@ -37,31 +55,62 @@ async def index():
     return FileResponse(str(WEB_DIR / "index.html"))
 
 
+# ── Helpers ──
+
+def _account_for_exchange(xk: str) -> dict:
+    acct = AccountModel(env, xk)
+    summary = acct.account_summary()
+    pnl = acct.pnl()
+    return {
+        "exchange": xk,
+        "account": summary,
+        "pnl": {
+            "total_realized_profit_usd": pnl.get("total_realized_profit_usd", 0),
+            "lth_profit_bucket_usd": pnl.get("lth_profit_bucket_usd", 0),
+        },
+    }
+
+
+def _downsample(raw: list[dict], max_points: int) -> list[dict]:
+    if len(raw) <= max_points:
+        return raw
+    bucket_size = len(raw) / max_points
+    out = []
+    for i in range(max_points):
+        start = int(i * bucket_size)
+        end = int((i + 1) * bucket_size)
+        chunk = raw[start:end]
+        if chunk:
+            avg_ts = sum(r["ts"] for r in chunk) / len(chunk)
+            avg_val = sum(r["total_account_value"] for r in chunk) / len(chunk)
+            out.append({"ts": avg_ts, "total_account_value": avg_val})
+    return out
+
+
 # ── REST API ──
 
 @app.get("/api/status")
 async def api_status():
     env.reload()
     sm = SystemModel(env)
-    acct = AccountModel(env)
-    summary = acct.account_summary()
-    pnl = acct.pnl()
     ctrl_status = ctrl.status_summary()
     rr = sm.runner_ready()
+
+    exchanges_data = {}
+    for xk in env.exchanges:
+        exchanges_data[xk] = _account_for_exchange(xk)
+
     return {
         "system": {
             "neural_running": ctrl_status["neural_running"],
             "trader_running": ctrl_status["trader_running"],
+            "traders": ctrl_status.get("traders", {}),
             "runner_ready": rr.get("ready", False),
             "runner_stage": rr.get("stage", "unknown"),
             "any_training_running": ctrl_status["any_training_running"],
         },
-        "account": summary,
-        "pnl": {
-            "total_realized_profit_usd": pnl.get("total_realized_profit_usd", 0),
-            "lth_profit_bucket_usd": pnl.get("lth_profit_bucket_usd", 0),
-        },
-        "exchange": env.exchange,
+        "exchanges": exchanges_data,
+        "exchange_list": env.exchanges,
         "coins": env.coins,
     }
 
@@ -70,18 +119,29 @@ async def api_status():
 async def api_coins():
     env.reload()
     coins = []
-    acct = AccountModel(env)
-    positions = acct.all_positions()
     ctrl_status = ctrl.status_summary()
+
+    positions_by_xk = {}
+    for xk in env.exchanges:
+        acct = AccountModel(env, xk)
+        positions_by_xk[xk] = acct.all_positions()
 
     for coin in env.coins:
         cm = CoinModel(env, coin)
         snap = cm.snapshot()
-        pos = positions.get(coin, {})
-        snap["position"] = pos if pos.get("quantity", 0) > 0 else None
-        buy = pos.get("current_buy_price", 0)
-        sell = pos.get("current_sell_price", 0)
-        snap["mid_price"] = (buy + sell) / 2 if (buy and sell) else buy or sell
+
+        snap["positions"] = {}
+        mid_prices = []
+        for xk in env.exchanges:
+            pos = positions_by_xk[xk].get(coin, {})
+            snap["positions"][xk] = pos if pos.get("quantity", 0) > 0 else None
+            buy = pos.get("current_buy_price", 0)
+            sell = pos.get("current_sell_price", 0)
+            mid = (buy + sell) / 2 if (buy and sell) else buy or sell
+            if mid > 0:
+                mid_prices.append(mid)
+
+        snap["mid_price"] = mid_prices[0] if mid_prices else 0
         snap["training_running"] = ctrl_status["training"].get(coin, {}).get("running", False)
         fail = cm.training_failure()
         if fail and fail.get("exception_type"):
@@ -94,59 +154,104 @@ async def api_coins():
 async def api_coin_detail(coin: str):
     coin = coin.upper()
     cm = CoinModel(env, coin)
-    acct = AccountModel(env)
-    positions = acct.all_positions()
-    pos = positions.get(coin, {})
 
-    trades = acct.trade_history(limit=500)
-    coin_trades = [t for t in trades if t.get("symbol", "").startswith(f"{coin}_")]
+    result = {**cm.snapshot(), "positions": {}, "trades": {}}
+    for xk in env.exchanges:
+        acct = AccountModel(env, xk)
+        positions = acct.all_positions()
+        pos = positions.get(coin, {})
+        result["positions"][xk] = pos if pos.get("quantity", 0) > 0 else None
 
-    return {
-        **cm.snapshot(),
-        "position": pos if pos.get("quantity", 0) > 0 else None,
-        "trades": coin_trades[-50:],
-    }
+        trades = acct.trade_history(limit=500)
+        coin_trades = [t for t in trades if t.get("symbol", "").startswith(f"{coin}_")]
+        result["trades"][xk] = coin_trades[-50:]
+
+    return result
 
 
 @app.get("/api/positions")
 async def api_positions():
-    acct = AccountModel(env)
-    return {"positions": acct.positions(), "dca_24h": acct.dca_24h_by_coin()}
+    out = {}
+    dca = {}
+    for xk in env.exchanges:
+        acct = AccountModel(env, xk)
+        out[xk] = acct.positions()
+        dca[xk] = acct.dca_24h_by_coin()
+    return {"positions": out, "dca_24h": dca}
 
 
 @app.get("/api/trades")
-async def api_trades(limit: int = 250):
-    acct = AccountModel(env)
-    return {"trades": acct.trade_history(limit=limit)}
+async def api_trades(limit: int = 250, exchange: str = ""):
+    result = {}
+    targets = [exchange] if exchange else env.exchanges
+    for xk in targets:
+        acct = AccountModel(env, xk)
+        result[xk] = acct.trade_history(limit=limit)
+    return {"trades": result}
 
 
 @app.get("/api/account-history")
 async def api_account_history(hours: float = 0, max_points: int = 500):
-    """Return account value history, optionally filtered by hours and downsampled."""
-    acct = AccountModel(env)
-    raw = acct.account_value_history(limit=0)
+    """Return account value history for all exchanges."""
+    result = {}
+    for xk in env.exchanges:
+        acct = AccountModel(env, xk)
+        raw = acct.account_value_history(limit=0)
+        if hours > 0:
+            cutoff = time.time() - hours * 3600
+            raw = [r for r in raw if r.get("ts", 0) >= cutoff]
+        result[xk] = _downsample(raw, max_points) if raw else []
+    return {"history": result}
 
-    if hours > 0:
-        cutoff = time.time() - hours * 3600
-        raw = [r for r in raw if r.get("ts", 0) >= cutoff]
 
-    if not raw:
-        return {"history": []}
+@app.get("/api/comparison")
+async def api_comparison():
+    """Per-coin comparison across exchanges."""
+    env.reload()
+    coins_out = []
+    for coin in env.coins:
+        row = {"coin": coin}
+        for xk in env.exchanges:
+            acct = AccountModel(env, xk)
+            positions = acct.all_positions()
+            pos = positions.get(coin, {})
+            trades = acct.trade_history(limit=0)
+            coin_trades = [t for t in trades if t.get("symbol", "").startswith(f"{coin}_")]
+            total_fees = sum(float(t.get("fees_usd", 0) or 0) for t in coin_trades)
+            pnl_pct = pos.get("gain_loss_pct_buy", 0) if pos.get("quantity", 0) > 0 else 0
+            value = pos.get("value_usd", 0) if pos.get("quantity", 0) > 0 else 0
+            row[xk] = {
+                "value_usd": value,
+                "pnl_pct": pnl_pct,
+                "total_fees": total_fees,
+                "trade_count": len(coin_trades),
+            }
+        coins_out.append(row)
 
-    if len(raw) <= max_points:
-        return {"history": raw}
+    usdt_row = {"coin": "USDT"}
+    for xk in env.exchanges:
+        acct = AccountModel(env, xk)
+        summary = acct.account_summary()
+        usdt_row[xk] = {
+            "value_usd": summary.get("buying_power", 0),
+            "pnl_pct": 0,
+            "total_fees": 0,
+            "trade_count": 0,
+        }
+    coins_out.append(usdt_row)
 
-    bucket_size = len(raw) / max_points
-    downsampled = []
-    for i in range(max_points):
-        start = int(i * bucket_size)
-        end = int((i + 1) * bucket_size)
-        chunk = raw[start:end]
-        if chunk:
-            avg_ts = sum(r["ts"] for r in chunk) / len(chunk)
-            avg_val = sum(r["total_account_value"] for r in chunk) / len(chunk)
-            downsampled.append({"ts": avg_ts, "total_account_value": avg_val})
-    return {"history": downsampled}
+    coins_out.sort(key=lambda r: r["coin"])
+
+    totals = {}
+    for xk in env.exchanges:
+        acct = AccountModel(env, xk)
+        pnl = acct.pnl()
+        totals[xk] = {
+            "realized_profit": pnl.get("total_realized_profit_usd", 0),
+            "total_fees": sum(c[xk]["total_fees"] for c in coins_out),
+        }
+
+    return {"coins": coins_out, "totals": totals, "exchanges": env.exchanges}
 
 
 @app.get("/api/settings")
@@ -196,6 +301,18 @@ async def api_stop_trader():
     return {"ok": True}
 
 
+@app.post("/api/start-trader/{exchange}")
+async def api_start_trader_xk(exchange: str):
+    ok = ctrl.start_trader(exchange.lower())
+    return {"ok": ok}
+
+
+@app.post("/api/stop-trader/{exchange}")
+async def api_stop_trader_xk(exchange: str):
+    ctrl.stop_trader(exchange.lower())
+    return {"ok": True}
+
+
 @app.post("/api/train-all")
 async def api_train_all():
     results = ctrl.train_all()
@@ -220,24 +337,150 @@ async def api_logs(script: str, limit: int = 200):
     return {"lines": lines}
 
 
+def _refresh_exchange_balance(xk: str, write_history: bool = True):
+    """Query adapter for current balance and update trader_status file."""
+    adapter = _get_adapter(xk)
+    if not adapter:
+        return
+    try:
+        total_value = adapter.get_account_value() or 0
+        buying_power = adapter.get_buying_power() or 0
+        holdings_value = total_value - buying_power
+        pct = (holdings_value / total_value * 100) if total_value > 0 else 0
+
+        status_path = env.trader_status_path(xk)
+        existing = {}
+        if status_path.exists():
+            try:
+                with open(status_path) as f:
+                    existing = json.load(f)
+            except Exception:
+                pass
+
+        existing.setdefault("account", {}).update({
+            "total_account_value": total_value,
+            "buying_power": buying_power,
+            "holdings_sell_value": holdings_value,
+            "holdings_buy_value": holdings_value,
+            "percent_in_trade": pct,
+        })
+        existing.setdefault("positions", {})
+
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(status_path, "w") as f:
+            json.dump(existing, f)
+
+        if write_history and total_value > 0:
+            hist_path = env.account_history_path(xk)
+            with open(hist_path, "a") as f:
+                f.write(json.dumps({"ts": time.time(), "total_account_value": total_value}) + "\n")
+    except Exception as e:
+        print(f"[Balance] {xk} refresh failed: {e}")
+
+
+@app.post("/api/close-all")
+async def api_close_all():
+    """Sell all positions on all exchanges, return to USDT."""
+    ctrl.stop_trader()
+    results = {}
+    for xk in env.exchanges:
+        adapter = _get_adapter(xk)
+        if not adapter:
+            results[xk] = {"ok": False, "error": "no adapter"}
+            continue
+        holdings = adapter.get_holdings()
+        trades = []
+        for coin, qty in holdings.items():
+            symbol = f"{coin}_USD"
+            result = adapter.place_sell(symbol, qty)
+            trades.append({"coin": coin, "qty": qty, "sold": result is not None})
+        _refresh_exchange_balance(xk)
+        results[xk] = {"ok": True, "trades": trades}
+    return {"ok": True, "results": results}
+
+
+@app.post("/api/sync-control")
+async def api_sync_control():
+    """Reset control balance to match kraken USDT. Requires traders stopped, no positions."""
+    if ctrl.trader_running:
+        return {"ok": False, "error": "Traders must be stopped"}
+
+    for xk in env.exchanges:
+        a = _get_adapter(xk)
+        if a and a.get_holdings():
+            return {"ok": False, "error": f"{xk} has open positions"}
+
+    adapter_kr = _get_adapter("kraken")
+    if not adapter_kr:
+        return {"ok": False, "error": "Cannot connect to Kraken"}
+
+    buying_power = adapter_kr.get_buying_power()
+    if not buying_power or buying_power <= 0:
+        return {"ok": False, "error": "Kraken has no USDT balance"}
+
+    state_path = env.hub_data_dir / "control_exchange_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(state_path, "w") as f:
+        json.dump({"usd_balance": buying_power, "holdings": {}, "orders": {}}, f, indent=2)
+
+    _adapters.pop("control", None)
+    _refresh_exchange_balance("control")
+    print(f"[Sync] Control balance set to ${buying_power:,.2f} from Kraken")
+    return {"ok": True, "balance": buying_power}
+
+
 @app.get("/api/candles/{coin}")
-async def api_candles(coin: str, timeframe: str = "1hour", limit: int = 250):
-    """Fetch candle data from KuCoin for charting."""
+async def api_candles(coin: str, timeframe: str = "1hour", limit: int = 250,
+                      source: str = ""):
+    """Fetch candle data for charting. Source: kraken or kucoin (auto from settings)."""
     coin = coin.upper()
+    env.reload()
+    price_source = source or env.settings.get("live_price_source", "kraken")
+
+    if price_source == "kraken":
+        return _candles_kraken(coin, timeframe, limit)
+    return _candles_kucoin(coin, timeframe, limit)
+
+
+def _candles_kraken(coin: str, timeframe: str, limit: int) -> dict:
+    tf_map = {
+        "1min": "1m", "5min": "5m", "15min": "15m", "30min": "30m",
+        "1hour": "1h", "2hour": "2h", "4hour": "4h",
+        "8hour": "8h", "12hour": "12h", "1day": "1d", "1week": "1w",
+    }
+    ccxt_tf = tf_map.get(timeframe, "1h")
+    try:
+        import ccxt
+        kraken = ccxt.kraken({"enableRateLimit": True})
+        ohlcv = kraken.fetch_ohlcv(f"{coin}/USDT", ccxt_tf, limit=limit)
+        candles = []
+        for bar in ohlcv:
+            candles.append({
+                "time": int(bar[0] / 1000),
+                "open": float(bar[1]),
+                "high": float(bar[2]),
+                "low": float(bar[3]),
+                "close": float(bar[4]),
+                "volume": float(bar[5]),
+            })
+        return {"candles": candles}
+    except Exception as e:
+        return _candles_kucoin(coin, timeframe, limit)
+
+
+def _candles_kucoin(coin: str, timeframe: str, limit: int) -> dict:
     tf_map = {
         "1min": "1min", "5min": "5min", "15min": "15min", "30min": "30min",
         "1hour": "1hour", "2hour": "2hour", "4hour": "4hour",
         "8hour": "8hour", "12hour": "12hour", "1day": "1day", "1week": "1week",
     }
     kc_tf = tf_map.get(timeframe, "1hour")
-
     try:
         import requests as _req
         url = f"https://api.kucoin.com/api/v1/market/candles?type={kc_tf}&symbol={coin}-USDT&pageSize={limit}"
         resp = _req.get(url, timeout=10)
         data = resp.json()
         klines = data.get("data", [])
-
         candles = []
         for k in reversed(klines):
             candles.append({
@@ -294,6 +537,8 @@ async def websocket_endpoint(ws: WebSocket):
 async def _file_watcher():
     """Poll key files and broadcast changes to WebSocket clients."""
     mtimes: dict[str, float] = {}
+    balance_tick = 0
+    history_tick = 0
 
     def _check(path: Path, key: str) -> bool:
         try:
@@ -314,16 +559,25 @@ async def _file_watcher():
         try:
             env.reload()
 
-            if _check(env.trader_status_path(), "trader_status"):
-                acct = AccountModel(env)
-                ts = acct.trader_status()
-                if ts:
-                    await ws_manager.broadcast({"type": "trader_status", "data": ts})
+            for xk in env.exchanges:
+                if _check(env.trader_status_path(xk), f"trader_status_{xk}"):
+                    acct = AccountModel(env, xk)
+                    ts = acct.trader_status()
+                    if ts:
+                        await ws_manager.broadcast({
+                            "type": "trader_status",
+                            "exchange": xk,
+                            "data": ts,
+                        })
 
-            if _check(env.pnl_ledger_path(), "pnl"):
-                acct = AccountModel(env)
-                pnl = acct.pnl()
-                await ws_manager.broadcast({"type": "pnl", "data": pnl})
+                if _check(env.pnl_ledger_path(xk), f"pnl_{xk}"):
+                    acct = AccountModel(env, xk)
+                    pnl = acct.pnl()
+                    await ws_manager.broadcast({
+                        "type": "pnl",
+                        "exchange": xk,
+                        "data": pnl,
+                    })
 
             signals_changed = False
             for coin in env.coins:
@@ -351,12 +605,27 @@ async def _file_watcher():
                 if rr.get("ready"):
                     ctrl.poll_ready_and_start_trader()
 
+            traders_status = {}
+            for xk in env.exchanges:
+                traders_status[xk] = {"running": ctrl.trader_running_for(xk)}
             sys_status = {
                 "neural_running": ctrl.neural_running,
                 "trader_running": ctrl.trader_running,
+                "traders": traders_status,
                 "any_training_running": ctrl.any_training_running(),
             }
             await ws_manager.broadcast({"type": "system", "data": sys_status})
+
+            balance_tick += 1
+            history_tick += 1
+            if balance_tick >= 20:
+                balance_tick = 0
+                write_hist = history_tick >= 40
+                if write_hist:
+                    history_tick = 0
+                for xk in env.exchanges:
+                    if not ctrl.trader_running_for(xk):
+                        _refresh_exchange_balance(xk, write_history=write_hist)
 
         except Exception:
             pass
@@ -364,10 +633,41 @@ async def _file_watcher():
         await asyncio.sleep(1.5)
 
 
+def _init_exchange_balances():
+    """Seed initial control state if needed, then refresh all balances."""
+    env.reload()
+
+    ctrl_state = env.hub_data_dir / "control_exchange_state.json"
+    if not ctrl_state.exists():
+        starting = float(env.settings.get("control_starting_usd", 0))
+        if starting <= 0:
+            kr = _get_adapter("kraken")
+            starting = (kr.get_buying_power() or 0) if kr else 0
+            print(f"[Init] control starting balance from kraken: ${starting:,.2f}")
+        if starting > 0:
+            ctrl_state.parent.mkdir(parents=True, exist_ok=True)
+            with open(ctrl_state, "w") as f:
+                json.dump({"usd_balance": starting, "holdings": {}, "orders": {}}, f)
+            print(f"[Init] wrote {ctrl_state}")
+
+    for xk in env.exchanges:
+        _refresh_exchange_balance(xk)
+        status_path = env.trader_status_path(xk)
+        if status_path.exists():
+            try:
+                with open(status_path) as f:
+                    data = json.load(f)
+                total = data.get("account", {}).get("total_account_value", 0)
+                print(f"[Init] {xk}: ${total:,.2f}")
+            except Exception:
+                pass
+
+
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app):
+    _init_exchange_balances()
     asyncio.create_task(_file_watcher())
     yield
 

@@ -60,18 +60,19 @@ class ProcessController:
     def __init__(self, env: PTEnv):
         self.env = env
         self._neural = ProcHandle(name="neural")
-        self._trader = ProcHandle(name="trader")
+        self._traders: dict[str, ProcHandle] = {}
         self._trainers: dict[str, ProcHandle] = {}
         self._lock = threading.Lock()
 
-    def _make_env(self) -> dict:
+    def _make_env(self, exchange: str | None = None) -> dict:
         e = os.environ.copy()
         e["POWERTRADER_HUB_DIR"] = str(self.env.hub_data_dir)
-        e["POWERTRADER_EXCHANGE"] = self.env.exchange
+        e["POWERTRADER_EXCHANGE"] = exchange or self.env.exchange
         return e
 
     def _launch(self, handle: ProcHandle, script_path: str, args: list[str] | None = None,
-                cwd: str | None = None, prefix: str = "") -> bool:
+                cwd: str | None = None, prefix: str = "",
+                exchange: str | None = None) -> bool:
         if handle.alive:
             return True
         if not os.path.isfile(script_path):
@@ -81,7 +82,7 @@ class ProcessController:
             handle.proc = subprocess.Popen(
                 cmd,
                 cwd=cwd or str(self.env.project_dir),
-                env=self._make_env(),
+                env=self._make_env(exchange),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -151,39 +152,67 @@ class ProcessController:
     def neural_running(self) -> bool:
         return self._neural.alive
 
-    # -- Trader --
+    # -- Traders (one per exchange) --
 
-    def start_trader(self) -> bool:
-        return self._launch(
-            self._trader,
-            str(self.env.script_path("trader")),
-            prefix="[TRADER] ",
-        )
+    def _get_trader(self, exchange: str) -> ProcHandle:
+        if exchange not in self._traders:
+            self._traders[exchange] = ProcHandle(name=f"trader-{exchange}")
+        return self._traders[exchange]
 
-    def stop_trader(self):
-        self._stop(self._trader)
+    def start_trader(self, exchange: str | None = None) -> bool:
+        if exchange:
+            exchanges = [exchange]
+        else:
+            exchanges = self.env.exchanges
+        ok = True
+        for xk in exchanges:
+            h = self._get_trader(xk)
+            result = self._launch(
+                h,
+                str(self.env.script_path("trader")),
+                prefix=f"[TRADER:{xk.upper()}] ",
+                exchange=xk,
+            )
+            ok = ok and result
+        return ok
+
+    def stop_trader(self, exchange: str | None = None):
+        if exchange:
+            h = self._traders.get(exchange)
+            if h:
+                self._stop(h)
+        else:
+            for h in self._traders.values():
+                self._stop(h)
+
+    def trader_running_for(self, exchange: str) -> bool:
+        h = self._traders.get(exchange)
+        return h.alive if h else False
 
     @property
     def trader_running(self) -> bool:
-        return self._trader.alive
+        return any(h.alive for h in self._traders.values())
 
     # -- Start/stop all --
 
     def start_all(self) -> dict:
-        """Start neural, wait for ready, then start trader. Returns status."""
+        """Start neural, wait for ready, then start all traders. Returns status."""
         ok_neural = self.start_neural()
         if not ok_neural:
             return {"ok": False, "error": "Failed to start neural"}
-        return {"ok": True, "message": "Neural started, trader will start when ready"}
+        return {"ok": True, "message": "Neural started, traders will start when ready"}
 
     def poll_ready_and_start_trader(self) -> bool:
-        """Check runner_ready and start trader if ready. Returns True if trader started."""
+        """Check runner_ready and start all traders if ready."""
         sm = SystemModel(self.env)
         rr = sm.runner_ready()
         if rr.get("ready"):
-            if not self.trader_running:
-                return self.start_trader()
-            return True
+            started = False
+            for xk in self.env.exchanges:
+                if not self.trader_running_for(xk):
+                    self.start_trader(xk)
+                    started = True
+            return started or self.trader_running
         return False
 
     def stop_all(self):
@@ -267,18 +296,22 @@ class ProcessController:
 
     # -- Logs --
 
-    def get_logs(self, script: str, limit: int = 200) -> list[str]:
+    def _resolve_log_queue(self, script: str):
         if script == "neural":
-            q = self._neural.log_q
-        elif script == "trader":
-            q = self._trader.log_q
-        elif script.startswith("trainer-"):
+            return self._neural.log_q
+        if script.startswith("trader"):
+            parts = script.split("-", 1)
+            xk = parts[1] if len(parts) > 1 else (self.env.exchanges[0] if self.env.exchanges else "control")
+            h = self._traders.get(xk)
+            return h.log_q if h else None
+        if script.startswith("trainer-"):
             coin = script.split("-", 1)[1].upper()
             h = self._trainers.get(coin)
-            q = h.log_q if h else None
-        else:
-            return []
+            return h.log_q if h else None
+        return None
 
+    def get_logs(self, script: str, limit: int = 200) -> list[str]:
+        q = self._resolve_log_queue(script)
         if not q:
             return []
         lines = []
@@ -291,17 +324,7 @@ class ProcessController:
 
     def peek_logs(self, script: str, limit: int = 200) -> list[str]:
         """Read logs without consuming them."""
-        if script == "neural":
-            q = self._neural.log_q
-        elif script == "trader":
-            q = self._trader.log_q
-        elif script.startswith("trainer-"):
-            coin = script.split("-", 1)[1].upper()
-            h = self._trainers.get(coin)
-            q = h.log_q if h else None
-        else:
-            return []
-
+        q = self._resolve_log_queue(script)
         if not q:
             return []
         with q.mutex:
@@ -333,9 +356,14 @@ class ProcessController:
                 "running": self.training_running(coin),
             }
 
+        traders = {}
+        for xk in self.env.exchanges:
+            traders[xk] = {"running": self.trader_running_for(xk)}
+
         return {
             "neural_running": self.neural_running,
             "trader_running": self.trader_running,
+            "traders": traders,
             "any_training_running": self.any_training_running(),
             "training": training,
         }

@@ -62,7 +62,14 @@ class PTEnv:
 
     @property
     def exchange(self) -> str:
-        return (self._settings.get("exchange") or "demo").strip().lower()
+        return (self._settings.get("exchange") or "control").strip().lower()
+
+    @property
+    def exchanges(self) -> list[str]:
+        raw = self._settings.get("exchanges")
+        if isinstance(raw, list) and raw:
+            return [x.strip().lower() for x in raw]
+        return [self.exchange]
 
     @property
     def coins(self) -> list[str]:
