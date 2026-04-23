@@ -62,8 +62,11 @@
   <!-- Left: Signal Grid -->
   <section id="panel-signals" class="panel">
     <div class="panel-header">
-      <h2>Neural Signals</h2>
-      <span class="panel-meta" id="signal-update-time"></span>
+      <h2>Coins</h2>
+      <div class="view-toggle" id="view-toggle" title="Toggle simple / detailed view">
+        <button class="vtog-btn active" data-mode="simple">◇</button>
+        <button class="vtog-btn" data-mode="detail">◈</button>
+      </div>
     </div>
     <div id="signal-grid" class="signal-grid"></div>
   </section>
@@ -87,18 +90,14 @@
   <section id="panel-trades" class="panel">
     <div class="panel-header">
       <div class="tab-bar" id="trades-tabs">
-        <button class="tab-btn active" data-tab="positions">Positions</button>
-        <button class="tab-btn" data-tab="history">History</button>
+        <button class="tab-btn active" data-tab="history">History</button>
         <button class="tab-btn" data-tab="lth">LTH</button>
         <button class="tab-btn" data-tab="training">Training</button>
         <button class="tab-btn" data-tab="logs">Logs</button>
         <button class="tab-btn" data-tab="settings">Settings</button>
       </div>
     </div>
-    <div class="tab-content active" id="tab-positions">
-      <div id="positions-list" class="positions-list"></div>
-    </div>
-    <div class="tab-content" id="tab-history">
+    <div class="tab-content active" id="tab-history">
       <div id="history-list" class="history-list"></div>
     </div>
     <div class="tab-content" id="tab-lth">

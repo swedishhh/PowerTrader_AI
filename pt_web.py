@@ -79,6 +79,9 @@ async def api_coins():
         snap = cm.snapshot()
         pos = positions.get(coin, {})
         snap["position"] = pos if pos.get("quantity", 0) > 0 else None
+        buy = pos.get("current_buy_price", 0)
+        sell = pos.get("current_sell_price", 0)
+        snap["mid_price"] = (buy + sell) / 2 if (buy and sell) else buy or sell
         snap["training_running"] = ctrl_status["training"].get(coin, {}).get("running", False)
         fail = cm.training_failure()
         if fail and fail.get("exception_type"):
