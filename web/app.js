@@ -265,94 +265,139 @@ function updateTraderStatus(data) {
 
 // ── Coin Grid (unified signal + position cards) ──
 
+let _lastCardMode = null;
+
+function _createSimpleCard(coin) {
+  const card = document.createElement('div');
+  card.className = 'coin-card simple';
+  card.dataset.coin = coin;
+  card.innerHTML = `
+    <span class="cc-name">${coin}</span>
+    <span class="cc-field"><span class="cc-mid" data-f="mid"></span></span>
+    <span class="cc-field cc-ls" title="Long / Short (0–7)">
+      <span class="cc-long" data-f="long"></span><span class="cc-sep">/</span><span class="cc-short" data-f="short"></span>
+    </span>
+    <span class="cc-field cc-pos-fields" data-f="pos-fields"></span>`;
+  card.addEventListener('click', () => selectCoin(coin));
+  return card;
+}
+
+function _createDetailCard(coin) {
+  const card = document.createElement('div');
+  card.className = 'coin-card detail';
+  card.dataset.coin = coin;
+  card.innerHTML = `
+    <div class="cc-header">
+      <div class="cc-name-col">
+        <span class="cc-name">${coin}</span>
+        <span class="cc-mid" data-f="mid"></span>
+      </div>
+      <div class="cc-bars" title="Signal strength (0–7) · Marker = trade start level">
+        <div class="cc-bar-row"><span class="cc-bar-lbl">L</span><div class="signal-bar"><div class="signal-bar-fill long" data-f="long-bar"></div><div class="signal-bar-marker" data-f="marker"></div></div><span class="cc-long" data-f="long"></span></div>
+        <div class="cc-bar-row"><span class="cc-bar-lbl">S</span><div class="signal-bar"><div class="signal-bar-fill short" data-f="short-bar"></div></div><span class="cc-short" data-f="short"></span></div>
+      </div>
+    </div>
+    <div class="cc-position" data-f="pos-section"></div>`;
+  card.addEventListener('click', () => selectCoin(coin));
+  return card;
+}
+
+function _updateCard(card, c) {
+  const mode = state.cardMode;
+  const pos = c.position;
+  const hasPos = pos && pos.quantity > 0;
+  const mid = c.mid_price || (pos ? (pos.current_buy_price || 0) : 0);
+  const tsl = state.tradeStartLevel || 1;
+  const isTradeReady = c.long_signal >= tsl && c.short_signal === 0;
+
+  card.classList.toggle('active', state.selectedCoin === c.coin);
+  card.classList.toggle('trade-ready', isTradeReady);
+  card.classList.toggle('has-position', hasPos);
+
+  const f = key => card.querySelector(`[data-f="${key}"]`);
+
+  f('mid').textContent = fmtPrice(mid);
+  f('long').textContent = c.long_signal;
+  f('short').textContent = c.short_signal;
+
+  if (mode === 'simple') {
+    const container = f('pos-fields');
+    if (hasPos) {
+      const pnl = pos.gain_loss_pct_buy;
+      const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+      container.innerHTML =
+        `<span class="cc-val">${fmtUSD(pos.value_usd)}</span> ` +
+        `<span class="cc-val">${fmtPrice(pos.avg_cost_basis)}</span> ` +
+        `<span class="cc-pnl ${pnlClass}">${fmtPct(pnl)}</span>`;
+    } else {
+      container.innerHTML = '';
+    }
+  } else {
+    const longPct = (c.long_signal / 7) * 100;
+    const shortPct = (c.short_signal / 7) * 100;
+    const markerPos = (tsl / 7) * 100;
+    f('long-bar').style.width = longPct + '%';
+    f('short-bar').style.width = shortPct + '%';
+    f('marker').style.left = markerPos + '%';
+
+    const posEl = f('pos-section');
+    if (hasPos) {
+      const pnl = pos.gain_loss_pct_buy;
+      const pnlClass = pnl >= 0 ? 'positive' : 'negative';
+      const maxDca = state.settings.max_dca_buys_per_24h || 1;
+      const dca24 = state.dca24h[c.coin] || 0;
+      const sellPrice = pos.trail_line > 0 ? fmtPrice(pos.trail_line) : '—';
+      posEl.style.display = '';
+      posEl.innerHTML = `
+        <div class="cc-pos-header">
+          <span class="cc-pos-value">${fmtUSD(pos.value_usd)}</span>
+          <span class="cc-pos-pnl ${pnlClass}">${fmtPct(pnl)}</span>
+        </div>
+        <div class="cc-pos-grid">
+          <div class="cc-pf"><span class="cc-pf-l">Qty</span><span class="cc-pf-v">${fmtQty(pos.quantity, c.coin)}</span></div>
+          <div class="cc-pf"><span class="cc-pf-l">Avg Cost</span><span class="cc-pf-v">${fmtPrice(pos.avg_cost_basis)}</span></div>
+          <div class="cc-pf"><span class="cc-pf-l">Bid / Ask</span><span class="cc-pf-v">${fmtPrice(pos.current_buy_price)} / ${fmtPrice(pos.current_sell_price)}</span></div>
+          <div class="cc-pf"><span class="cc-pf-l">Sell Level</span><span class="cc-pf-v">${sellPrice}</span></div>
+          <div class="cc-pf"><span class="cc-pf-l">Next DCA</span><span class="cc-pf-v">${pos.next_dca_display || '—'}</span></div>
+          <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${pos.dca_triggered_stages > 0 ? '<span class="pos-dca-chip">stg ' + pos.dca_triggered_stages + '</span>' : '—'} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>
+        </div>`;
+    } else {
+      posEl.style.display = 'none';
+      posEl.innerHTML = '';
+    }
+  }
+}
+
 function renderCoinGrid() {
   const grid = $('#signal-grid');
   const coins = state.coins;
   if (!coins.length) return;
 
   const mode = state.cardMode;
-  const tsl = state.tradeStartLevel || 1;
-  const maxDca = state.settings.max_dca_buys_per_24h || 1;
   const sorted = [...coins].sort((a, b) => a.coin.localeCompare(b.coin));
+  const modeChanged = _lastCardMode !== mode;
 
-  grid.innerHTML = sorted.map(c => {
-    const pos = c.position;
-    const hasPos = pos && pos.quantity > 0;
-    const mid = c.mid_price || (pos ? (pos.current_buy_price || 0) : 0);
-    const longPct = (c.long_signal / 7) * 100;
-    const shortPct = (c.short_signal / 7) * 100;
-    const markerPos = (tsl / 7) * 100;
-    const isTradeReady = c.long_signal >= tsl && c.short_signal === 0;
+  if (modeChanged) {
+    _lastCardMode = mode;
+    grid.innerHTML = '';
+    const creator = mode === 'simple' ? _createSimpleCard : _createDetailCard;
+    sorted.forEach(c => grid.appendChild(creator(c.coin)));
+  }
 
-    const activeClass = state.selectedCoin === c.coin ? ' active' : '';
-    const readyClass = isTradeReady ? ' trade-ready' : '';
-    const posClass = hasPos ? ' has-position' : '';
+  const existingCards = {};
+  $$('.coin-card', grid).forEach(c => { existingCards[c.dataset.coin] = c; });
 
-    if (mode === 'simple') {
-      let posFields = '';
-      if (hasPos) {
-        const pnl = pos.gain_loss_pct_buy;
-        const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-        posFields = `
-          <span class="cc-field"><span class="cc-val">${fmtUSD(pos.value_usd)}</span></span>
-          <span class="cc-field"><span class="cc-val">${fmtPrice(pos.avg_cost_basis)}</span></span>
-          <span class="cc-field"><span class="cc-pnl ${pnlClass}">${fmtPct(pnl)}</span></span>`;
-      }
-
-      return `
-        <div class="coin-card simple${activeClass}${readyClass}${posClass}" data-coin="${c.coin}">
-          <span class="cc-name">${c.coin}</span>
-          <span class="cc-field"><span class="cc-mid">${fmtPrice(mid)}</span></span>
-          <span class="cc-field cc-ls" title="Long / Short (0–7)">
-            <span class="cc-long">${c.long_signal}</span><span class="cc-sep">/</span><span class="cc-short">${c.short_signal}</span>
-          </span>
-          ${posFields}
-        </div>`;
+  sorted.forEach(c => {
+    let card = existingCards[c.coin];
+    if (!card) {
+      card = (mode === 'simple' ? _createSimpleCard : _createDetailCard)(c.coin);
+      grid.appendChild(card);
     }
-
-    // Detailed mode
-    let posSection = '';
-    if (hasPos) {
-      const pnl = pos.gain_loss_pct_buy;
-      const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-      const dca24 = state.dca24h[c.coin] || 0;
-      const sellPrice = pos.trail_line > 0 ? fmtPrice(pos.trail_line) : '—';
-      posSection = `
-        <div class="cc-position">
-          <div class="cc-pos-header">
-            <span class="cc-pos-value">${fmtUSD(pos.value_usd)}</span>
-            <span class="cc-pos-pnl ${pnlClass}">${fmtPct(pnl)}</span>
-          </div>
-          <div class="cc-pos-grid">
-            <div class="cc-pf"><span class="cc-pf-l">Qty</span><span class="cc-pf-v">${fmtQty(pos.quantity, c.coin)}</span></div>
-            <div class="cc-pf"><span class="cc-pf-l">Avg Cost</span><span class="cc-pf-v">${fmtPrice(pos.avg_cost_basis)}</span></div>
-            <div class="cc-pf"><span class="cc-pf-l">Bid / Ask</span><span class="cc-pf-v">${fmtPrice(pos.current_buy_price)} / ${fmtPrice(pos.current_sell_price)}</span></div>
-            <div class="cc-pf"><span class="cc-pf-l">Sell Level</span><span class="cc-pf-v">${sellPrice}</span></div>
-            <div class="cc-pf"><span class="cc-pf-l">Next DCA</span><span class="cc-pf-v">${pos.next_dca_display || '—'}</span></div>
-            <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${pos.dca_triggered_stages > 0 ? '<span class="pos-dca-chip">stg ' + pos.dca_triggered_stages + '</span>' : '—'} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>
-          </div>
-        </div>`;
-    }
-
-    return `
-      <div class="coin-card detail${activeClass}${readyClass}${posClass}" data-coin="${c.coin}">
-        <div class="cc-header">
-          <div class="cc-name-col">
-            <span class="cc-name">${c.coin}</span>
-            <span class="cc-mid">${fmtPrice(mid)}</span>
-          </div>
-          <div class="cc-bars" title="Signal strength (0–7) · Marker = trade start level">
-            <div class="cc-bar-row"><span class="cc-bar-lbl">L</span><div class="signal-bar"><div class="signal-bar-fill long" style="width:${longPct}%"></div><div class="signal-bar-marker" style="left:${markerPos}%"></div></div><span class="cc-long">${c.long_signal}</span></div>
-            <div class="cc-bar-row"><span class="cc-bar-lbl">S</span><div class="signal-bar"><div class="signal-bar-fill short" style="width:${shortPct}%"></div></div><span class="cc-short">${c.short_signal}</span></div>
-          </div>
-        </div>
-        ${posSection}
-      </div>`;
-  }).join('');
-
-  $$('.coin-card', grid).forEach(card => {
-    card.addEventListener('click', () => selectCoin(card.dataset.coin));
+    _updateCard(card, c);
+    delete existingCards[c.coin];
   });
+
+  Object.values(existingCards).forEach(c => c.remove());
 }
 
 function updateSignals(signals) {
