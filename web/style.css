@@ -255,7 +255,7 @@ body {
 #app {
   flex: 1;
   display: grid;
-  grid-template-columns: var(--lh-width, 300px) 1fr 4px var(--rh-width, 650px);
+  grid-template-columns: var(--lh-width, 360px) 4px 1fr 4px var(--rh-width, 650px);
   gap: 1px;
   overflow: hidden;
   background: var(--border);
@@ -387,23 +387,20 @@ body {
   font-size: 13px;
   letter-spacing: 1px;
   color: var(--text-primary);
-  width: 52px;
   flex-shrink: 0;
+  margin-right: 4px;
 }
 
 .coin-card.simple .cc-field {
-  flex: 1;
+  flex: 0 0 auto;
   text-align: right;
   color: var(--text-secondary);
-  padding: 0 6px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  padding: 0 4px;
   white-space: nowrap;
 }
 
 .coin-card.simple .cc-mid { color: var(--text-muted); }
-.coin-card.simple .cc-ls { flex: 0 0 auto; }
+.coin-card.simple .cc-ls { margin-left: auto; }
 .coin-card.simple .cc-long { color: var(--cyan); font-weight: 600; }
 .coin-card.simple .cc-short { color: var(--red); font-weight: 600; }
 .coin-card.simple .cc-sep { color: var(--text-muted); margin: 0 1px; font-size: 10px; }
@@ -767,8 +764,8 @@ body {
 
 .hist-row {
   display: grid;
-  grid-template-columns: 60px 36px 1fr auto;
-  gap: 8px;
+  grid-template-columns: 110px 32px 1fr auto;
+  gap: 6px;
   align-items: center;
   padding: 6px 8px;
   border-radius: var(--radius-sm);
@@ -779,7 +776,7 @@ body {
 
 .hist-row:nth-child(odd) { background: var(--bg-surface); }
 
-.hist-time { color: var(--text-muted); font-size: 10px; }
+.hist-time { color: var(--text-muted); font-size: 10px; white-space: nowrap; flex-shrink: 0; }
 .hist-side { font-weight: 600; text-transform: uppercase; }
 .hist-side.buy { color: var(--red); }
 .hist-side.sell { color: var(--green); }
@@ -796,7 +793,7 @@ body {
 .hist-amount { text-align: right; }
 
 .hist-row-sell {
-  grid-template-columns: 60px 36px 1fr auto;
+  grid-template-columns: 110px 32px 1fr auto;
   grid-template-rows: auto auto;
 }
 
@@ -1119,7 +1116,7 @@ body {
 @media (max-width: 1024px) {
   .sash { display: none; }
   #app {
-    grid-template-columns: 240px 1fr;
+    grid-template-columns: 240px 0 1fr 0 0;
   }
   #panel-trades {
     position: fixed;

@@ -24,6 +24,7 @@ const state = {
   settings: {},
   dca24h: {},
   cardMode: 'simple',
+  historyFilterCoin: null,
 };
 
 const TF_LIST = ['1min','5min','15min','30min','1hour','2hour','4hour','8hour','12hour','1day','1week'];
@@ -31,6 +32,11 @@ const TF_REFRESH_MS = {
   '1min': 5_000, '5min': 15_000, '15min': 30_000, '30min': 45_000,
   '1hour': 60_000, '2hour': 90_000, '4hour': 120_000,
   '8hour': 180_000, '12hour': 300_000, '1day': 300_000, '1week': 600_000,
+};
+const TF_SECONDS = {
+  '1min': 60, '5min': 300, '15min': 900, '30min': 1800,
+  '1hour': 3600, '2hour': 7200, '4hour': 14400,
+  '8hour': 28800, '12hour': 43200, '1day': 86400, '1week': 604800,
 };
 const ACCT_RANGES = [
   {label: '1D', hours: 24}, {label: '3D', hours: 72}, {label: '1W', hours: 168},
@@ -81,6 +87,17 @@ function fmtTime(ts) {
   if (!ts) return '';
   const d = new Date(ts * 1000);
   return d.toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: false});
+}
+
+function fmtDateTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const Y = d.getFullYear();
+  const M = String(d.getMonth() + 1).padStart(2, '0');
+  const D = String(d.getDate()).padStart(2, '0');
+  const h = String(d.getHours()).padStart(2, '0');
+  const m = String(d.getMinutes()).padStart(2, '0');
+  return `${Y}-${M}-${D} ${h}:${m}`;
 }
 
 function fmtDate(ts) {
@@ -163,10 +180,12 @@ async function init() {
 
 async function refreshAll() {
   try {
-    const [statusData, coinsData] = await Promise.all([api('status'), api('coins')]);
+    const [statusData, coinsData, posData, settingsData] = await Promise.all([
+      api('status'), api('coins'), api('positions'), api('settings'),
+    ]);
 
-    state.settings = statusData;
-    state.tradeStartLevel = statusData.trade_start_level || statusData.coins?.trade_start_level || 1;
+    state.settings = settingsData;
+    state.tradeStartLevel = settingsData.trade_start_level || 1;
 
     updateSystemStatus(statusData.system);
     updateAccountDisplay(statusData.account, statusData.pnl);
@@ -175,7 +194,6 @@ async function refreshAll() {
       state.coins = coinsData.coins;
     }
 
-    const posData = await api('positions');
     if (posData.positions) {
       state.positions = posData.positions;
       state.dca24h = posData.dca_24h || {};
@@ -183,10 +201,6 @@ async function refreshAll() {
 
     mergePositionsIntoCoins();
     renderCoinGrid();
-
-    const settingsData = await api('settings');
-    state.tradeStartLevel = settingsData.trade_start_level || 1;
-    state.settings = settingsData;
 
     renderTraining(coinsData.coins);
     renderSettings(settingsData);
@@ -259,7 +273,10 @@ function updateTraderStatus(data) {
     mergePositionsIntoCoins();
     renderCoinGrid();
     if ($('#tab-lth').classList.contains('active')) renderLTH();
-    if (state.selectedCoin) updateCoinPosition(state.selectedCoin);
+    if (state.selectedCoin) {
+      updateCoinPosition(state.selectedCoin);
+      updateMidPriceLine();
+    }
   }
 }
 
@@ -302,8 +319,8 @@ function _createDetailCard(coin) {
   return card;
 }
 
-function _updateCard(card, c) {
-  const mode = state.cardMode;
+function _updateCard(card, c, modeOverride) {
+  const mode = modeOverride || (card.classList.contains('detail') ? 'detail' : 'simple');
   const pos = c.position;
   const hasPos = pos && pos.quantity > 0;
   const mid = c.mid_price || (pos ? (pos.current_buy_price || 0) : 0);
@@ -379,6 +396,7 @@ function renderCoinGrid() {
 
   if (modeChanged) {
     _lastCardMode = mode;
+    state._expandedCoin = null;
     grid.innerHTML = '';
     const creator = mode === 'simple' ? _createSimpleCard : _createDetailCard;
     sorted.forEach(c => grid.appendChild(creator(c.coin)));
@@ -386,11 +404,13 @@ function renderCoinGrid() {
 
   const existingCards = {};
   $$('.coin-card', grid).forEach(c => { existingCards[c.dataset.coin] = c; });
+  const expanded = mode === 'simple' ? state._expandedCoin : null;
 
   sorted.forEach(c => {
     let card = existingCards[c.coin];
     if (!card) {
-      card = (mode === 'simple' ? _createSimpleCard : _createDetailCard)(c.coin);
+      const isExpanded = expanded === c.coin;
+      card = isExpanded ? _createDetailCard(c.coin) : (mode === 'simple' ? _createSimpleCard : _createDetailCard)(c.coin);
       grid.appendChild(card);
     }
     _updateCard(card, c);
@@ -429,6 +449,20 @@ function selectCoin(coin) {
   state.selectedCoin = coin;
   state.chartMode = 'candle';
 
+  if (state.cardMode === 'simple') {
+    const grid = $('#signal-grid');
+    const prev = state._expandedCoin;
+    if (prev && prev !== coin) {
+      const oldCard = grid.querySelector(`.coin-card[data-coin="${prev}"]`);
+      if (oldCard) _replaceCard(grid, oldCard, prev, 'simple');
+    }
+    if (coin !== prev) {
+      const curCard = grid.querySelector(`.coin-card[data-coin="${coin}"]`);
+      if (curCard) _replaceCard(grid, curCard, coin, 'detail');
+    }
+    state._expandedCoin = coin;
+  }
+
   $$('.coin-card').forEach(c => c.classList.toggle('active', c.dataset.coin === coin));
   $('#acct-block-portfolio').classList.remove('active');
 
@@ -440,11 +474,35 @@ function selectCoin(coin) {
 
   loadChart(coin, state.selectedTf);
   updateCoinPosition(coin);
+
+  state.historyFilterCoin = coin;
+  _updateHistoryTabLabel();
+  if ($('#tab-history').classList.contains('active')) loadTradeHistory();
+}
+
+function _updateHistoryTabLabel() {
+  const btn = $('[data-tab="history"]');
+  if (!btn) return;
+  btn.textContent = state.historyFilterCoin ? `History: ${state.historyFilterCoin}` : 'History';
+}
+
+function _replaceCard(grid, oldCard, coin, mode) {
+  const newCard = mode === 'simple' ? _createSimpleCard(coin) : _createDetailCard(coin);
+  const c = state.coins.find(x => x.coin === coin);
+  if (c) _updateCard(newCard, c, mode);
+  grid.replaceChild(newCard, oldCard);
 }
 
 function selectAccountChart(hours) {
   state.chartMode = 'account';
   state.accountRange = hours != null ? hours : state.accountRange;
+
+  if (state.cardMode === 'simple' && state._expandedCoin) {
+    const grid = $('#signal-grid');
+    const oldCard = grid.querySelector(`.coin-card[data-coin="${state._expandedCoin}"]`);
+    if (oldCard) _replaceCard(grid, oldCard, state._expandedCoin, 'simple');
+    state._expandedCoin = null;
+  }
   state.selectedCoin = null;
 
   $$('.coin-card').forEach(c => c.classList.remove('active'));
@@ -470,6 +528,8 @@ async function loadChart(coin, tf) {
     state.chart = null;
     state.candleSeries = null;
     state.priceLines = [];
+    state._midPriceLine = null;
+    state._currentBar = null;
   }
 
   state.chart = LightweightCharts.createChart(container, {
@@ -514,12 +574,15 @@ async function loadChart(coin, tf) {
     if (data.candles && data.candles.length > 0) {
       state.candleSeries.setData(data.candles);
       state.chart.timeScale().fitContent();
+      const last = data.candles[data.candles.length - 1];
+      state._currentBar = { ...last };
     }
   } catch (e) {
     console.error('Failed to load candles:', e);
   }
 
   updateChartPriceLines();
+  updateMidPriceLine();
   await updateChartTradeMarkers(coin);
 
   const refreshMs = TF_REFRESH_MS[tf] || 60_000;
@@ -527,10 +590,13 @@ async function loadChart(coin, tf) {
     if (!state.candleSeries || state.selectedCoin !== coin || state.selectedTf !== tf) return;
     try {
       const fresh = await api(`candles/${coin}?timeframe=${tf}&limit=2`);
-      if (fresh.candles) {
+      if (fresh.candles && fresh.candles.length) {
         fresh.candles.forEach(c => state.candleSeries.update(c));
+        const last = fresh.candles[fresh.candles.length - 1];
+        state._currentBar = { ...last };
       }
       updateChartPriceLines();
+      updateChartTradeMarkers(coin);
     } catch {}
   }, refreshMs);
 
@@ -774,6 +840,41 @@ function updateChartPriceLines() {
   }
 }
 
+function updateMidPriceLine() {
+  if (!state.candleSeries || !state.selectedCoin || state.chartMode !== 'candle') return;
+  const coinData = state.coins.find(c => c.coin === state.selectedCoin);
+  if (!coinData) return;
+  const mid = coinData.mid_price || 0;
+  if (!mid) return;
+
+  if (state._midPriceLine) {
+    try { state.candleSeries.removePriceLine(state._midPriceLine); } catch {}
+    state._midPriceLine = null;
+  }
+  state._midPriceLine = state.candleSeries.createPriceLine({
+    price: mid,
+    color: '#00CC66',
+    lineWidth: 1,
+    lineStyle: 0,
+    axisLabelVisible: true,
+    title: 'MID',
+  });
+
+  const tfSec = TF_SECONDS[state.selectedTf] || 3600;
+  const now = Math.floor(Date.now() / 1000);
+  const barTime = Math.floor(now / tfSec) * tfSec;
+
+  const cur = state._currentBar;
+  if (cur && cur.time === barTime) {
+    cur.close = mid;
+    cur.high = Math.max(cur.high, mid);
+    cur.low = Math.min(cur.low, mid);
+  } else {
+    state._currentBar = { time: barTime, open: mid, high: mid, low: mid, close: mid };
+  }
+  state.candleSeries.update(state._currentBar);
+}
+
 function updateCoinPosition(coin) {
   const container = $('#coin-position');
   const pos = state.positions[coin];
@@ -822,7 +923,11 @@ async function loadTradeHistory() {
   if (!data.trades) return;
 
   const container = $('#history-list');
-  const trades = data.trades.reverse();
+  let trades = data.trades.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const filter = state.historyFilterCoin;
+  if (filter) {
+    trades = trades.filter(t => (t.symbol || '').startsWith(filter + '_'));
+  }
 
   if (trades.length === 0) {
     container.innerHTML = '<div class="empty-state">No trade history</div>';
@@ -840,7 +945,7 @@ async function loadTradeHistory() {
     if (isSell && hasPnl) {
       return `
         <div class="hist-row hist-row-sell" data-coin="${coin}">
-          <span class="hist-time">${fmtTime(t.ts)}</span>
+          <span class="hist-time">${fmtDateTime(t.ts)}</span>
           <span class="hist-side sell">sell</span>
           <span>${coin} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
           <span class="hist-amount">${fmtUSD(t.notional_usd)}</span>
@@ -854,7 +959,7 @@ async function loadTradeHistory() {
 
     return `
       <div class="hist-row" data-coin="${coin}">
-        <span class="hist-time">${fmtTime(t.ts)}</span>
+        <span class="hist-time">${fmtDateTime(t.ts)}</span>
         <span class="hist-side ${t.side}">${t.side}</span>
         <span>${coin} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
         <span class="hist-amount">${fmtUSD(t.notional_usd)}</span>
@@ -1089,7 +1194,7 @@ function renderSettings(s) {
         <input type="number" id="set-pm-dca" value="${s.pm_start_pct_with_dca || 3}" step="0.5">
       </div>
       <div class="settings-field">
-        <label>Trailing Gap %</label>
+        <label title="Once in profit, the sell line trails the peak price by this %. E.g. 0.5% gap: if peak is $100, sell line sits at $99.50. The line only ratchets up, never down — locking in gains while allowing room to fluctuate.">Trailing Gap %</label>
         <input type="number" id="set-gap" value="${s.trailing_gap_pct || 0.1}" step="0.05">
       </div>
     </div>
@@ -1178,7 +1283,7 @@ function setupTabs() {
       $$('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-' + tab));
 
       if (state.logRefreshTimer) { clearInterval(state.logRefreshTimer); state.logRefreshTimer = null; }
-      if (tab === 'history') loadTradeHistory();
+      if (tab === 'history') { state.historyFilterCoin = null; _updateHistoryTabLabel(); loadTradeHistory(); }
       if (tab === 'lth') renderLTH();
       if (tab === 'training') loadAndRenderTraining();
       if (tab === 'settings') loadAndRenderSettings();
@@ -1266,45 +1371,49 @@ function rebuildTimeframeButtons() {
 
 function setupTimeframes() { rebuildTimeframeButtons(); }
 
-// ── Sash (drag to resize RH panel) ──
+// ── Sashes (drag to resize panels) ──
 
-function setupSash() {
-  const sash = $('#sash');
+function _initSash(sashEl, cssVar, storageKey, calcSize) {
   const app = $('#app');
-  if (!sash) return;
-
-  const MIN_RH = 280;
-  const MAX_RH = 700;
-  const stored = localStorage.getItem('pt-rh-width');
-  if (stored) app.style.setProperty('--rh-width', stored + 'px');
+  const stored = localStorage.getItem(storageKey);
+  if (stored) app.style.setProperty(cssVar, stored + 'px');
 
   let dragging = false;
 
-  sash.addEventListener('mousedown', (e) => {
+  sashEl.addEventListener('mousedown', (e) => {
     e.preventDefault();
     dragging = true;
-    sash.classList.add('dragging');
+    sashEl.classList.add('dragging');
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
   });
 
   window.addEventListener('mousemove', (e) => {
     if (!dragging) return;
-    const rh = window.innerWidth - e.clientX;
-    const clamped = Math.max(MIN_RH, Math.min(MAX_RH, rh));
-    app.style.setProperty('--rh-width', clamped + 'px');
+    app.style.setProperty(cssVar, calcSize(e.clientX) + 'px');
   });
 
   window.addEventListener('mouseup', () => {
     if (!dragging) return;
     dragging = false;
-    sash.classList.remove('dragging');
+    sashEl.classList.remove('dragging');
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
-    const val = getComputedStyle(app).getPropertyValue('--rh-width').trim();
-    localStorage.setItem('pt-rh-width', parseInt(val));
+    const val = getComputedStyle(app).getPropertyValue(cssVar).trim();
+    localStorage.setItem(storageKey, parseInt(val));
     if (state.chart) state.chart.applyOptions({ autoSize: true });
   });
+}
+
+function setupSash() {
+  const sashLeft = $('#sash-left');
+  const sashRight = $('#sash');
+
+  if (sashLeft) _initSash(sashLeft, '--lh-width', 'pt-lh-width',
+    x => Math.max(200, Math.min(600, x)));
+
+  if (sashRight) _initSash(sashRight, '--rh-width', 'pt-rh-width',
+    x => Math.max(280, Math.min(700, window.innerWidth - x)));
 }
 
 // ── View Toggle ──
