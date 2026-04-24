@@ -620,7 +620,7 @@ async def _file_watcher():
             history_tick += 1
             if balance_tick >= 20:
                 balance_tick = 0
-                write_hist = history_tick >= 40
+                write_hist = history_tick >= 400
                 if write_hist:
                     history_tick = 0
                 for xk in env.exchanges:
