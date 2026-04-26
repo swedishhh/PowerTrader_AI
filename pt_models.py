@@ -113,9 +113,11 @@ class CoinModel:
         try:
             ts = float(path.read_text().strip())
             age_days = (time.time() - ts) / 86400
-            return age_days <= TRAINING_STALENESS_DAYS
+            if age_days > TRAINING_STALENESS_DAYS:
+                return False
         except (FileNotFoundError, ValueError):
             return False
+        return any(self.env.coin_dir(self.coin).glob("memories_*.txt"))
 
     def last_trained_ts(self) -> float:
         try:

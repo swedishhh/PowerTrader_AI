@@ -282,10 +282,18 @@ def _load_gui_settings() -> dict:
         _gui_settings_cache["max_dca_buys_per_24h"] = max_dca_buys_per_24h
         _gui_settings_cache["long_term_holdings"] = list(parsed_lth_syms)
 
+        excluded_coins = data.get("excluded_coins", []) or []
+        if isinstance(excluded_coins, str):
+            excluded_coins = [x.strip() for x in excluded_coins.replace("\n", ",").split(",")]
+        if not isinstance(excluded_coins, (list, tuple)):
+            excluded_coins = []
+        excluded_coins = [str(v).upper().strip() for v in excluded_coins if str(v).strip()]
+
         _gui_settings_cache["pm_start_pct_no_dca"] = pm_start_pct_no_dca
         _gui_settings_cache["pm_start_pct_with_dca"] = pm_start_pct_with_dca
         _gui_settings_cache["trailing_gap_pct"] = trailing_gap_pct
         _gui_settings_cache["lth_profit_alloc_pct"] = lth_profit_alloc_pct
+        _gui_settings_cache["excluded_coins"] = excluded_coins
 
         return {
             "mtime": mtime,
@@ -301,6 +309,7 @@ def _load_gui_settings() -> dict:
             "pm_start_pct_with_dca": pm_start_pct_with_dca,
             "trailing_gap_pct": trailing_gap_pct,
             "lth_profit_alloc_pct": lth_profit_alloc_pct,
+            "excluded_coins": excluded_coins,
         }
 
     except Exception:
@@ -350,6 +359,7 @@ LTH_PROFIT_ALLOC_PCT = 0.0
 # Long-term (ignored) holdings symbols (optional UI grouping), updated by _refresh_paths_and_symbols()
 
 LONG_TERM_SYMBOLS: set[str] = set()
+EXCLUDED_COINS: set[str] = set()
 
 
 _last_settings_mtime = None
@@ -370,7 +380,7 @@ def _refresh_paths_and_symbols():
         DCA_LEVELS, \
         MAX_DCA_BUYS_PER_24H
     global TRAILING_GAP_PCT, PM_START_PCT_NO_DCA, PM_START_PCT_WITH_DCA
-    global LTH_PROFIT_ALLOC_PCT, LONG_TERM_SYMBOLS
+    global LTH_PROFIT_ALLOC_PCT, LONG_TERM_SYMBOLS, EXCLUDED_COINS
     global _last_settings_mtime
 
     s = _load_gui_settings()
@@ -468,6 +478,14 @@ def _refresh_paths_and_symbols():
     LONG_TERM_SYMBOLS.clear()
     LONG_TERM_SYMBOLS.update(cleaned_syms)
 
+    exc = s.get("excluded_coins", []) or []
+    if isinstance(exc, str):
+        exc = [x.strip() for x in exc.replace("\n", ",").split(",")]
+    if not isinstance(exc, (list, tuple)):
+        exc = []
+    EXCLUDED_COINS.clear()
+    EXCLUDED_COINS.update(str(v).upper().strip() for v in exc if str(v).strip())
+
     # Keep it safe if folder isn't real on this machine
     if not os.path.isdir(mndir):
         mndir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
@@ -482,6 +500,7 @@ class CryptoAPITrading:
         self.exchange = exchange
         self.path_map = dict(base_paths)
 
+        self._skipped_coins: set = set()
         self.dca_levels_triggered = {}  # Track DCA levels for each crypto
         self.dca_levels = list(DCA_LEVELS)  # Hard DCA triggers (percent PnL)
 
@@ -1624,6 +1643,24 @@ class CryptoAPITrading:
                 if not progressed:
                     time.sleep(1)
 
+        except Exception:
+            pass
+
+    def _record_skip(self, symbol: str, reason: str) -> None:
+        """Record a skipped buy in trade_history so the UI can show it."""
+        entry = {
+            "ts": time.time(),
+            "side": "skip",
+            "tag": "SKIP",
+            "symbol": symbol,
+            "qty": 0,
+            "price": None,
+            "notional_usd": None,
+            "reason": reason,
+        }
+        try:
+            with open(TRADE_HISTORY_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
         except Exception:
             pass
 
@@ -3238,6 +3275,11 @@ class CryptoAPITrading:
             base_symbol = crypto_symbols[start_index].upper().strip()
             full_symbol = f"{base_symbol}_USD"
 
+            # Skip if excluded
+            if base_symbol in EXCLUDED_COINS:
+                start_index += 1
+                continue
+
             # Skip if already held
             if full_symbol in holding_full_symbols:
                 start_index += 1
@@ -3251,6 +3293,19 @@ class CryptoAPITrading:
 
             # Default behavior: long must be >= start_level and short must be 0
             if not (buy_count >= start_level and sell_count == 0):
+                start_index += 1
+                continue
+
+            min_cost = self.exchange.get_min_order_cost(full_symbol)
+            if min_cost > 0 and allocation_in_usd < min_cost:
+                reason = f"Min order ${min_cost:.2f} > alloc ${allocation_in_usd:.2f}"
+                pos = positions.get(base_symbol)
+                if isinstance(pos, dict):
+                    pos["skip_reason"] = reason
+                if base_symbol not in self._skipped_coins:
+                    self._skipped_coins.add(base_symbol)
+                    print(f"[SKIP] {base_symbol}: {reason}")
+                    self._record_skip(full_symbol, reason)
                 start_index += 1
                 continue
 

@@ -31,11 +31,53 @@
     </div>
     <div id="topbar-account"></div>
     <div class="topbar-actions">
-      <button class="btn btn-primary" id="btn-start-all">Start All</button>
-      <button class="btn btn-danger" id="btn-stop-all" style="display:none">Stop All</button>
-      <button class="btn btn-danger" id="btn-close-all" disabled>Close All</button>
-      <button class="btn btn-secondary" id="btn-sync-control" disabled>Sync Control</button>
-      <button class="btn btn-secondary" id="btn-train-all">Train All</button>
+      <button class="btn btn-primary" id="btn-start-all" title="Start neural runner and traders for all exchanges">Start All</button>
+      <button class="btn btn-danger" id="btn-stop-all" style="display:none" title="Stop all running traders and the neural runner">Stop All</button>
+      <div class="actions-menu" id="actions-menu">
+        <button class="actions-trigger" id="btn-actions">
+          <span class="actions-trigger-icon">⋮</span>
+        </button>
+        <div class="actions-dropdown" id="actions-dropdown">
+          <div class="actions-heading">Actions</div>
+          <button class="actions-item" id="btn-close-all">
+            <span class="actions-item-dot" style="background:var(--red)"></span>
+            <span class="actions-item-body">
+              <span class="actions-item-label">Close All</span>
+              <span class="actions-item-desc">Sell all positions, return to cash</span>
+            </span>
+          </button>
+          <button class="actions-item" id="btn-train-all">
+            <span class="actions-item-dot" style="background:var(--purple)"></span>
+            <span class="actions-item-body">
+              <span class="actions-item-label">Train All</span>
+              <span class="actions-item-desc">Retrain neural models for all coins</span>
+            </span>
+          </button>
+          <div class="actions-sep"></div>
+          <button class="actions-item" id="btn-sync-control">
+            <span class="actions-item-dot" style="background:var(--cyan)"></span>
+            <span class="actions-item-body">
+              <span class="actions-item-label">Sync Control</span>
+              <span class="actions-item-desc">Match control balance to Kraken USD</span>
+            </span>
+          </button>
+          <button class="actions-item" id="btn-clear-history">
+            <span class="actions-item-dot" style="background:var(--text-muted)"></span>
+            <span class="actions-item-body">
+              <span class="actions-item-label">Clear History</span>
+              <span class="actions-item-desc">Wipe account value chart data</span>
+            </span>
+          </button>
+          <div class="actions-sep"></div>
+          <button class="actions-item actions-item--danger" id="btn-reset-all">
+            <span class="actions-item-dot" style="background:var(--red)"></span>
+            <span class="actions-item-body">
+              <span class="actions-item-label">Reset All</span>
+              <span class="actions-item-desc">Stop, close, wipe everything — fresh start</span>
+            </span>
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </header>
@@ -67,6 +109,7 @@
       </div>
     </div>
     <div id="chart-container" class="chart-container"></div>
+    <div id="chart-legend" class="chart-legend hidden"></div>
     <div id="coin-position" class="coin-position hidden"></div>
   </section>
 

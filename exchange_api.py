@@ -101,6 +101,10 @@ class ExchangeAdapter(ABC):
         """Return net filled qty for bot-owned orders. Used for ledger seeding. 0 = use ledger."""
         return 0.0
 
+    def get_min_order_cost(self, symbol: str) -> float:
+        """Return minimum order cost in USD for symbol. 0 = no minimum."""
+        return 0.0
+
     # ------------------------------------------------------------------
     # Symbol conversion helpers
     # ------------------------------------------------------------------

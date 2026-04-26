@@ -31,14 +31,30 @@ class KrakenAdapter(ExchangeAdapter):
             "enableRateLimit": True,
         })
         self._last_good_bid_ask: Dict[str, dict] = {}
+        self._quote_map: Dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Symbol conversion — ccxt normalises Kraken's XBT → BTC internally
     # ------------------------------------------------------------------
 
+    def _resolve_quote(self, base: str) -> str:
+        if base in self._quote_map:
+            return self._quote_map[base]
+        try:
+            markets = self._exchange.load_markets()
+            if f"{base}/USD" in markets:
+                self._quote_map[base] = "USD"
+            elif f"{base}/USDT" in markets:
+                self._quote_map[base] = "USDT"
+            else:
+                self._quote_map[base] = "USD"
+        except Exception:
+            return "USD"
+        return self._quote_map[base]
+
     def to_exchange_symbol(self, canonical: str) -> str:
         base, _ = canonical.split("_")
-        return f"{base}/USDT"
+        return f"{base}/{self._resolve_quote(base)}"
 
     def to_canonical_symbol(self, exchange_sym: str) -> str:
         base, quote = exchange_sym.split("/")
@@ -52,27 +68,33 @@ class KrakenAdapter(ExchangeAdapter):
         try:
             balance = self._exchange.fetch_balance()
             free = balance.get("free", {}) or {}
-            total_usdt = float(free.get("USDT", 0) or 0)
+            total_usd = float(free.get("USD", 0) or 0)
+            total_usd += float(free.get("USDT", 0) or 0)
             totals = balance.get("total", {}) or {}
             for currency, amount in totals.items():
                 amount = float(amount or 0)
-                if amount < 0.01 or currency in ("USD", "USDT"):
+                if amount <= 1e-12 or currency in ("USD", "USDT", "USDC"):
                     continue
                 try:
-                    ticker = self._exchange.fetch_ticker(f"{currency}/USDT")
+                    quote = self._resolve_quote(currency)
+                    ticker = self._exchange.fetch_ticker(f"{currency}/{quote}")
                     bid = float(ticker.get("bid", 0) or 0)
                     if bid > 0:
-                        total_usdt += amount * bid
+                        value = amount * bid
+                        if value < 0.01:
+                            continue
+                        total_usd += value
                 except Exception:
                     pass
-            return total_usdt
+            return total_usd
         except Exception:
             return None
 
     def get_buying_power(self) -> Optional[float]:
         try:
             balance = self._exchange.fetch_balance()
-            return float(balance.get("free", {}).get("USDT", 0) or 0)
+            free = balance.get("free", {}) or {}
+            return float(free.get("USD", 0) or 0) + float(free.get("USDT", 0) or 0)
         except Exception:
             return None
 
@@ -82,7 +104,7 @@ class KrakenAdapter(ExchangeAdapter):
             out: Dict[str, float] = {}
             for currency, amount in (balance.get("total", {}) or {}).items():
                 amount = float(amount or 0)
-                if amount < 0.01 or currency in ("USD", "USDT"):
+                if amount <= 1e-12 or currency in ("USD", "USDT"):
                     continue
                 out[currency] = amount
             return out
@@ -207,6 +229,23 @@ class KrakenAdapter(ExchangeAdapter):
             return bool(markets)
         except Exception:
             return False
+
+    def get_min_order_cost(self, symbol: str) -> float:
+        try:
+            exchange_sym = self.to_exchange_symbol(symbol)
+            markets = self._exchange.load_markets()
+            m = markets.get(exchange_sym, {})
+            limits = m.get("limits", {})
+            min_cost = float(limits.get("cost", {}).get("min", 0) or 0)
+            min_amt = float(limits.get("amount", {}).get("min", 0) or 0)
+            if min_amt > 0 and min_cost > 0:
+                ticker = self._exchange.fetch_ticker(exchange_sym)
+                price = float(ticker.get("ask", 0) or 0)
+                if price > 0:
+                    return max(min_cost, min_amt * price)
+            return min_cost
+        except Exception:
+            return 0.0
 
     def calculate_cost_basis_from_orders(
         self,
@@ -381,18 +420,14 @@ def create_adapter() -> KrakenAdapter:
     settings_path = os.environ.get("POWERTRADER_GUI_SETTINGS") or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "gui_settings.json"
     )
-    api_key = "/unqGUatSqD1e4qWVNWEIjSceH7Ewr3FnaJqwETrNAfzscLURgFwnwwf"
-    api_secret = "yP+T51E88SLn6bsfsb0z/jas0zYGPxTPLpUWZqM0Er32uA42iE2eOvBWQJxuFfCzM0JNc1NMrgLm+ATqwyGMsQ=="
+    api_key = ""
+    api_secret = ""
     try:
         if os.path.isfile(settings_path):
             with open(settings_path, "r", encoding="utf-8") as f:
                 data = json.load(f) or {}
-            k = str(data.get("kraken_api_key", "")).strip()
-            s = str(data.get("kraken_api_secret", "")).strip()
-            if k:
-                api_key = k
-            if s:
-                api_secret = s
+            api_key = str(data.get("kraken_api_key", "")).strip()
+            api_secret = str(data.get("kraken_api_secret", "")).strip()
     except Exception:
         pass
 

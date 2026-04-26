@@ -61,11 +61,20 @@ def _account_for_exchange(xk: str) -> dict:
     acct = AccountModel(env, xk)
     summary = acct.account_summary()
     pnl = acct.pnl()
+    positions = acct.positions()
+    unrealized = 0.0
+    for sym, pos in positions.items():
+        qty = float(pos.get("quantity", 0) or 0)
+        cost_basis = float(pos.get("avg_cost_basis", 0) or 0)
+        sell_price = float(pos.get("current_sell_price", 0) or 0)
+        if qty > 0 and cost_basis > 0 and sell_price > 0:
+            unrealized += (sell_price - cost_basis) * qty
     return {
         "exchange": xk,
         "account": summary,
         "pnl": {
             "total_realized_profit_usd": pnl.get("total_realized_profit_usd", 0),
+            "unrealized_profit_usd": round(unrealized, 2),
             "lth_profit_bucket_usd": pnl.get("lth_profit_bucket_usd", 0),
         },
     }
@@ -378,6 +387,79 @@ def _refresh_exchange_balance(xk: str, write_history: bool = True):
         print(f"[Balance] {xk} refresh failed: {e}")
 
 
+@app.post("/api/clear-account-history")
+async def api_clear_account_history():
+    """Delete account value history files for all exchanges."""
+    for xk in env.exchanges:
+        path = env.account_history_path(xk)
+        try:
+            if path.exists():
+                path.write_text("")
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+@app.post("/api/reset-all")
+async def api_reset_all():
+    """Stop everything, close all positions, wipe all state, reset to Kraken USD balance."""
+    ctrl.stop_all()
+
+    for xk in env.exchanges:
+        adapter = _get_adapter(xk)
+        if adapter:
+            for coin, qty in adapter.get_holdings().items():
+                try:
+                    adapter.place_sell(f"{coin}_USD", qty)
+                except Exception:
+                    pass
+
+    adapter_kr = _get_adapter("kraken")
+    balance = adapter_kr.get_buying_power() if adapter_kr else 0
+
+    for xk in env.exchanges:
+        for path in [env.trade_history_path(xk), env.account_history_path(xk)]:
+            try:
+                path.write_text("")
+            except Exception:
+                pass
+        try:
+            env.pnl_ledger_path(xk).write_text(json.dumps({
+                "total_realized_profit_usd": 0.0,
+                "open_positions": {},
+                "lth_profit_bucket_usd": 0.0,
+            }, indent=2))
+        except Exception:
+            pass
+        bot_ids = env.hub_data_dir / f"bot_order_ids_{xk}.json"
+        try:
+            bot_ids.write_text("{}")
+        except Exception:
+            pass
+        try:
+            env.trader_status_path(xk).write_text(json.dumps(
+                {"account": {}, "positions": {}}, indent=2
+            ))
+        except Exception:
+            pass
+
+    ctrl_state = env.hub_data_dir / "control_exchange_state.json"
+    try:
+        ctrl_state.write_text(json.dumps({
+            "usd_balance": balance or 0,
+            "holdings": {},
+            "orders": {},
+        }, indent=2))
+    except Exception:
+        pass
+
+    _adapters.pop("control", None)
+    for xk in env.exchanges:
+        _refresh_exchange_balance(xk)
+
+    return {"ok": True, "balance": balance}
+
+
 @app.post("/api/close-all")
 async def api_close_all():
     """Sell all positions on all exchanges, return to USDT."""
@@ -393,10 +475,180 @@ async def api_close_all():
         for coin, qty in holdings.items():
             symbol = f"{coin}_USD"
             result = adapter.place_sell(symbol, qty)
-            trades.append({"coin": coin, "qty": qty, "sold": result is not None})
+            sold = result is not None
+            trades.append({"coin": coin, "qty": qty, "sold": sold})
+            if sold:
+                _record_close_trade(xk, coin, symbol, qty, result)
         _refresh_exchange_balance(xk)
+        _clear_trader_positions(xk)
         results[xk] = {"ok": True, "trades": trades}
     return {"ok": True, "results": results}
+
+
+@app.post("/api/close-coin/{coin}/{exchange}")
+async def api_close_coin(coin: str, exchange: str):
+    """Sell a single coin's position on a specific exchange."""
+    coin = coin.upper()
+    xk = exchange.lower()
+
+    if xk not in env.exchanges:
+        return {"ok": False, "error": f"Unknown exchange: {xk}"}
+
+    adapter = _get_adapter(xk)
+    if not adapter:
+        return {"ok": False, "error": "No adapter"}
+
+    holdings = adapter.get_holdings()
+    qty = holdings.get(coin, 0)
+    symbol = f"{coin}_USD"
+
+    if qty > 0:
+        result = adapter.place_sell(symbol, qty)
+        if not result:
+            return {"ok": False, "error": "Sell failed"}
+        _record_close_trade(xk, coin, symbol, qty, result, tag="CLOSE")
+    else:
+        ledger = {}
+        try:
+            lp = env.pnl_ledger_path(xk)
+            if lp.exists():
+                ledger = json.loads(lp.read_text())
+        except Exception:
+            pass
+        has_ledger = float(
+            (ledger.get("open_positions") or {}).get(coin, {}).get("qty", 0) or 0
+        ) > 1e-12
+        status = {}
+        try:
+            sp = env.trader_status_path(xk)
+            if sp.exists():
+                status = json.loads(sp.read_text())
+        except Exception:
+            pass
+        has_status = float(
+            (status.get("positions") or {}).get(coin, {}).get("quantity", 0) or 0
+        ) > 1e-12
+        if not has_ledger and not has_status:
+            return {"ok": False, "error": f"No {coin} position on {xk}"}
+        if has_ledger:
+            (ledger.get("open_positions") or {}).pop(coin, None)
+            try:
+                env.pnl_ledger_path(xk).write_text(json.dumps(ledger, indent=2))
+            except Exception:
+                pass
+
+    _clear_coin_position(xk, coin)
+    _refresh_exchange_balance(xk)
+
+    return {"ok": True, "coin": coin, "exchange": xk, "qty": qty}
+
+
+def _clear_coin_position(xk: str, coin: str):
+    """Zero out a single coin's position in trader_status file."""
+    path = env.trader_status_path(xk)
+    try:
+        data = json.loads(path.read_text()) if path.exists() else {}
+        pos = (data.get("positions") or {}).get(coin)
+        if isinstance(pos, dict):
+            pos["quantity"] = 0
+            pos["value_usd"] = 0
+            pos["avg_cost_basis"] = 0
+            pos["gain_loss_pct_buy"] = 0
+            pos["gain_loss_pct_sell"] = 0
+        path.write_text(json.dumps(data, indent=2))
+    except Exception:
+        pass
+
+
+def _clear_trader_positions(xk: str):
+    """Zero out positions in trader_status file after close-all."""
+    path = env.trader_status_path(xk)
+    try:
+        data = json.loads(path.read_text()) if path.exists() else {}
+        for pos in (data.get("positions") or {}).values():
+            if isinstance(pos, dict):
+                pos["quantity"] = 0
+                pos["value_usd"] = 0
+                pos["avg_cost_basis"] = 0
+                pos["gain_loss_pct_buy"] = 0
+                pos["gain_loss_pct_sell"] = 0
+        path.write_text(json.dumps(data, indent=2))
+    except Exception:
+        pass
+
+
+def _record_close_trade(xk: str, coin: str, symbol: str, qty: float, result,
+                        tag: str = "CLOSE_ALL"):
+    """Record a close sell in trade history and update PnL ledger."""
+    ts = time.time()
+    price = result.avg_price
+    notional = result.notional_usd or (price * qty if price else None)
+    fees = result.fees_usd
+
+    ledger_path = env.pnl_ledger_path(xk)
+    try:
+        ledger = json.loads(ledger_path.read_text()) if ledger_path.exists() else {}
+    except Exception:
+        ledger = {}
+
+    pos = (ledger.get("open_positions") or {}).get(coin)
+    pos_qty = float(pos.get("qty", 0) or 0) if isinstance(pos, dict) else 0.0
+    pos_cost = float(pos.get("usd_cost", 0) or 0) if isinstance(pos, dict) else 0.0
+
+    frac = min(1.0, qty / pos_qty) if pos_qty > 0 else 1.0
+    cost_used = pos_cost * frac
+    avg_cost = cost_used / qty if qty > 0 else None
+
+    realized = None
+    if notional is not None:
+        fee_val = float(fees) if fees is not None else 0.0
+        realized = (notional - fee_val) - cost_used
+
+    pnl_pct = None
+    if realized is not None and cost_used > 0:
+        pnl_pct = (realized / cost_used) * 100
+
+    if isinstance(pos, dict):
+        pos["usd_cost"] = pos_cost - cost_used
+        pos["qty"] = pos_qty - qty
+        if float(pos.get("qty", 0) or 0) <= 1e-12:
+            ledger.get("open_positions", {}).pop(coin, None)
+
+    if realized is not None:
+        ledger["total_realized_profit_usd"] = float(
+            ledger.get("total_realized_profit_usd", 0) or 0
+        ) + realized
+
+    try:
+        ledger_path.write_text(json.dumps(ledger, indent=2))
+    except Exception:
+        pass
+
+    entry = {
+        "ts": ts,
+        "side": "sell",
+        "tag": tag,
+        "symbol": symbol,
+        "qty": qty,
+        "price": price,
+        "notional_usd": notional,
+        "net_usd": (notional - (float(fees) if fees else 0.0)) if notional else None,
+        "avg_cost_basis": avg_cost,
+        "pnl_pct": pnl_pct,
+        "fees_usd": fees,
+        "fees_missing": fees is None,
+        "fees_fallback_applied_usd": 0.0,
+        "realized_profit_usd": realized,
+        "order_id": result.order_id,
+        "position_cost_used_usd": cost_used,
+        "position_cost_after_usd": float((ledger.get("open_positions") or {}).get(coin, {}).get("usd_cost", 0) or 0),
+    }
+    history_path = env.trade_history_path(xk)
+    try:
+        with open(history_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+    except Exception:
+        pass
 
 
 @app.post("/api/sync-control")
@@ -407,8 +659,16 @@ async def api_sync_control():
 
     for xk in env.exchanges:
         a = _get_adapter(xk)
-        if a and a.get_holdings():
-            return {"ok": False, "error": f"{xk} has open positions"}
+        if a:
+            holdings = a.get_holdings()
+            pnl = json.loads(env.pnl_ledger_path(xk).read_text()) if env.pnl_ledger_path(xk).exists() else {}
+            open_pos = pnl.get("open_positions") or {}
+            has_real = any(
+                float((open_pos.get(coin) or {}).get("qty", 0) or 0) > 1e-12
+                for coin in holdings
+            )
+            if has_real:
+                return {"ok": False, "error": f"{xk} has open positions"}
 
     adapter_kr = _get_adapter("kraken")
     if not adapter_kr:
@@ -416,7 +676,7 @@ async def api_sync_control():
 
     buying_power = adapter_kr.get_buying_power()
     if not buying_power or buying_power <= 0:
-        return {"ok": False, "error": "Kraken has no USDT balance"}
+        return {"ok": False, "error": "Kraken has no USD balance"}
 
     state_path = env.hub_data_dir / "control_exchange_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -569,14 +829,19 @@ async def _file_watcher():
                             "exchange": xk,
                             "data": ts,
                         })
+                        xd = _account_for_exchange(xk)
+                        await ws_manager.broadcast({
+                            "type": "pnl",
+                            "exchange": xk,
+                            "data": xd["pnl"],
+                        })
 
                 if _check(env.pnl_ledger_path(xk), f"pnl_{xk}"):
-                    acct = AccountModel(env, xk)
-                    pnl = acct.pnl()
+                    xd = _account_for_exchange(xk)
                     await ws_manager.broadcast({
                         "type": "pnl",
                         "exchange": xk,
-                        "data": pnl,
+                        "data": xd["pnl"],
                     })
 
             signals_changed = False

@@ -7,7 +7,6 @@ import glob
 import json
 import os
 import queue
-import shutil
 import subprocess
 import sys
 import threading
@@ -19,11 +18,15 @@ from pt_env import PTEnv
 from pt_models import CoinModel, SystemModel
 
 
+MAX_LOG_BYTES = 2 * 1024 * 1024  # 2 MB per log file
+
+
 @dataclass
 class ProcHandle:
     name: str
     proc: subprocess.Popen | None = None
     log_q: queue.Queue = field(default_factory=lambda: queue.Queue(maxsize=4000))
+    log_file: Path | None = field(default=None, repr=False)
     _thread: threading.Thread | None = field(default=None, repr=False)
 
     @property
@@ -31,7 +34,16 @@ class ProcHandle:
         return self.proc is not None and self.proc.poll() is None
 
 
-def _reader_thread(proc: subprocess.Popen, q: queue.Queue, prefix: str):
+def _reader_thread(proc: subprocess.Popen, q: queue.Queue, prefix: str,
+                    on_exit: callable = None, log_path: Path | None = None):
+    log_fh = None
+    try:
+        if log_path:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_fh = open(log_path, "a", encoding="utf-8", buffering=1)
+    except Exception:
+        log_fh = None
+
     try:
         while True:
             line = proc.stdout.readline() if proc.stdout else ""
@@ -50,6 +62,35 @@ def _reader_thread(proc: subprocess.Popen, q: queue.Queue, prefix: str):
                 q.put_nowait(msg)
             except queue.Full:
                 pass
+            if log_fh:
+                try:
+                    log_fh.write(msg + "\n")
+                    if log_fh.tell() > MAX_LOG_BYTES:
+                        log_fh.close()
+                        _rotate_log(log_path)
+                        log_fh = open(log_path, "a", encoding="utf-8", buffering=1)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    if log_fh:
+        try:
+            log_fh.close()
+        except Exception:
+            pass
+    if on_exit:
+        try:
+            on_exit(proc.returncode)
+        except Exception:
+            pass
+
+
+def _rotate_log(path: Path):
+    prev = path.with_suffix(".prev.log")
+    try:
+        if prev.exists():
+            prev.unlink()
+        path.rename(prev)
     except Exception:
         pass
 
@@ -70,13 +111,19 @@ class ProcessController:
         e["POWERTRADER_EXCHANGE"] = exchange or self.env.exchange
         return e
 
+    def _log_dir(self) -> Path:
+        return self.env.hub_data_dir / "logs"
+
     def _launch(self, handle: ProcHandle, script_path: str, args: list[str] | None = None,
                 cwd: str | None = None, prefix: str = "",
-                exchange: str | None = None) -> bool:
+                exchange: str | None = None, on_exit: callable = None,
+                log_name: str | None = None) -> bool:
         if handle.alive:
             return True
         if not os.path.isfile(script_path):
             return False
+        log_path = self._log_dir() / f"{log_name}.log" if log_name else None
+        handle.log_file = log_path
         cmd = [sys.executable, "-u", script_path] + (args or [])
         try:
             handle.proc = subprocess.Popen(
@@ -90,7 +137,7 @@ class ProcessController:
             )
             handle._thread = threading.Thread(
                 target=_reader_thread,
-                args=(handle.proc, handle.log_q, prefix),
+                args=(handle.proc, handle.log_q, prefix, on_exit, log_path),
                 daemon=True,
             )
             handle._thread.start()
@@ -132,6 +179,7 @@ class ProcessController:
             self._neural,
             str(self.env.script_path("thinker")),
             prefix="[RUNNER] ",
+            log_name="neural",
         )
 
     def stop_neural(self):
@@ -172,6 +220,7 @@ class ProcessController:
                 str(self.env.script_path("trader")),
                 prefix=f"[TRADER:{xk.upper()}] ",
                 exchange=xk,
+                log_name=f"trader-{xk}",
             )
             ok = ok and result
         return ok
@@ -232,12 +281,8 @@ class ProcessController:
             trainer_name = os.path.basename(
                 self.env.settings.get("script_neural_trainer", "pt_trainer.py")
             )
-            src = self.env.project_dir / trainer_name
-            dst = coin_dir / trainer_name
-            if src.is_file():
-                shutil.copy2(str(src), str(dst))
-
-            if not dst.is_file():
+            trainer_path = self.env.project_dir / trainer_name
+            if not trainer_path.is_file():
                 return False
 
             patterns = [
@@ -254,12 +299,45 @@ class ProcessController:
                         pass
 
             handle = ProcHandle(name=f"Trainer-{coin}")
+
+            def _on_trainer_exit(returncode, _coin=coin, _dir=coin_dir):
+                status_path = _dir / "trainer_status.json"
+                failure_path = _dir / "trainer_failure_info.json"
+                try:
+                    status = json.loads(status_path.read_text()) if status_path.exists() else {}
+                except Exception:
+                    status = {}
+                if status.get("state") == "TRAINING":
+                    has_failure = False
+                    try:
+                        fi = json.loads(failure_path.read_text()) if failure_path.exists() else {}
+                        has_failure = bool(fi.get("exception_type"))
+                    except Exception:
+                        pass
+                    if not has_failure:
+                        failure = {
+                            "coin": _coin,
+                            "state": "FAILED",
+                            "exception_type": "ProcessDied",
+                            "exception_message": f"Trainer exited with code {returncode} without reporting results",
+                            "traceback": "",
+                            "trainer_state": {},
+                            "timestamp": int(time.time()),
+                            "started_at": status.get("started_at", 0),
+                        }
+                        failure_path.write_text(json.dumps(failure, indent=2))
+                    status["state"] = "FAILED"
+                    status["timestamp"] = int(time.time())
+                    status_path.write_text(json.dumps(status))
+
             ok = self._launch(
                 handle,
-                str(dst),
+                str(trainer_path),
                 args=[coin],
                 cwd=str(coin_dir),
                 prefix=f"[{coin}] ",
+                on_exit=_on_trainer_exit,
+                log_name=f"trainer-{coin.lower()}",
             )
             if ok:
                 self._trainers[coin] = handle
@@ -296,40 +374,55 @@ class ProcessController:
 
     # -- Logs --
 
-    def _resolve_log_queue(self, script: str):
+    def _resolve_handle(self, script: str) -> ProcHandle | None:
         if script == "neural":
-            return self._neural.log_q
+            return self._neural
         if script.startswith("trader"):
             parts = script.split("-", 1)
             xk = parts[1] if len(parts) > 1 else (self.env.exchanges[0] if self.env.exchanges else "control")
-            h = self._traders.get(xk)
-            return h.log_q if h else None
+            return self._traders.get(xk)
         if script.startswith("trainer-"):
             coin = script.split("-", 1)[1].upper()
-            h = self._trainers.get(coin)
-            return h.log_q if h else None
+            return self._trainers.get(coin)
         return None
 
+    def _resolve_log_file(self, script: str) -> Path | None:
+        h = self._resolve_handle(script)
+        if h and h.log_file:
+            return h.log_file
+        name = script.replace("trainer-", "trainer-").lower()
+        path = self._log_dir() / f"{name}.log"
+        return path if path.exists() else None
+
     def get_logs(self, script: str, limit: int = 200) -> list[str]:
-        q = self._resolve_log_queue(script)
-        if not q:
+        h = self._resolve_handle(script)
+        if not h:
             return []
         lines = []
-        while not q.empty() and len(lines) < limit:
+        while not h.log_q.empty() and len(lines) < limit:
             try:
-                lines.append(q.get_nowait())
+                lines.append(h.log_q.get_nowait())
             except queue.Empty:
                 break
         return lines
 
     def peek_logs(self, script: str, limit: int = 200) -> list[str]:
-        """Read logs without consuming them."""
-        q = self._resolve_log_queue(script)
-        if not q:
-            return []
-        with q.mutex:
-            items = list(q.queue)
-        return items[-limit:]
+        """Read logs from queue (live) or log file (persisted)."""
+        h = self._resolve_handle(script)
+        if h:
+            with h.log_q.mutex:
+                items = list(h.log_q.queue)
+            if items:
+                return items[-limit:]
+        log_file = self._resolve_log_file(script)
+        if log_file and log_file.exists():
+            try:
+                with open(log_file, "r", encoding="utf-8") as f:
+                    all_lines = f.readlines()
+                return [l.rstrip() for l in all_lines[-limit:]]
+            except Exception:
+                pass
+        return []
 
     # -- Settings --
 

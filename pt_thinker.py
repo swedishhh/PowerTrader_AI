@@ -573,10 +573,10 @@ def step_coin(sym: str):
             pass
         try:
             _ready_coins.discard(sym)
-            all_ready = len(_ready_coins) >= len(CURRENT_COINS)
+            any_ready = len(_ready_coins) > 0
             _write_runner_ready(
-                all_ready,
-                stage=("real_predictions" if all_ready else "training_required"),
+                any_ready,
+                stage=("real_predictions" if any_ready else "training_required"),
                 ready_coins=sorted(list(_ready_coins)),
                 total_coins=len(CURRENT_COINS),
             )
@@ -1254,10 +1254,10 @@ def step_coin(sym: str):
             else:
                 _ready_coins.discard(sym)
 
-            all_ready = len(_ready_coins) >= len(COIN_SYMBOLS)
+            any_ready = len(_ready_coins) > 0
             _write_runner_ready(
-                all_ready,
-                stage=("real_predictions" if all_ready else "warming_up"),
+                any_ready,
+                stage=("real_predictions" if any_ready else "warming_up"),
                 ready_coins=sorted(list(_ready_coins)),
                 total_coins=len(COIN_SYMBOLS),
             )

@@ -64,6 +64,10 @@ function fmtUSD(v) {
   if (Math.abs(n) >= 1) return '$' + n.toFixed(2);
   return '$' + n.toPrecision(4);
 }
+function fmtSignedUSD2(v) {
+  const n = Number(v || 0);
+  return (n >= 0 ? '+$' : '-$') + Math.abs(n).toFixed(2);
+}
 
 function fmtPct(v) {
   if (v == null || isNaN(v)) return '—';
@@ -215,8 +219,8 @@ async function refreshAll() {
     populateLogSourceDropdown();
 
     if ($('#tab-compare').classList.contains('active')) loadCompare();
-    renderTraining(coinsData.coins);
-    renderSettings(settingsData);
+    if (!$('#training-list').querySelector('.train-log-panel')) renderTraining(coinsData.coins);
+    if (!$('#tab-settings').classList.contains('active')) renderSettings(settingsData);
   } catch (e) {
     console.error('refreshAll failed:', e);
   }
@@ -262,7 +266,7 @@ function renderTopbarAccounts() {
   if (!container) return;
   const xks = state.exchangeList;
 
-  let html = '<table class="xk-table"><thead><tr><th></th><th>Portfolio</th><th>Buying Power</th><th>Holdings</th><th>Inv %</th><th>P&L</th>';
+  let html = '<table class="xk-table"><thead><tr><th></th><th>Portfolio</th><th>Buying Power</th><th>Holdings</th><th>Inv %</th><th>Realized</th><th>Unrealized</th>';
   if (xks.length >= 2) html += '<th>Δ</th>';
   html += '</tr></thead><tbody>';
 
@@ -275,7 +279,9 @@ function renderTopbarAccounts() {
     const holdings = acct.holdings_sell_value || 0;
     const pctInv = acct.percent_in_trade || 0;
     const realized = pnl.total_realized_profit_usd || 0;
+    const unrealized = pnl.unrealized_profit_usd || 0;
     const rClass = realized >= 0 ? 'positive' : 'negative';
+    const uClass = unrealized >= 0 ? 'positive' : 'negative';
     const color = XK_COLORS[xk] || '#888';
 
     html += `<tr>
@@ -284,7 +290,8 @@ function renderTopbarAccounts() {
       <td class="xk-table-val" data-xk-bp="${xk}">${fmtUSD(bp)}</td>
       <td class="xk-table-val" data-xk-hold="${xk}">${fmtUSD(holdings)}</td>
       <td class="xk-table-val" data-xk-inv="${xk}">${pctInv.toFixed(1)}%</td>
-      <td class="xk-table-val ${rClass}" data-xk-pnl="${xk}">${(realized >= 0 ? '+' : '') + fmtUSD(realized)}</td>`;
+      <td class="xk-table-val ${rClass}" data-xk-pnl="${xk}">${fmtSignedUSD2(realized)}</td>
+      <td class="xk-table-val ${uClass}" data-xk-upnl="${xk}">${fmtSignedUSD2(unrealized)}</td>`;
 
     if (xks.length >= 2) {
       if (i === 0) {
@@ -295,7 +302,7 @@ function renderTopbarAccounts() {
         const delta = t1 - t0;
         const dPct = t0 > 0 ? (delta / t0) * 100 : 0;
         const dClass = delta >= 0 ? 'positive' : 'negative';
-        html += `<td class="xk-table-val ${dClass}" id="acct-delta">${(delta >= 0 ? '+' : '') + fmtUSD(delta)}</td>`;
+        html += `<td class="xk-table-val ${dClass}" id="acct-delta">${fmtSignedUSD2(delta)}</td>`;
       }
     }
     html += '</tr>';
@@ -319,8 +326,14 @@ function updateTopbarExchange(xk, account, pnl) {
     const v = pnl.total_realized_profit_usd || 0;
     const el = $(`[data-xk-pnl="${xk}"]`);
     if (el) {
-      el.textContent = (v >= 0 ? '+' : '') + fmtUSD(v);
+      el.textContent = fmtSignedUSD2(v);
       el.className = 'xk-table-val ' + (v >= 0 ? 'positive' : 'negative');
+    }
+    const u = pnl.unrealized_profit_usd || 0;
+    const uel = $(`[data-xk-upnl="${xk}"]`);
+    if (uel) {
+      uel.textContent = fmtSignedUSD2(u);
+      uel.className = 'xk-table-val ' + (u >= 0 ? 'positive' : 'negative');
     }
   }
 
@@ -331,7 +344,7 @@ function updateTopbarExchange(xk, account, pnl) {
     const delta = t1 - t0;
     const el = $('#acct-delta');
     if (el) {
-      el.textContent = (delta >= 0 ? '+' : '') + fmtUSD(delta);
+      el.textContent = fmtSignedUSD2(delta);
       el.className = 'xk-table-val ' + (delta >= 0 ? 'positive' : 'negative');
     }
   }
@@ -371,6 +384,7 @@ function _createSimpleCard(coin) {
   card.dataset.coin = coin;
   card.innerHTML = `
     <span class="cc-name">${coin}</span>
+    <span class="cc-train-badge" data-f="train-badge"></span>
     <span class="cc-field"><span class="cc-mid" data-f="mid"></span></span>
     <span class="cc-field cc-pos-fields" data-f="pos-fields"></span>
     <span class="cc-field cc-ls" title="Long / Short (0–7)">
@@ -419,6 +433,21 @@ function _updateCard(card, c, modeOverride) {
   f('long').textContent = c.long_signal;
   f('short').textContent = c.short_signal;
 
+  const badge = f('train-badge');
+  if (badge) {
+    if (c.training_running) {
+      badge.textContent = 'TRAINING';
+      badge.className = 'cc-train-badge training';
+    } else if (!c.is_trained) {
+      const isFailed = c.training_state === 'FAILED' || c.training_state === 'FINISHED';
+      badge.textContent = isFailed ? 'FAILED' : 'UNTRAINED';
+      badge.className = 'cc-train-badge ' + (isFailed ? 'failed' : 'untrained');
+    } else {
+      badge.textContent = '';
+      badge.className = 'cc-train-badge';
+    }
+  }
+
   if (mode === 'simple') {
     const container = f('pos-fields');
     if (hasAnyPos) {
@@ -433,7 +462,12 @@ function _updateCard(card, c, modeOverride) {
       });
       container.innerHTML = html;
     } else {
-      container.innerHTML = '';
+      const reasons = c.skip_reasons || {};
+      const reasonHtml = Object.entries(reasons).map(([xk, reason]) => {
+        const color = XK_COLORS[xk] || '#888';
+        return `<span class="cc-skip"><span class="cc-xk-tag" style="color:${color}">${XK_LABELS[xk] || xk[0].toUpperCase()}</span>${reason}</span>`;
+      }).join('');
+      container.innerHTML = reasonHtml;
     }
   } else {
     const longPct = (c.long_signal / 7) * 100;
@@ -460,6 +494,7 @@ function _updateCard(card, c, modeOverride) {
             <span class="cc-xk-label" style="color:${color}">${xk}</span>
             <span class="cc-pos-value">${fmtUSD(pos.value_usd)}</span>
             <span class="cc-pos-pnl ${pnlClass}">${fmtPct(pnl)}</span>
+            <button class="cc-close-btn" onclick="event.stopPropagation(); closeCoinPosition('${c.coin}', '${xk}')" title="Close ${c.coin} on ${xk}">CLOSE</button>
           </div>
           <div class="cc-pos-grid">
             <div class="cc-pf"><span class="cc-pf-l">Qty</span><span class="cc-pf-v">${fmtQty(pos.quantity, c.coin)}</span></div>
@@ -533,9 +568,11 @@ function updateSignals(signals) {
 function mergePositionsIntoCoins() {
   state.coins.forEach(coin => {
     if (!coin.positions) coin.positions = {};
+    coin.skip_reasons = {};
     state.exchangeList.forEach(xk => {
       const xkPos = (state.positions[xk] || {})[coin.coin];
       coin.positions[xk] = (xkPos && xkPos.quantity > 0) ? xkPos : null;
+      if (xkPos && xkPos.skip_reason) coin.skip_reasons[xk] = xkPos.skip_reason;
     });
   });
 }
@@ -595,6 +632,7 @@ function _replaceCard(grid, oldCard, coin, mode) {
 function selectAccountChart(hours) {
   state.chartMode = 'account';
   state.accountRange = hours != null ? hours : state.accountRange;
+  if (!state.acctDisplayMode) state.acctDisplayMode = 'usd';
 
   if (state.cardMode === 'simple' && state._expandedCoin) {
     const grid = $('#signal-grid');
@@ -618,6 +656,7 @@ function selectAccountChart(hours) {
 
 async function loadChart(coin, tf) {
   const container = $('#chart-container');
+  $('#chart-legend').classList.add('hidden');
 
   if (state.chartRefreshTimer) {
     clearInterval(state.chartRefreshTimer);
@@ -726,6 +765,8 @@ async function loadAccountChart(hours) {
     state.priceLines = [];
   }
 
+  const isPct = state.acctDisplayMode === 'pct';
+
   state.chart = LightweightCharts.createChart(container, {
     width: container.clientWidth,
     height: container.clientHeight,
@@ -753,23 +794,38 @@ async function loadAccountChart(hours) {
       borderColor: CHART_COLORS.border,
     },
     localization: {
-      priceFormatter: v => '$' + v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}),
+      priceFormatter: isPct
+        ? v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%'
+        : v => '$' + v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}),
     },
   });
 
+  state._acctHidden = state._acctHidden || {};
   state.exchangeList.forEach(xk => {
     state.acctSeries[xk] = state.chart.addLineSeries({
       color: XK_COLORS[xk] || '#8888A8',
       lineWidth: 2,
-      title: xk,
-      priceFormat: {type: 'price', precision: 2, minMove: 0.01},
+      title: '',
+      priceFormat: isPct
+        ? {type: 'price', precision: 2, minMove: 0.01}
+        : {type: 'price', precision: 2, minMove: 0.01},
+      visible: !state._acctHidden[xk],
     });
+  });
+
+  state._acctMarkerSeries = state.chart.addLineSeries({
+    color: 'transparent',
+    lineWidth: 0,
+    lastValueVisible: false,
+    priceLineVisible: false,
+    crosshairMarkerVisible: false,
   });
 
   await _applyAccountData(hours);
 
   state.chart.timeScale().fitContent();
 
+  // Build controls: range buttons + $/%  toggle
   const tfContainer = $('#tf-selector');
   tfContainer.style.display = '';
   tfContainer.innerHTML = '';
@@ -780,6 +836,24 @@ async function loadAccountChart(hours) {
     btn.addEventListener('click', () => selectAccountChart(r.hours));
     tfContainer.appendChild(btn);
   });
+
+  const sep = document.createElement('span');
+  sep.className = 'tf-sep';
+  tfContainer.appendChild(sep);
+
+  ['usd', 'pct'].forEach(mode => {
+    const btn = document.createElement('button');
+    btn.className = 'tf-btn' + (state.acctDisplayMode === mode ? ' active' : '');
+    btn.textContent = mode === 'usd' ? '$' : '%';
+    btn.addEventListener('click', () => {
+      state.acctDisplayMode = mode;
+      loadAccountChart(state.accountRange);
+    });
+    tfContainer.appendChild(btn);
+  });
+
+  // Legend
+  _buildAccountLegend();
 
   state.chartRefreshTimer = setInterval(async () => {
     if (state.chartMode !== 'account') return;
@@ -794,17 +868,100 @@ async function loadAccountChart(hours) {
   resizeObserver.observe(container);
 }
 
+function _buildAccountLegend() {
+  const legend = $('#chart-legend');
+  legend.classList.remove('hidden');
+  legend.innerHTML = '';
+  state.exchangeList.forEach(xk => {
+    const color = XK_COLORS[xk] || '#888';
+    const hidden = !!state._acctHidden[xk];
+    const item = document.createElement('button');
+    item.className = 'legend-item' + (hidden ? ' legend-hidden' : '');
+    item.innerHTML = `<span class="legend-dot" style="background:${color}"></span><span class="legend-label">${xk}</span>`;
+    item.addEventListener('click', () => {
+      state._acctHidden[xk] = !state._acctHidden[xk];
+      const series = state.acctSeries[xk];
+      if (series) series.applyOptions({visible: !state._acctHidden[xk]});
+      item.classList.toggle('legend-hidden');
+    });
+    legend.appendChild(item);
+  });
+}
+
 async function _applyAccountData(hours) {
   try {
     const qs = hours > 0 ? `?hours=${hours}` : '';
-    const data = await api('account-history' + qs);
-    const histByXk = data.history || {};
+    const [histData, tradeData] = await Promise.all([
+      api('account-history' + qs),
+      api('trades?limit=500'),
+    ]);
+    const histByXk = histData.history || {};
+    const isPct = state.acctDisplayMode === 'pct';
+
     state.exchangeList.forEach(xk => {
       const series = state.acctSeries[xk];
-      const points = (histByXk[xk] || []).map(h => ({time: Math.floor(h.ts), value: h.total_account_value}));
-      if (series && points.length > 0) series.setData(points);
+      const raw = histByXk[xk] || [];
+      if (!series || raw.length === 0) return;
+
+      const baseVal = raw[0].total_account_value;
+      const points = raw.map(h => {
+        const t = Math.floor(h.ts);
+        const v = h.total_account_value;
+        return {time: t, value: isPct ? ((v - baseVal) / baseVal) * 100 : v};
+      });
+      series.setData(points);
     });
-  } catch {}
+
+    // Trade markers on a hidden overlay series
+    const allTrades = [];
+    const tradesByXk = tradeData.trades || {};
+    state.exchangeList.forEach(xk => {
+      (tradesByXk[xk] || []).forEach(t => allTrades.push({...t, _xk: xk}));
+    });
+
+    if (state._acctMarkerSeries && allTrades.length > 0) {
+      const firstXk = state.exchangeList[0];
+      const refSeries = state.acctSeries[firstXk];
+      if (refSeries) {
+        const markers = allTrades
+          .filter(t => t.side === 'buy' || t.side === 'sell')
+          .map(t => {
+            const side = t.side.toLowerCase();
+            const tag = (t.tag || '').toUpperCase();
+            const coin = (t.symbol || '').split('_')[0];
+            const xkLabel = XK_LABELS[t._xk] || t._xk[0].toUpperCase();
+            let label, color, shape, position;
+            if (side === 'buy') {
+              label = tag === 'DCA' ? `${xkLabel}:${coin}` : `${xkLabel}:${coin}`;
+              color = tag === 'DCA' ? '#A855F7' : '#FF4466';
+              shape = 'arrowUp';
+              position = 'belowBar';
+            } else {
+              label = `${xkLabel}:${coin}`;
+              color = '#00CC66';
+              shape = 'arrowDown';
+              position = 'aboveBar';
+            }
+            return {time: Math.floor(t.ts), position, color, shape, text: label};
+          })
+          .sort((a, b) => a.time - b.time);
+
+        // Feed the marker series the same data as the first exchange so markers position correctly
+        const refRaw = histByXk[firstXk] || [];
+        const baseVal = refRaw.length > 0 ? refRaw[0].total_account_value : 0;
+        const overlayPoints = refRaw.map(h => ({
+          time: Math.floor(h.ts),
+          value: isPct ? ((h.total_account_value - baseVal) / baseVal) * 100 : h.total_account_value,
+        }));
+        if (overlayPoints.length > 0) {
+          state._acctMarkerSeries.setData(overlayPoints);
+          state._acctMarkerSeries.setMarkers(markers);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('_applyAccountData failed:', e);
+  }
 }
 
 async function updateChartTradeMarkers(coin) {
@@ -1006,7 +1163,8 @@ async function loadTradeHistory() {
   }
 
   container.innerHTML = allTrades.map(t => {
-    const coin = (t.symbol || '').replace('_USD', '');
+    const pair = (t.symbol || '').replace('_', '/');
+    const coin = (t.symbol || '').split('_')[0];
     const tagClass = t.tag || '';
     const tagHtml = t.tag ? `<span class="hist-tag ${tagClass}">${t.tag}</span>` : '';
     const isSell = t.side === 'sell';
@@ -1015,13 +1173,24 @@ async function loadTradeHistory() {
     const xkColor = XK_COLORS[t._xk] || '#888';
     const xkBadge = `<span class="hist-xk" style="color:${xkColor}">${XK_LABELS[t._xk] || t._xk[0].toUpperCase()}</span>`;
 
+    if (t.side === 'skip') {
+      return `
+        <div class="hist-row hist-row-skip" data-coin="${coin}">
+          <span class="hist-time">${fmtDateTime(t.ts)}</span>
+          ${xkBadge}
+          <span class="hist-side skip">skip</span>
+          <span>${pair} ${tagHtml} <span class="hist-reason">${t.reason || ''}</span></span>
+        </div>
+      `;
+    }
+
     if (isSell && hasPnl) {
       return `
         <div class="hist-row hist-row-sell" data-coin="${coin}">
           <span class="hist-time">${fmtDateTime(t.ts)}</span>
           ${xkBadge}
           <span class="hist-side sell">sell</span>
-          <span>${coin} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
+          <span>${pair} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
           <span class="hist-amount">${fmtUSD(t.notional_usd)}</span>
           <span class="hist-sell-detail">
             <span class="hist-pnl ${pnlClass}">${fmtPct(t.pnl_pct)}</span>
@@ -1036,7 +1205,7 @@ async function loadTradeHistory() {
         <span class="hist-time">${fmtDateTime(t.ts)}</span>
         ${xkBadge}
         <span class="hist-side ${t.side}">${t.side}</span>
-        <span>${coin} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
+        <span>${pair} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
         <span class="hist-amount">${fmtUSD(t.notional_usd)}</span>
       </div>
     `;
@@ -1193,16 +1362,18 @@ function renderTraining(coins) {
     return;
   }
 
+  const _isFail = c => !c.is_trained && (c.training_state === 'FAILED' || c.training_state === 'FINISHED');
   const sorted = [...coins].sort((a, b) => {
-    const aFail = (a.training_state === 'FAILED') ? 0 : 1;
-    const bFail = (b.training_state === 'FAILED') ? 0 : 1;
+    const aFail = _isFail(a) ? 0 : 1;
+    const bFail = _isFail(b) ? 0 : 1;
     if (aFail !== bFail) return aFail - bFail;
     return a.coin.localeCompare(b.coin);
   });
 
   container.innerHTML = sorted.map(c => {
-    const tState = c.training_running ? 'TRAINING' : (c.training_state || 'UNKNOWN');
+    const rawState = c.training_running ? 'TRAINING' : (c.training_state || 'UNKNOWN');
     const trained = !c.training_running && c.is_trained;
+    const tState = trained ? 'TRAINED' : (rawState === 'FINISHED' ? 'FAILED' : rawState);
     const lastTs = c.last_trained_ts;
     const ageText = lastTs > 0 ? fmtDate(lastTs) : 'Never';
     const fail = c.training_running ? null : c.training_failure;
@@ -1242,7 +1413,7 @@ function renderTraining(coins) {
           </span>
         </div>
         <div class="train-actions">
-          <span class="train-status ${tState}">${trained ? 'TRAINED' : tState}</span>
+          <span class="train-status ${tState}">${tState}</span>
           <button class="btn btn-small btn-secondary" onclick="toggleTrainerLog('${c.coin}')">Log</button>
           <button class="btn btn-small btn-secondary" onclick="trainCoin('${c.coin}')">Train</button>
         </div>
@@ -1250,6 +1421,16 @@ function renderTraining(coins) {
     `;
   }).join('');
 }
+
+window.closeCoinPosition = async function(coin, xk) {
+  if (!confirm(`Close ${coin} position on ${xk}?`)) return;
+  const btn = event.target;
+  btn.disabled = true;
+  const res = await apiPost(`close-coin/${coin}/${xk}`);
+  if (res && !res.ok) alert(res.error || 'Close failed');
+  setTimeout(refreshAll, 1000);
+  setTimeout(() => { btn.disabled = false; }, 3000);
+};
 
 window.trainCoin = async function(coin) {
   await apiPost(`train/${coin}`);
@@ -1319,6 +1500,10 @@ function renderSettings(s) {
         <input type="text" id="set-exchanges" value="${(s.exchanges || ['control']).join(', ')}">
       </div>
       <div class="settings-field">
+        <label>Excluded Coins (no trading)</label>
+        <input type="text" id="set-excluded" value="${(s.excluded_coins || []).join(', ')}">
+      </div>
+      <div class="settings-field">
         <label>Live Price Source</label>
         <select id="set-price-source">
           <option value="kraken" ${(s.live_price_source || 'kraken') === 'kraken' ? 'selected' : ''}>Kraken</option>
@@ -1376,6 +1561,17 @@ function renderSettings(s) {
       </div>
     </div>
     <div class="settings-group">
+      <div class="settings-group-title">Kraken API</div>
+      <div class="settings-field">
+        <label>API Key</label>
+        <input type="password" id="set-kraken-key" value="${s.kraken_api_key || ''}" autocomplete="off">
+      </div>
+      <div class="settings-field">
+        <label>API Secret</label>
+        <input type="password" id="set-kraken-secret" value="${s.kraken_api_secret || ''}" autocomplete="off">
+      </div>
+    </div>
+    <div class="settings-group">
       <div class="settings-group-title">Control Exchange</div>
       <div class="settings-field">
         <label title="0 = auto-sync from Kraken balance on first run">Starting USD (0 = sync from Kraken)</label>
@@ -1404,6 +1600,7 @@ async function saveSettings() {
   updated.coins = $('#set-coins').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
   updated.exchanges = $('#set-exchanges').value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
   updated.exchange = updated.exchanges[0] || 'control';
+  updated.excluded_coins = $('#set-excluded').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
   updated.live_price_source = $('#set-price-source').value;
   updated.trade_start_level = parseInt($('#set-tsl').value) || 1;
   updated.start_allocation_pct = parseFloat($('#set-alloc').value) || 0.5;
@@ -1415,8 +1612,14 @@ async function saveSettings() {
   updated.trailing_gap_pct = parseFloat($('#set-gap').value) || 0.1;
   updated.long_term_holdings = $('#set-lth').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
   updated.lth_profit_alloc_pct = parseFloat($('#set-lth-pct').value) || 50;
+  updated.kraken_api_key = $('#set-kraken-key').value.trim();
+  updated.kraken_api_secret = $('#set-kraken-secret').value.trim();
   updated.control_starting_usd = parseFloat($('#set-ctrl-usd').value) || 0;
   updated.auto_start_scripts = $('#set-autostart').checked;
+
+  delete updated.system;
+  delete updated.account;
+  delete updated.pnl;
 
   const result = await apiPut('settings', updated);
   if (result.ok) {
@@ -1514,27 +1717,49 @@ function setupButtons() {
     setTimeout(refreshAll, 1000);
   });
 
-  $('#btn-train-all').addEventListener('click', async () => {
-    $('#btn-train-all').disabled = true;
-    await apiPost('train-all');
-    setTimeout(refreshAll, 2000);
-    setTimeout(() => { $('#btn-train-all').disabled = false; }, 5000);
+  // Actions dropdown toggle
+  $('#btn-actions').addEventListener('click', (e) => {
+    e.stopPropagation();
+    $('#actions-menu').classList.toggle('open');
+  });
+  $('#actions-dropdown').addEventListener('click', (e) => e.stopPropagation());
+  document.addEventListener('click', () => {
+    $('#actions-menu').classList.remove('open');
   });
 
   $('#btn-close-all').addEventListener('click', async () => {
     if (!confirm('Close ALL positions on ALL exchanges?')) return;
-    $('#btn-close-all').disabled = true;
+    $('#actions-menu').classList.remove('open');
     await apiPost('close-all');
     setTimeout(refreshAll, 2000);
-    setTimeout(() => { $('#btn-close-all').disabled = false; }, 5000);
   });
 
   $('#btn-sync-control').addEventListener('click', async () => {
-    $('#btn-sync-control').disabled = true;
+    $('#actions-menu').classList.remove('open');
     const res = await apiPost('sync-control');
     if (res && !res.ok) alert(res.error || 'Sync failed');
     setTimeout(refreshAll, 1000);
-    setTimeout(() => { $('#btn-sync-control').disabled = false; }, 3000);
+  });
+
+  $('#btn-clear-history').addEventListener('click', async () => {
+    if (!confirm('Clear account value history for all exchanges?')) return;
+    $('#actions-menu').classList.remove('open');
+    await apiPost('clear-account-history');
+    if (state.chartMode === 'account') selectAccountChart(state.accountRange);
+  });
+
+  $('#btn-train-all').addEventListener('click', async () => {
+    $('#actions-menu').classList.remove('open');
+    await apiPost('train-all');
+    setTimeout(refreshAll, 2000);
+  });
+
+  $('#btn-reset-all').addEventListener('click', async () => {
+    if (!confirm('RESET ALL STATE?\n\nThis will:\n• Stop all traders\n• Close all positions\n• Wipe trade history & PnL\n• Reset balances to Kraken USD\n\nThis cannot be undone.')) return;
+    $('#actions-menu').classList.remove('open');
+    const res = await apiPost('reset-all');
+    if (res && !res.ok) alert(res.error || 'Reset failed');
+    setTimeout(refreshAll, 2000);
   });
 
   $('#btn-refresh-logs').addEventListener('click', refreshLogs);

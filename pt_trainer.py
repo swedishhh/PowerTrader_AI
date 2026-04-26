@@ -615,11 +615,10 @@ while True:
             else:
                 continue
         perc_comp = format((len(history_list) / how_far_to_look_back) * 100, ".2f")
-        print("gathering history")
         current_change = len(history_list) - list_len
+        vprint(f"gathering history: +{current_change} candles, total {len(history_list)}")
         try:
-            print("\n\n\n\n")
-            print(current_change)
+            vprint(current_change)
             if current_change < 1000:
                 break
             else:
@@ -632,10 +631,7 @@ while True:
         last_perc_comp = perc_comp
         start_time = end_time
         end_time = int(start_time - ((1500 * timeframe_minutes) * 60))
-        print(last_start_time)
-        print(start_time)
-        print(end_time)
-        print("\n")
+        vprint(f"time range: {last_start_time} -> {start_time} -> {end_time}")
         if start_time <= last_start_time:
             break
         else:
@@ -788,10 +784,8 @@ while True:
             index2 = index + 1
             price_change_list = []
             while True:
-                price_change = 100 * (
-                    (price_list2[index] - open_price_list2[index])
-                    / open_price_list2[index]
-                )
+                _open = open_price_list2[index]
+                price_change = 100 * ((price_list2[index] - _open) / _open) if _open != 0 else 0.0
                 price_change_list.append(price_change)
                 index += 1
                 if index >= len(price_list2):
@@ -802,10 +796,8 @@ while True:
             index2 = index + 1
             high_price_change_list = []
             while True:
-                high_price_change = 100 * (
-                    (high_price_list2[index] - open_price_list2[index])
-                    / open_price_list2[index]
-                )
+                _open = open_price_list2[index]
+                high_price_change = 100 * ((high_price_list2[index] - _open) / _open) if _open != 0 else 0.0
                 high_price_change_list.append(high_price_change)
                 index += 1
                 if index >= len(price_list2):
@@ -816,10 +808,8 @@ while True:
             index2 = index + 1
             low_price_change_list = []
             while True:
-                low_price_change = 100 * (
-                    (low_price_list2[index] - open_price_list2[index])
-                    / open_price_list2[index]
-                )
+                _open = open_price_list2[index]
+                low_price_change = 100 * ((low_price_list2[index] - _open) / _open) if _open != 0 else 0.0
                 low_price_change_list.append(low_price_change)
                 index += 1
                 if index >= len(price_list2):
@@ -829,7 +819,7 @@ while True:
             # Check stop signal occasionally (much less disk IO)
             if should_stop_training(loop_i):
                 exited = "yes"
-                print("finished processing")
+                print("training stopped")
                 file = open("trainer_last_start_time.txt", "w+")
                 file.write(str(start_time_yes))
                 file.close()
@@ -1014,10 +1004,7 @@ while True:
             perfect = []
             while True:
                 try:
-                    print("\n\n\n\n")
-                    print(choice_index)
-                    print(restarted_yet)
-                    print(tf_list[restarted_yet])
+                    vprint(f"\nchoice={choice_index} restart={restarted_yet} tf={tf_list[restarted_yet]}")
                     try:
                         current_pattern_length = number_of_candles[
                             number_of_candles_index
@@ -1276,6 +1263,13 @@ while True:
                                     break
                                 else:
                                     continue
+                        except FileNotFoundError:
+                            memory_list = []
+                            weight_list = []
+                            high_weight_list = []
+                            low_weight_list = []
+                            which_memory_index = "no"
+                            perfect.append("no")
                         except:
                             PrintException()
                             memory_list = []
@@ -1384,7 +1378,7 @@ while True:
                         high_all_predictions.append(high_prediction_prices)
                         low_all_predictions.append(low_prediction_prices)
                         index = 0
-                        print(tf_choice)
+                        vprint(tf_choice)
                         page_info = ""
                         current_pattern_length = 3
                         index = (len(price_list2) - 1) - current_pattern_length
@@ -1615,20 +1609,13 @@ while True:
                             else:
                                 pass
                             try:
-                                print(
-                                    "(Bounce Accuracy for last 100 Over Limit Candles): "
-                                    + format(
-                                        (sum(upordown4) / len(upordown4)) * 100, ".2f"
-                                    )
-                                )
-                            except:
-                                pass
-                            try:
-                                print("current candle: " + str(len(price_list2)))
-                            except:
-                                pass
-                            try:
-                                print("Total Candles: " + str(int(len(price_list))))
+                                _cur = len(price_list2)
+                                _tot = int(len(price_list))
+                                _acc = format((sum(upordown4) / len(upordown4)) * 100, ".2f")
+                                if _cur % 500 == 0 or _cur == _tot:
+                                    _pct = format(_cur / _tot * 100, ".0f") if _tot > 0 else "?"
+                                    _mem_count = len(memory_list)
+                                    print(f"[{tf_choice} {the_big_index+1}/{len(tf_choices)}] candle {_cur}/{_tot} ({_pct}%)  accuracy={_acc}%  memories={_mem_count}  threshold={perfect_threshold:.3f}")
                             except:
                                 pass
                         except:
@@ -1715,7 +1702,7 @@ while True:
                                     if len(price_list2) == len(price_list):
                                         the_big_index += 1
                                         restarted_yet = 0
-                                        print("restarting")
+                                        print(f"restarting tf_index={the_big_index + 1}/{len(tf_choices)}")
                                         restarting = "yes"
                                         avg50 = []
                                         import sys
@@ -1817,8 +1804,7 @@ while True:
 
                                         how_far_to_look_back = 100000
                                         list_len = 0
-                                        print(the_big_index)
-                                        print(len(tf_choices))
+                                        vprint(f"big_index={the_big_index} tf_choices={len(tf_choices)}")
                                         if the_big_index >= len(tf_choices):
                                             if len(number_of_candles) == 1:
                                                 print(
@@ -2002,7 +1988,7 @@ while True:
                                                     direction = "down"
                                                     try:
                                                         indy = 0
-                                                        while True:
+                                                        while indy < len(moves):
                                                             new_memory = "no"
                                                             var3 = moves[indy] * 100
                                                             high_var3 = (
@@ -2158,7 +2144,7 @@ while True:
                                                                 flush_memory(tf_choice)
 
                                                             indy += 1
-                                                            if indy >= len(unweighted):
+                                                            if indy >= len(unweighted) or indy >= len(moves):
                                                                 break
                                                             else:
                                                                 pass
