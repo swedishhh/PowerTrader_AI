@@ -526,10 +526,24 @@ body {
 .coin-card.simple {
   display: flex;
   align-items: center;
-  gap: 0;
+  justify-content: space-between;
   padding: 7px 10px;
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.coin-card.simple .cc-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.coin-card.simple .cc-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .coin-card.simple .cc-name {
@@ -538,26 +552,27 @@ body {
   font-size: 13px;
   letter-spacing: 1px;
   color: var(--text-primary);
-  flex-shrink: 0;
-  margin-right: 4px;
-}
-
-.coin-card.simple .cc-field {
-  flex: 0 0 auto;
-  text-align: right;
-  color: var(--text-secondary);
-  padding: 0 4px;
-  white-space: nowrap;
 }
 
 .coin-card.simple .cc-mid { color: var(--text-muted); }
-.coin-card.simple .cc-pos-fields { margin-left: auto; }
+.coin-card.simple .cc-pos-fields {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.coin-card.simple .cc-xk-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.coin-card.simple .cc-notional { color: var(--text-secondary); }
 .coin-card.simple .cc-long { color: var(--cyan); font-weight: 600; }
 .coin-card.simple .cc-short { color: var(--red); font-weight: 600; }
 .coin-card.simple .cc-sep { color: var(--text-muted); margin: 0 1px; font-size: 10px; }
 
 .coin-card.simple .cc-pnl {
   font-weight: 600;
+  margin-right: 2px;
 }
 .coin-card.simple .cc-pnl.positive { color: var(--green); }
 .coin-card.simple .cc-pnl.negative { color: var(--red); }
@@ -1356,19 +1371,7 @@ body {
 }
 
 
-/* ── Exchange badges (coin cards, simple mode) ── */
-.cc-pos-fields {
-  display: flex;
-  gap: 8px;
-}
-
-.cc-xk-pos {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 11px;
-}
-
+/* ── Exchange badges (coin cards) ── */
 .cc-xk-tag {
   font-family: var(--font-display);
   font-weight: 700;

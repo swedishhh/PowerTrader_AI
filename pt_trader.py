@@ -500,6 +500,11 @@ class CryptoAPITrading:
         self.exchange = exchange
         self.path_map = dict(base_paths)
 
+        self.mirror = None
+        if EXCHANGE_KEY == "kraken":
+            from control_mirror import ControlMirror
+            self.mirror = ControlMirror(HUB_DATA_DIR)
+
         self._skipped_coins: set = set()
         self.dca_levels_triggered = {}  # Track DCA levels for each crypto
         self.dca_levels = list(DCA_LEVELS)  # Hard DCA triggers (percent PnL)
@@ -566,6 +571,8 @@ class CryptoAPITrading:
         self._dca_buy_ts = {}  # { "BTC": [ts, ts, ...] } (DCA buys only)
         self._dca_last_sell_ts = {}  # { "BTC": ts_of_last_sell }
         self._seed_dca_window_from_history()
+
+        self._last_history_write_ts = 0.0
 
     def _atomic_read_json(self, path: str) -> Optional[dict]:
         """
@@ -2333,6 +2340,14 @@ class CryptoAPITrading:
         except Exception:
             pass
 
+        if self.mirror and result and str(tag or "").upper() != "LTH":
+            try:
+                base = self.exchange.base_from_canonical(symbol)
+                notional = result.notional_usd or (result.avg_price * result.filled_qty)
+                self.mirror.mirror_buy(base, notional, tag=tag)
+            except Exception:
+                pass
+
         return result
 
     def place_sell_order(
@@ -2414,9 +2429,17 @@ class CryptoAPITrading:
         except Exception:
             pass
 
+        if self.mirror and result and str(tag or "").upper() != "LTH":
+            try:
+                base = self.exchange.base_from_canonical(symbol)
+                self.mirror.mirror_sell(base, tag=tag)
+            except Exception:
+                pass
+
         return result
 
     def manage_trades(self):
+        _mt_start = time.time()
         trades_made = False  # Flag to track if any trade was made in this iteration
 
         # Hot-reload coins list + paths + trade params from GUI settings while running
@@ -2481,7 +2504,9 @@ class CryptoAPITrading:
             if full not in symbols:
                 symbols.append(full)
 
+        _t_price = time.time()
         current_buy_prices, current_sell_prices, valid_symbols = self.get_price(symbols)
+        _price_dur = time.time() - _t_price
 
         # Calculate total account value (robust: never drop a held coin to $0 on transient API misses)
         snapshot_ok = True
@@ -3393,13 +3418,33 @@ class CryptoAPITrading:
                 },
                 "positions": positions,
             }
-            self._append_jsonl(
-                ACCOUNT_VALUE_HISTORY_PATH,
-                {"ts": status["timestamp"], "total_account_value": total_account_value},
-            )
             self._write_trader_status(status)
+
+            now = time.time()
+            if now - self._last_history_write_ts >= 300:
+                self._last_history_write_ts = now
+                self._append_jsonl(
+                    ACCOUNT_VALUE_HISTORY_PATH,
+                    {"ts": now, "total_account_value": total_account_value},
+                )
+                if self.mirror:
+                    self.mirror.append_account_value(self.mirror.get_account_value())
         except Exception:
             pass
+
+        _mirror_dur = 0.0
+        if self.mirror:
+            try:
+                _t_mirror = time.time()
+                self.mirror.write_status()
+                _mirror_dur = time.time() - _t_mirror
+            except Exception:
+                pass
+
+        _mt_total = time.time() - _mt_start
+        if _mt_total > 5 or not hasattr(self, '_mt_logged'):
+            self._mt_logged = True
+            print(f"[Loop] total={_mt_total:.1f}s prices={_price_dur:.1f}s mirror={_mirror_dur:.1f}s")
 
     def run(self):
         while True:
@@ -3413,5 +3458,7 @@ class CryptoAPITrading:
 if __name__ == "__main__":
     exchange = load_exchange_adapter(EXCHANGE_KEY)
     print(f"[PowerTrader] Exchange: {EXCHANGE_KEY}")
+    t0 = time.time()
     trading_bot = CryptoAPITrading(exchange)
+    print(f"[PowerTrader] Init took {time.time() - t0:.1f}s")
     trading_bot.run()

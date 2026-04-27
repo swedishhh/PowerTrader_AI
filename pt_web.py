@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pt_env import PTEnv
 from pt_models import CoinModel, AccountModel, SystemModel
 from pt_controller import ProcessController
+from control_mirror import ControlMirror
 
 PROJECT_DIR = Path(__file__).resolve().parent
 WEB_DIR = PROJECT_DIR / "web"
@@ -26,6 +27,15 @@ WEB_DIR = PROJECT_DIR / "web"
 env = PTEnv(project_dir=PROJECT_DIR)
 ctrl = ProcessController(env)
 app = FastAPI(title="PowerTrader Web")
+
+
+def _get_mirror() -> ControlMirror:
+    return ControlMirror(str(env.hub_data_dir))
+
+try:
+    _get_mirror().write_status()
+except Exception:
+    pass
 
 _adapters: dict = {}
 
@@ -454,6 +464,7 @@ async def api_reset_all():
         pass
 
     _adapters.pop("control", None)
+    _get_mirror().reload()
     for xk in env.exchanges:
         _refresh_exchange_balance(xk)
 
@@ -466,6 +477,8 @@ async def api_close_all():
     ctrl.stop_trader()
     results = {}
     for xk in env.exchanges:
+        if xk == "control":
+            continue
         adapter = _get_adapter(xk)
         if not adapter:
             results[xk] = {"ok": False, "error": "no adapter"}
@@ -479,9 +492,11 @@ async def api_close_all():
             trades.append({"coin": coin, "qty": qty, "sold": sold})
             if sold:
                 _record_close_trade(xk, coin, symbol, qty, result)
+                _get_mirror().mirror_sell(coin, tag="CLOSE_ALL")
         _refresh_exchange_balance(xk)
         _clear_trader_positions(xk)
         results[xk] = {"ok": True, "trades": trades}
+    _clear_trader_positions("control")
     return {"ok": True, "results": results}
 
 
@@ -490,6 +505,9 @@ async def api_close_coin(coin: str, exchange: str):
     """Sell a single coin's position on a specific exchange."""
     coin = coin.upper()
     xk = exchange.lower()
+
+    if xk == "control":
+        return {"ok": False, "error": "Control positions close automatically when Kraken closes"}
 
     if xk not in env.exchanges:
         return {"ok": False, "error": f"Unknown exchange: {xk}"}
@@ -507,6 +525,8 @@ async def api_close_coin(coin: str, exchange: str):
         if not result:
             return {"ok": False, "error": "Sell failed"}
         _record_close_trade(xk, coin, symbol, qty, result, tag="CLOSE")
+        if xk == "kraken":
+            _get_mirror().mirror_sell(coin, tag="CLOSE")
     else:
         ledger = {}
         try:
@@ -536,8 +556,12 @@ async def api_close_coin(coin: str, exchange: str):
                 env.pnl_ledger_path(xk).write_text(json.dumps(ledger, indent=2))
             except Exception:
                 pass
+        if xk == "kraken":
+            _get_mirror().mirror_sell(coin, tag="CLOSE")
 
     _clear_coin_position(xk, coin)
+    if xk == "kraken":
+        _clear_coin_position("control", coin)
     _refresh_exchange_balance(xk)
 
     return {"ok": True, "coin": coin, "exchange": xk, "qty": qty}
@@ -684,6 +708,7 @@ async def api_sync_control():
         json.dump({"usd_balance": buying_power, "holdings": {}, "orders": {}}, f, indent=2)
 
     _adapters.pop("control", None)
+    _get_mirror().reload()
     _refresh_exchange_balance("control")
     print(f"[Sync] Control balance set to ${buying_power:,.2f} from Kraken")
     return {"ok": True, "balance": buying_power}
@@ -798,7 +823,6 @@ async def _file_watcher():
     """Poll key files and broadcast changes to WebSocket clients."""
     mtimes: dict[str, float] = {}
     balance_tick = 0
-    history_tick = 0
 
     def _check(path: Path, key: str) -> bool:
         try:
@@ -867,7 +891,7 @@ async def _file_watcher():
                 sm = SystemModel(env)
                 rr = sm.runner_ready()
                 await ws_manager.broadcast({"type": "runner_ready", "data": rr})
-                if rr.get("ready"):
+                if rr.get("ready") and ctrl.neural_running:
                     ctrl.poll_ready_and_start_trader()
 
             traders_status = {}
@@ -882,15 +906,15 @@ async def _file_watcher():
             await ws_manager.broadcast({"type": "system", "data": sys_status})
 
             balance_tick += 1
-            history_tick += 1
             if balance_tick >= 20:
                 balance_tick = 0
-                write_hist = history_tick >= 400
-                if write_hist:
-                    history_tick = 0
-                for xk in env.exchanges:
-                    if not ctrl.trader_running_for(xk):
-                        _refresh_exchange_balance(xk, write_history=write_hist)
+                if not ctrl.trader_running_for("kraken"):
+                    try:
+                        _get_mirror().write_status()
+                    except Exception:
+                        pass
+                    _refresh_exchange_balance("control", write_history=False)
+                    _refresh_exchange_balance("kraken", write_history=False)
 
         except Exception:
             pass

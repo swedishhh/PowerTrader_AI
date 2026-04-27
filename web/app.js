@@ -383,12 +383,16 @@ function _createSimpleCard(coin) {
   card.className = 'coin-card simple';
   card.dataset.coin = coin;
   card.innerHTML = `
-    <span class="cc-name">${coin}</span>
-    <span class="cc-train-badge" data-f="train-badge"></span>
-    <span class="cc-field"><span class="cc-mid" data-f="mid"></span></span>
-    <span class="cc-field cc-pos-fields" data-f="pos-fields"></span>
-    <span class="cc-field cc-ls" title="Long / Short (0–7)">
-      <span class="cc-long" data-f="long"></span><span class="cc-sep">/</span><span class="cc-short" data-f="short"></span>
+    <span class="cc-left">
+      <span class="cc-name">${coin}</span>
+      <span class="cc-train-badge" data-f="train-badge"></span>
+      <span class="cc-mid" data-f="mid"></span>
+    </span>
+    <span class="cc-right">
+      <span class="cc-pos-fields" data-f="pos-fields"></span>
+      <span class="cc-ls" title="Long / Short (0–7)">
+        <span class="cc-long" data-f="long"></span><span class="cc-sep">/</span><span class="cc-short" data-f="short"></span>
+      </span>
     </span>`;
   card.addEventListener('click', () => selectCoin(coin));
   return card;
@@ -458,16 +462,11 @@ function _updateCard(card, c, modeOverride) {
         const pnl = pos.gain_loss_pct_buy;
         const pnlClass = pnl >= 0 ? 'positive' : 'negative';
         const color = XK_COLORS[xk] || '#888';
-        html += `<span class="cc-xk-pos"><span class="cc-xk-tag" style="color:${color}">${XK_LABELS[xk] || xk[0].toUpperCase()}</span>${fmtUSD(pos.value_usd)} <span class="cc-pnl ${pnlClass}">${fmtPct(pnl)}</span></span>`;
+        html += `<span class="cc-xk-group"><span class="cc-xk-tag" style="color:${color}">${XK_LABELS[xk] || xk[0].toUpperCase()}</span><span class="cc-notional">${fmtUSD(pos.value_usd)}</span><span class="cc-pnl ${pnlClass}">${fmtPct(pnl)}</span></span>`;
       });
       container.innerHTML = html;
     } else {
-      const reasons = c.skip_reasons || {};
-      const reasonHtml = Object.entries(reasons).map(([xk, reason]) => {
-        const color = XK_COLORS[xk] || '#888';
-        return `<span class="cc-skip"><span class="cc-xk-tag" style="color:${color}">${XK_LABELS[xk] || xk[0].toUpperCase()}</span>${reason}</span>`;
-      }).join('');
-      container.innerHTML = reasonHtml;
+      container.innerHTML = '';
     }
   } else {
     const longPct = (c.long_signal / 7) * 100;
@@ -488,20 +487,21 @@ function _updateCard(card, c, modeOverride) {
       const maxDca = state.settings.max_dca_buys_per_24h || 1;
       const dca24 = (state.dca24h[xk] || {})[c.coin] || 0;
       const sellPrice = pos.trail_line > 0 ? fmtPrice(pos.trail_line) : '—';
+      const krakenFields = xk !== 'control' ? `
+            <div class="cc-pf"><span class="cc-pf-l">Sell Level</span><span class="cc-pf-v">${sellPrice}</span></div>
+            <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${pos.dca_triggered_stages > 0 ? '<span class="pos-dca-chip">stg ' + pos.dca_triggered_stages + '</span>' : '—'} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>` : '';
       posHtml += `
         <div class="cc-xk-section">
           <div class="cc-pos-header">
             <span class="cc-xk-label" style="color:${color}">${xk}</span>
             <span class="cc-pos-value">${fmtUSD(pos.value_usd)}</span>
             <span class="cc-pos-pnl ${pnlClass}">${fmtPct(pnl)}</span>
-            <button class="cc-close-btn" onclick="event.stopPropagation(); closeCoinPosition('${c.coin}', '${xk}')" title="Close ${c.coin} on ${xk}">CLOSE</button>
+            ${xk !== 'control' ? `<button class="cc-close-btn" onclick="event.stopPropagation(); closeCoinPosition('${c.coin}', '${xk}')" title="Close ${c.coin} on ${xk}">CLOSE</button>` : ''}
           </div>
           <div class="cc-pos-grid">
             <div class="cc-pf"><span class="cc-pf-l">Qty</span><span class="cc-pf-v">${fmtQty(pos.quantity, c.coin)}</span></div>
             <div class="cc-pf"><span class="cc-pf-l">Avg Cost</span><span class="cc-pf-v">${fmtPrice(pos.avg_cost_basis)}</span></div>
-            <div class="cc-pf"><span class="cc-pf-l">Bid / Ask</span><span class="cc-pf-v">${fmtPrice(pos.current_sell_price)} / ${fmtPrice(pos.current_buy_price)}</span></div>
-            <div class="cc-pf"><span class="cc-pf-l">Sell Level</span><span class="cc-pf-v">${sellPrice}</span></div>
-            <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${pos.dca_triggered_stages > 0 ? '<span class="pos-dca-chip">stg ' + pos.dca_triggered_stages + '</span>' : '—'} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>
+            <div class="cc-pf"><span class="cc-pf-l">Bid / Ask</span><span class="cc-pf-v">${fmtPrice(pos.current_sell_price)} / ${fmtPrice(pos.current_buy_price)}</span></div>${krakenFields}
           </div>
         </div>`;
     });
@@ -912,32 +912,32 @@ async function _applyAccountData(hours) {
       series.setData(points);
     });
 
-    // Trade markers on a hidden overlay series
-    const allTrades = [];
+    // Trade markers on kraken line only (skip control trades)
+    const krakenTrades = [];
     const tradesByXk = tradeData.trades || {};
     state.exchangeList.forEach(xk => {
-      (tradesByXk[xk] || []).forEach(t => allTrades.push({...t, _xk: xk}));
+      if (xk === 'control') return;
+      (tradesByXk[xk] || []).forEach(t => krakenTrades.push({...t, _xk: xk}));
     });
 
-    if (state._acctMarkerSeries && allTrades.length > 0) {
-      const firstXk = state.exchangeList[0];
-      const refSeries = state.acctSeries[firstXk];
+    const krakenXk = state.exchangeList.find(xk => xk !== 'control');
+    if (state._acctMarkerSeries && krakenTrades.length > 0 && krakenXk) {
+      const refSeries = state.acctSeries[krakenXk];
       if (refSeries) {
-        const markers = allTrades
+        const markers = krakenTrades
           .filter(t => t.side === 'buy' || t.side === 'sell')
           .map(t => {
             const side = t.side.toLowerCase();
             const tag = (t.tag || '').toUpperCase();
             const coin = (t.symbol || '').split('_')[0];
-            const xkLabel = XK_LABELS[t._xk] || t._xk[0].toUpperCase();
             let label, color, shape, position;
             if (side === 'buy') {
-              label = tag === 'DCA' ? `${xkLabel}:${coin}` : `${xkLabel}:${coin}`;
+              label = coin;
               color = tag === 'DCA' ? '#A855F7' : '#FF4466';
               shape = 'arrowUp';
               position = 'belowBar';
             } else {
-              label = `${xkLabel}:${coin}`;
+              label = coin;
               color = '#00CC66';
               shape = 'arrowDown';
               position = 'aboveBar';
@@ -946,8 +946,7 @@ async function _applyAccountData(hours) {
           })
           .sort((a, b) => a.time - b.time);
 
-        // Feed the marker series the same data as the first exchange so markers position correctly
-        const refRaw = histByXk[firstXk] || [];
+        const refRaw = histByXk[krakenXk] || [];
         const baseVal = refRaw.length > 0 ? refRaw[0].total_account_value : 0;
         const overlayPoints = refRaw.map(h => ({
           time: Math.floor(h.ts),

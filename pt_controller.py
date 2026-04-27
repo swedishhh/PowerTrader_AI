@@ -214,6 +214,8 @@ class ProcessController:
             exchanges = self.env.exchanges
         ok = True
         for xk in exchanges:
+            if xk == "control":
+                continue
             h = self._get_trader(xk)
             result = self._launch(
                 h,
