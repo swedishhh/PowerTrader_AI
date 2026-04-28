@@ -105,10 +105,19 @@ class ControlMirror:
 
     def _get_account_value(self) -> float:
         total = float(self._state.get("usd_balance", 0))
+        ok = True
         for base, qty in (self._state.get("holdings") or {}).items():
+            if qty <= 0:
+                continue
             price = _kucoin_mid_price(base)
-            if price and qty > 0:
+            if price and price > 0:
                 total += qty * price
+            else:
+                ok = False
+        if not ok and hasattr(self, "_last_good_account_value"):
+            return self._last_good_account_value
+        if ok:
+            self._last_good_account_value = total
         return total
 
     def mirror_buy(self, coin: str, notional_usd: float,

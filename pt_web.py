@@ -1,6 +1,10 @@
 """FastAPI web server for PowerTrader_AI.
 
-Run:  python pt_web.py [--port 8080]
+Run:
+
+    python pt_web.py [--port 8080]
+
+    conda activate powertrader && cd ~/dev/code/git/PowerTrader_AI && python pt_web.py --port 8088
 
 Provides REST API + WebSocket for real-time updates, serving the web/ frontend.
 Supports multiple exchanges running simultaneously (e.g. control + kraken).
@@ -90,19 +94,30 @@ def _account_for_exchange(xk: str) -> dict:
     }
 
 
-def _downsample(raw: list[dict], max_points: int) -> list[dict]:
-    if len(raw) <= max_points:
+def _resample(raw: list[dict], interval_s: int = 600) -> list[dict]:
+    """Resample irregular account history to fixed time intervals via linear interpolation."""
+    if len(raw) < 2:
         return raw
-    bucket_size = len(raw) / max_points
+    t0 = raw[0]["ts"]
+    t1 = raw[-1]["ts"]
+    first_bin = int(t0 // interval_s) * interval_s + interval_s
+    if first_bin > t1:
+        return raw
     out = []
-    for i in range(max_points):
-        start = int(i * bucket_size)
-        end = int((i + 1) * bucket_size)
-        chunk = raw[start:end]
-        if chunk:
-            avg_ts = sum(r["ts"] for r in chunk) / len(chunk)
-            avg_val = sum(r["total_account_value"] for r in chunk) / len(chunk)
-            out.append({"ts": avg_ts, "total_account_value": avg_val})
+    j = 0
+    t = first_bin
+    while t <= t1:
+        while j < len(raw) - 1 and raw[j + 1]["ts"] < t:
+            j += 1
+        a, b = raw[j], raw[j + 1] if j + 1 < len(raw) else raw[j]
+        dt = b["ts"] - a["ts"]
+        if dt > 0:
+            frac = (t - a["ts"]) / dt
+            val = a["total_account_value"] + frac * (b["total_account_value"] - a["total_account_value"])
+        else:
+            val = a["total_account_value"]
+        out.append({"ts": t, "total_account_value": val})
+        t += interval_s
     return out
 
 
@@ -210,16 +225,28 @@ async def api_trades(limit: int = 250, exchange: str = ""):
 
 
 @app.get("/api/account-history")
-async def api_account_history(hours: float = 0, max_points: int = 500):
-    """Return account value history for all exchanges."""
+async def api_account_history(hours: float = 0):
+    """Return account value history for all exchanges, resampled to regular intervals."""
     result = {}
+    if hours == 0:
+        interval = 900        # 15 min for ALL
+    elif hours <= 24:
+        interval = 600        # 10 min
+    elif hours <= 168:
+        interval = 3600       # 1 hour
+    else:
+        interval = 14400      # 4 hours
+
     for xk in env.exchanges:
         acct = AccountModel(env, xk)
         raw = acct.account_value_history(limit=0)
         if hours > 0:
             cutoff = time.time() - hours * 3600
             raw = [r for r in raw if r.get("ts", 0) >= cutoff]
-        result[xk] = _downsample(raw, max_points) if raw else []
+        resampled = _resample(raw, interval) if raw else []
+        if raw and resampled and raw[-1]["ts"] > resampled[-1]["ts"]:
+            resampled.append(raw[-1])
+        result[xk] = resampled
     return {"history": result}
 
 

@@ -541,11 +541,14 @@ class CryptoAPITrading:
 
         # GUI hub persistence
         self._pnl_ledger = self._load_pnl_ledger()
+        print("[Init] Reconciling pending orders…")
         self._reconcile_pending_orders()
 
+        print("[Init] Calculating cost basis…")
         self.cost_basis = (
             self.calculate_cost_basis()
         )  # Initialize cost basis at startup
+        print("[Init] Initializing DCA levels…")
         self.initialize_dca_levels()  # Initialize DCA levels based on historical buy orders
 
         # We must seed open_positions from the selected bot order IDs (Hub picker),
@@ -1051,6 +1054,9 @@ class CryptoAPITrading:
         if bucket < 0.0:
             bucket = 0.0
 
+        if rp != 0.0 and alloc != 0.0:
+            print(f"  [LTH] Realized profit ${rp:.2f} × {pct:.0f}% = ${alloc:.2f} allocated to LTH bucket (was ${prev_bucket:.2f}, now ${bucket:.2f})")
+
         spend_now = 0.0
 
         # Spec rule: if a single trade's allocated portion >= $0.50, spend that whole portion (plus any bucket)
@@ -1058,10 +1064,14 @@ class CryptoAPITrading:
         if alloc >= 0.50:
             spend_now = float(alloc) + float(prev_bucket)
             bucket = 0.0
+            print(f"  [LTH] Single allocation ${alloc:.2f} >= $0.50 threshold — spending ${spend_now:.2f} (allocation + saved bucket)")
         else:
             if bucket >= 0.50:
                 spend_now = float(bucket)
                 bucket = 0.0
+                print(f"  [LTH] Bucket reached ${spend_now:.2f} >= $0.50 threshold — spending accumulated bucket")
+            elif rp != 0.0:
+                print(f"  [LTH] Bucket ${bucket:.2f} below $0.50 threshold — accumulating, no buy yet")
 
         # Persist bucket update even if we don't buy yet
         self._pnl_ledger["lth_profit_bucket_usd"] = float(bucket)
@@ -1075,11 +1085,13 @@ class CryptoAPITrading:
             # can't pick a coin; put it back into bucket so it isn't lost
             self._pnl_ledger["lth_profit_bucket_usd"] = float(bucket + spend_now)
             self._save_pnl_ledger()
+            print(f"  [LTH] No eligible LTH coin to buy — returning ${spend_now:.2f} to bucket")
             return
 
         pct_map = self._read_lth_ema200_snapshot()
         pct_from_ema = pct_map.get(pick, None)
 
+        print(f"  [LTH] Buying ${spend_now:.2f} of {pick}" + (f" ({pct_from_ema:+.1f}% from EMA200)" if pct_from_ema is not None else ""))
         ok = self._lth_market_buy_for_usd(pick, spend_now)
         if ok:
             self._pnl_ledger["lth_profit_bucket_usd"] = 0.0
@@ -1092,10 +1104,12 @@ class CryptoAPITrading:
                 ),
             }
             self._save_pnl_ledger()
+            print(f"  [LTH] Buy filled — {pick} ${spend_now:.2f}")
         else:
             # failed buy -> restore funds to bucket so they're not lost
             self._pnl_ledger["lth_profit_bucket_usd"] = float(bucket + spend_now)
             self._save_pnl_ledger()
+            print(f"  [LTH] Buy FAILED for {pick} — returning ${spend_now:.2f} to bucket")
 
     # -----------------------------
     # Ledger seeding from selected bot order IDs
@@ -1588,10 +1602,14 @@ class CryptoAPITrading:
         If the hub/trader restarts mid-order, we keep minimal order metadata on disk and
         finish the accounting once the order shows as terminal on the exchange.
         """
+        MAX_RETRIES = 10
         try:
             pending = self._pnl_ledger.get("pending_orders", {})
             if not isinstance(pending, dict) or not pending:
                 return
+
+            print(f"[Reconcile] {len(pending)} pending order(s) to reconcile")
+            retries = 0
 
             while True:
                 pending = self._pnl_ledger.get("pending_orders", {})
@@ -1603,6 +1621,7 @@ class CryptoAPITrading:
                 for order_id, info in list(pending.items()):
                     try:
                         if self._trade_history_has_order_id(order_id):
+                            print(f"[Reconcile] {order_id[:12]}… found in trade history, removing")
                             self._pnl_ledger["pending_orders"].pop(order_id, None)
                             self._save_pnl_ledger()
                             progressed = True
@@ -1617,16 +1636,19 @@ class CryptoAPITrading:
                             progressed = True
                             continue
 
+                        print(f"[Reconcile] Querying exchange for {order_id[:12]}… ({symbol} {side})")
                         result = self.exchange.get_order_result(symbol, order_id)
                         if not result:
                             continue
 
                         if result.state != "filled":
+                            print(f"[Reconcile] {order_id[:12]}… state={result.state}, discarding")
                             self._pnl_ledger["pending_orders"].pop(order_id, None)
                             self._save_pnl_ledger()
                             progressed = True
                             continue
 
+                        print(f"[Reconcile] {order_id[:12]}… filled, recording trade")
                         self._record_trade(
                             side=side,
                             symbol=symbol,
@@ -1648,6 +1670,16 @@ class CryptoAPITrading:
                         continue
 
                 if not progressed:
+                    retries += 1
+                    if retries >= MAX_RETRIES:
+                        remaining = self._pnl_ledger.get("pending_orders", {})
+                        for oid, info in list(remaining.items()):
+                            sym = info.get("symbol", "?")
+                            print(f"[Reconcile] Giving up on {oid[:12]}… ({sym}) after {MAX_RETRIES} retries, discarding")
+                        self._pnl_ledger["pending_orders"] = {}
+                        self._save_pnl_ledger()
+                        break
+                    print(f"[Reconcile] No progress, retrying ({retries}/{MAX_RETRIES})…")
                     time.sleep(1)
 
         except Exception:

@@ -205,9 +205,25 @@ class KrakenAdapter(ExchangeAdapter):
         try:
             closed = self._exchange.fetch_closed_orders(exchange_sym)
             open_orders = self._exchange.fetch_open_orders(exchange_sym)
-            return {"results": closed + open_orders}
+            return {"results": [self._normalize_order(o) for o in closed + open_orders]}
         except Exception:
             return {"results": []}
+
+    @staticmethod
+    def _normalize_order(o: dict) -> dict:
+        """Map ccxt order fields to the shape pt_trader expects."""
+        status = str(o.get("status", "")).lower()
+        state_map = {"closed": "filled", "canceled": "canceled",
+                     "cancelled": "canceled", "expired": "canceled"}
+        o["state"] = state_map.get(status, status)
+        o["created_at"] = o.get("datetime") or ""
+        avg = o.get("average") or o.get("price")
+        if avg is not None:
+            o["average_price"] = avg
+        filled = o.get("filled")
+        if filled is not None:
+            o["filled_asset_quantity"] = filled
+        return o
 
     # ------------------------------------------------------------------
     # Optional overrides
@@ -285,7 +301,7 @@ class KrakenAdapter(ExchangeAdapter):
             filled_bot_buys = []
             for o in orders_list:
                 try:
-                    if str(o.get("status", "")).lower() != "closed":
+                    if o.get("state") != "filled":
                         continue
                     if str(o.get("side", "")).lower() != "buy":
                         continue
@@ -298,7 +314,7 @@ class KrakenAdapter(ExchangeAdapter):
             if not filled_bot_buys:
                 continue
 
-            filled_bot_buys.sort(key=lambda x: x.get("timestamp", 0) or 0)
+            filled_bot_buys.sort(key=lambda x: x.get("created_at") or "")
 
             lots = []
             for o in filled_bot_buys:

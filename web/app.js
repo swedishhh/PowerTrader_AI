@@ -487,9 +487,11 @@ function _updateCard(card, c, modeOverride) {
       const maxDca = state.settings.max_dca_buys_per_24h || 1;
       const dca24 = (state.dca24h[xk] || {})[c.coin] || 0;
       const sellPrice = pos.trail_line > 0 ? fmtPrice(pos.trail_line) : '—';
+      const totalDcaLevels = (state.settings.dca_levels || []).length;
+      const dcaChip = pos.dca_triggered_stages > 0 ? `<span class="pos-dca-chip">stg ${pos.dca_triggered_stages}/${totalDcaLevels}</span>` : '—';
       const krakenFields = xk !== 'control' ? `
             <div class="cc-pf"><span class="cc-pf-l">Sell Level</span><span class="cc-pf-v">${sellPrice}</span></div>
-            <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${pos.dca_triggered_stages > 0 ? '<span class="pos-dca-chip">stg ' + pos.dca_triggered_stages + '</span>' : '—'} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>` : '';
+            <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${dcaChip} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>` : '';
       posHtml += `
         <div class="cc-xk-section">
           <div class="cc-pos-header">
@@ -587,14 +589,18 @@ function selectCoin(coin) {
   if (state.cardMode === 'simple') {
     const grid = $('#signal-grid');
     const prev = state._expandedCoin;
-    if (prev && prev !== coin) {
+    if (prev === coin) {
+      const oldCard = grid.querySelector(`.coin-card[data-coin="${prev}"]`);
+      if (oldCard) _replaceCard(grid, oldCard, prev, 'simple');
+      state._expandedCoin = null;
+      return;
+    }
+    if (prev) {
       const oldCard = grid.querySelector(`.coin-card[data-coin="${prev}"]`);
       if (oldCard) _replaceCard(grid, oldCard, prev, 'simple');
     }
-    if (coin !== prev) {
-      const curCard = grid.querySelector(`.coin-card[data-coin="${coin}"]`);
-      if (curCard) _replaceCard(grid, curCard, coin, 'detail');
-    }
+    const curCard = grid.querySelector(`.coin-card[data-coin="${coin}"]`);
+    if (curCard) _replaceCard(grid, curCard, coin, 'detail');
     state._expandedCoin = coin;
   }
 
@@ -657,10 +663,16 @@ function selectAccountChart(hours) {
 async function loadChart(coin, tf) {
   const container = $('#chart-container');
   $('#chart-legend').classList.add('hidden');
+  $('#chart-diff-container').classList.add('hidden');
 
   if (state.chartRefreshTimer) {
     clearInterval(state.chartRefreshTimer);
     state.chartRefreshTimer = null;
+  }
+  if (state._diffChart) {
+    state._diffChart.remove();
+    state._diffChart = null;
+    state._diffSeries = null;
   }
   if (state.chart) {
     state.chart.remove();
@@ -752,6 +764,7 @@ async function loadChart(coin, tf) {
 
 async function loadAccountChart(hours) {
   const container = $('#chart-container');
+  const diffContainer = $('#chart-diff-container');
 
   if (state.chartRefreshTimer) {
     clearInterval(state.chartRefreshTimer);
@@ -764,12 +777,28 @@ async function loadAccountChart(hours) {
     state.acctSeries = {};
     state.priceLines = [];
   }
+  if (state._diffChart) {
+    state._diffChart.remove();
+    state._diffChart = null;
+    state._diffSeries = null;
+  }
 
   const isPct = state.acctDisplayMode === 'pct';
+  const hasMulti = state.exchangeList.length >= 2;
 
-  state.chart = LightweightCharts.createChart(container, {
-    width: container.clientWidth,
-    height: container.clientHeight,
+  const _fmtUsd = v => {
+    const s = '$' + v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    return s.padStart(10);
+  };
+  const _fmtPct = v => {
+    const s = (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    return s.padStart(8);
+  };
+  const _priceFmt = isPct ? _fmtPct : _fmtUsd;
+
+  const _acctChartOpts = (c) => ({
+    width: c.clientWidth,
+    height: c.clientHeight,
     layout: {
       background: {type: 'solid', color: CHART_COLORS.bg},
       textColor: CHART_COLORS.text,
@@ -794,11 +823,13 @@ async function loadAccountChart(hours) {
       borderColor: CHART_COLORS.border,
     },
     localization: {
-      priceFormatter: isPct
-        ? v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%'
-        : v => '$' + v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2}),
+      priceFormatter: _priceFmt,
     },
   });
+
+  const mainOpts = _acctChartOpts(container);
+  if (hasMulti) mainOpts.timeScale.visible = false;
+  state.chart = LightweightCharts.createChart(container, mainOpts);
 
   state._acctHidden = state._acctHidden || {};
   state.exchangeList.forEach(xk => {
@@ -806,9 +837,7 @@ async function loadAccountChart(hours) {
       color: XK_COLORS[xk] || '#8888A8',
       lineWidth: 2,
       title: '',
-      priceFormat: isPct
-        ? {type: 'price', precision: 2, minMove: 0.01}
-        : {type: 'price', precision: 2, minMove: 0.01},
+      priceFormat: {type: 'price', precision: 2, minMove: 0.01},
       visible: !state._acctHidden[xk],
     });
   });
@@ -821,9 +850,46 @@ async function loadAccountChart(hours) {
     crosshairMarkerVisible: false,
   });
 
+  // Diff pane (kraken − control)
+  if (hasMulti) {
+    diffContainer.classList.remove('hidden');
+    state._diffChart = LightweightCharts.createChart(diffContainer, _acctChartOpts(diffContainer));
+    state._diffSeries = state._diffChart.addLineSeries({
+      color: '#555570',
+      lineWidth: 1,
+      title: '',
+      priceFormat: {type: 'price', precision: 2, minMove: 0.01},
+      lastValueVisible: true,
+      priceLineVisible: false,
+    });
+    // zero line
+    state._diffSeries.createPriceLine({
+      price: 0, color: '#2A2A48', lineWidth: 1, lineStyle: 0,
+      axisLabelVisible: false,
+    });
+
+    // Sync time scales
+    let syncing = false;
+    state.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+      if (syncing || !range) return;
+      syncing = true;
+      state._diffChart.timeScale().setVisibleLogicalRange(range);
+      syncing = false;
+    });
+    state._diffChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+      if (syncing || !range) return;
+      syncing = true;
+      state.chart.timeScale().setVisibleLogicalRange(range);
+      syncing = false;
+    });
+  } else {
+    diffContainer.classList.add('hidden');
+  }
+
   await _applyAccountData(hours);
 
   state.chart.timeScale().fitContent();
+  if (state._diffChart) state._diffChart.timeScale().fitContent();
 
   // Build controls: range buttons + $/%  toggle
   const tfContainer = $('#tf-selector');
@@ -864,8 +930,12 @@ async function loadAccountChart(hours) {
     if (state.chart) {
       state.chart.applyOptions({width: container.clientWidth, height: container.clientHeight});
     }
+    if (state._diffChart) {
+      state._diffChart.applyOptions({width: diffContainer.clientWidth, height: diffContainer.clientHeight});
+    }
   });
   resizeObserver.observe(container);
+  if (hasMulti) resizeObserver.observe(diffContainer);
 }
 
 function _buildAccountLegend() {
@@ -886,6 +956,12 @@ function _buildAccountLegend() {
     });
     legend.appendChild(item);
   });
+  if (state._diffSeries) {
+    const item = document.createElement('span');
+    item.className = 'legend-item legend-static';
+    item.innerHTML = `<span class="legend-dot" style="background:#555570"></span><span class="legend-label">Δ kraken − control</span>`;
+    legend.appendChild(item);
+  }
 }
 
 async function _applyAccountData(hours) {
@@ -898,6 +974,7 @@ async function _applyAccountData(hours) {
     const histByXk = histData.history || {};
     const isPct = state.acctDisplayMode === 'pct';
 
+    const pointsByXk = {};
     state.exchangeList.forEach(xk => {
       const series = state.acctSeries[xk];
       const raw = histByXk[xk] || [];
@@ -910,7 +987,23 @@ async function _applyAccountData(hours) {
         return {time: t, value: isPct ? ((v - baseVal) / baseVal) * 100 : v};
       });
       series.setData(points);
+      pointsByXk[xk] = points;
     });
+
+    // Diff series: kraken − control
+    if (state._diffSeries && state.exchangeList.length >= 2) {
+      const ctrlPts = pointsByXk[state.exchangeList[0]] || [];
+      const krakenPts = pointsByXk[state.exchangeList[1]] || [];
+      if (ctrlPts.length > 0 && krakenPts.length > 0) {
+        const ctrlMap = new Map(ctrlPts.map(p => [p.time, p.value]));
+        const diffPts = [];
+        krakenPts.forEach(p => {
+          const cv = ctrlMap.get(p.time);
+          if (cv !== undefined) diffPts.push({time: p.time, value: p.value - cv});
+        });
+        state._diffSeries.setData(diffPts);
+      }
+    }
 
     // Trade markers on kraken line only (skip control trades)
     const krakenTrades = [];
@@ -1460,8 +1553,9 @@ window.toggleTrainerLog = function(coin) {
       const data = await api(`logs/trainer-${coin.toLowerCase()}`);
       const pre = logEl.querySelector('pre');
       if (pre) {
+        const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
         pre.textContent = (data.lines || []).join('\n') || '(no output)';
-        pre.scrollTop = pre.scrollHeight;
+        if (atBottom) pre.scrollTop = pre.scrollHeight;
       }
     } catch {}
   };
@@ -1645,8 +1739,9 @@ async function refreshLogs() {
   const source = $('#log-source').value;
   const data = await api(`logs/${source}`);
   const output = $('#log-output');
+  const atBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 40;
   output.textContent = (data.lines || []).join('\n');
-  output.scrollTop = output.scrollHeight;
+  if (atBottom) output.scrollTop = output.scrollHeight;
 }
 
 // ── Tabs ──

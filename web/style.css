@@ -821,10 +821,17 @@ body {
 }
 
 .chart-container {
-  flex: 1;
-  min-height: 200px;
+  flex: 3;
+  min-height: 150px;
   position: relative;
 }
+.chart-diff-container {
+  flex: 1;
+  min-height: 60px;
+  position: relative;
+  border-top: 1px solid var(--border);
+}
+.chart-diff-container.hidden { display: none; }
 
 .chart-legend {
   display: flex;
