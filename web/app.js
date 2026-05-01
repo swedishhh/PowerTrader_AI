@@ -489,9 +489,11 @@ function _updateCard(card, c, modeOverride) {
       const sellPrice = pos.trail_line > 0 ? fmtPrice(pos.trail_line) : '—';
       const totalDcaLevels = (state.settings.dca_levels || []).length;
       const dcaChip = pos.dca_triggered_stages > 0 ? `<span class="pos-dca-chip">stg ${pos.dca_triggered_stages}/${totalDcaLevels}</span>` : '—';
+      const nextDca = pos.next_dca_display ? `${pos.dca_line_price ? fmtPrice(pos.dca_line_price) + ' ' : ''}(${pos.next_dca_display})` : '—';
       const krakenFields = xk !== 'control' ? `
             <div class="cc-pf"><span class="cc-pf-l">Sell Level</span><span class="cc-pf-v">${sellPrice}</span></div>
-            <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${dcaChip} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>` : '';
+            <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${dcaChip} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>
+            <div class="cc-pf"><span class="cc-pf-l">Next DCA</span><span class="cc-pf-v">${nextDca}</span></div>` : '';
       posHtml += `
         <div class="cc-xk-section">
           <div class="cc-pos-header">

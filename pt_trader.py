@@ -1001,6 +1001,16 @@ class CryptoAPITrading:
                 return False
 
             canonical = f"{sym}_USD"
+            try:
+                min_cost = self.exchange.get_min_order_cost(canonical)
+            except Exception:
+                min_cost = 0.0
+            if min_cost > 0 and usd_amount < min_cost:
+                reason = f"LTH: ${usd_amount:.2f} below min order ${min_cost:.2f}"
+                print(f"  [LTH] SKIP {sym}: {reason}")
+                self._record_skip(canonical, reason)
+                return False
+
             result = self.place_buy_order(canonical, float(usd_amount), tag="LTH")
             return result is not None and result.state == "filled"
         except Exception:
@@ -1110,6 +1120,7 @@ class CryptoAPITrading:
             self._pnl_ledger["lth_profit_bucket_usd"] = float(bucket + spend_now)
             self._save_pnl_ledger()
             print(f"  [LTH] Buy FAILED for {pick} — returning ${spend_now:.2f} to bucket")
+            self._record_skip(f"{pick}_USD", f"LTH: buy ${spend_now:.2f} of {pick} failed")
 
     # -----------------------------
     # Ledger seeding from selected bot order IDs
