@@ -220,6 +220,7 @@ async function refreshAll() {
 
     if ($('#tab-compare').classList.contains('active')) loadCompare();
     if (!$('#training-list').querySelector('.train-log-panel')) renderTraining(coinsData.coins);
+    else updateTrainingBadges(coinsData.coins);
     if (!$('#tab-settings').classList.contains('active')) renderSettings(settingsData);
   } catch (e) {
     console.error('refreshAll failed:', e);
@@ -443,9 +444,10 @@ function _updateCard(card, c, modeOverride) {
       badge.textContent = 'TRAINING';
       badge.className = 'cc-train-badge training';
     } else if (!c.is_trained) {
-      const isFailed = c.training_state === 'FAILED' || c.training_state === 'FINISHED';
-      badge.textContent = isFailed ? 'FAILED' : 'UNTRAINED';
-      badge.className = 'cc-train-badge ' + (isFailed ? 'failed' : 'untrained');
+      const isFailed = c.training_state === 'FAILED';
+      const isRetrain = c.training_state === 'FINISHED';
+      badge.textContent = isFailed ? 'FAILED' : isRetrain ? 'RETRAIN' : 'UNTRAINED';
+      badge.className = 'cc-train-badge ' + (isFailed ? 'failed' : isRetrain ? 'retrain' : 'untrained');
     } else {
       badge.textContent = '';
       badge.className = 'cc-train-badge';
@@ -1456,18 +1458,18 @@ function renderTraining(coins) {
     return;
   }
 
-  const _isFail = c => !c.is_trained && (c.training_state === 'FAILED' || c.training_state === 'FINISHED');
+  const _needsAttention = c => !c.is_trained && (c.training_state === 'FAILED' || c.training_state === 'FINISHED');
   const sorted = [...coins].sort((a, b) => {
-    const aFail = _isFail(a) ? 0 : 1;
-    const bFail = _isFail(b) ? 0 : 1;
-    if (aFail !== bFail) return aFail - bFail;
+    const aN = _needsAttention(a) ? 0 : 1;
+    const bN = _needsAttention(b) ? 0 : 1;
+    if (aN !== bN) return aN - bN;
     return a.coin.localeCompare(b.coin);
   });
 
   container.innerHTML = sorted.map(c => {
     const rawState = c.training_running ? 'TRAINING' : (c.training_state || 'UNKNOWN');
     const trained = !c.training_running && c.is_trained;
-    const tState = trained ? 'TRAINED' : (rawState === 'FINISHED' ? 'FAILED' : rawState);
+    const tState = trained ? 'TRAINED' : (rawState === 'FINISHED' ? 'RETRAIN' : rawState);
     const lastTs = c.last_trained_ts;
     const ageText = lastTs > 0 ? fmtDate(lastTs) : 'Never';
     const fail = c.training_running ? null : c.training_failure;
@@ -1514,6 +1516,21 @@ function renderTraining(coins) {
       </div>${failHtml}
     `;
   }).join('');
+}
+
+function updateTrainingBadges(coins) {
+  if (!coins) return;
+  for (const c of coins) {
+    const row = document.querySelector(`[data-train-coin="${c.coin}"]`);
+    if (!row) continue;
+    const badge = row.querySelector('.train-status');
+    if (!badge) continue;
+    const rawState = c.training_running ? 'TRAINING' : (c.training_state || 'UNKNOWN');
+    const trained = !c.training_running && c.is_trained;
+    const tState = trained ? 'TRAINED' : (rawState === 'FINISHED' ? 'RETRAIN' : rawState);
+    badge.className = 'train-status ' + tState;
+    badge.textContent = tState;
+  }
 }
 
 window.closeCoinPosition = async function(coin, xk) {

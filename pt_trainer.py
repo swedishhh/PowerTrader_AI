@@ -700,6 +700,43 @@ while True:
         price = float(ticker_data[ticker_data.index("price:") + 1])
     except:
         PrintException()
+
+    _MIN_CANDLES = 100
+    if len(price_list) < _MIN_CANDLES:
+        msg = (f"Only {len(price_list)} candles gathered (need {_MIN_CANDLES}). "
+               f"Likely rate-limited by exchange.")
+        print(f"\n{'=' * 60}")
+        print(f"TRAINING FAILED: {msg}")
+        print(f"{'=' * 60}")
+        failure_info = {
+            "coin": _arg_coin,
+            "state": "FAILED",
+            "exception_type": "InsufficientData",
+            "exception_message": msg,
+            "traceback": "",
+            "trainer_state": {"len_price_list": len(price_list), "tf_choice": tf_choice},
+            "timestamp": int(time.time()),
+            "started_at": _trainer_started_at,
+        }
+        try:
+            with open("trainer_failure_info.json", "w", encoding="utf-8") as f:
+                json.dump(failure_info, f, indent=2)
+        except Exception:
+            pass
+        try:
+            with open("trainer_status.json", "w", encoding="utf-8") as f:
+                json.dump({
+                    "coin": _arg_coin,
+                    "state": "FAILED",
+                    "started_at": _trainer_started_at,
+                    "failed_at": int(time.time()),
+                    "timestamp": int(time.time()),
+                    "error": msg,
+                }, f)
+        except Exception:
+            pass
+        sys.exit(1)
+
     history_list = []
     history_list2 = []
     perfect_threshold = 1.0
@@ -1270,6 +1307,20 @@ while True:
                             low_weight_list = []
                             which_memory_index = "no"
                             perfect.append("no")
+                            diffs_list = []
+                            any_perfect = "no"
+                            perfect_dexs = []
+                            perfect_diffs = []
+                            moves = []
+                            move_weights = []
+                            high_move_weights = []
+                            low_move_weights = []
+                            unweighted = []
+                            high_moves = []
+                            low_moves = []
+                            final_moves = 0.0
+                            high_final_moves = 0.0
+                            low_final_moves = 0.0
                         except:
                             PrintException()
                             memory_list = []
@@ -1987,6 +2038,8 @@ while True:
                                                 try:
                                                     direction = "down"
                                                     try:
+                                                        if len(moves) == 0:
+                                                            raise IndexError("no moves — seed first memory")
                                                         indy = 0
                                                         while indy < len(moves):
                                                             new_memory = "no"

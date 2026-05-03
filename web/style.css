@@ -589,6 +589,7 @@ body {
 .cc-train-badge:empty { display: none; }
 .cc-train-badge.training { background: var(--cyan-dim); color: var(--cyan); animation: pulse-dot 1.5s ease-in-out infinite; }
 .cc-train-badge.untrained { background: var(--bg-elevated); color: var(--text-muted); }
+.cc-train-badge.retrain { background: var(--gold-dim); color: var(--gold); }
 .cc-train-badge.failed { background: var(--red-dim); color: var(--red); }
 
 /* ── Detailed mode ── */
@@ -1099,6 +1100,7 @@ body {
 
 .train-status.TRAINED { background: var(--green-dim); color: var(--green); }
 .train-status.TRAINING { background: var(--cyan-dim); color: var(--cyan); animation: pulse-dot 1.5s ease-in-out infinite; }
+.train-status.RETRAIN { background: var(--gold-dim); color: var(--gold); }
 .train-status.FAILED { background: var(--red-dim); color: var(--red); }
 .train-status.UNKNOWN { background: var(--bg-elevated); color: var(--text-muted); }
 
