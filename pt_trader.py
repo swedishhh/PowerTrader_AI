@@ -1098,6 +1098,16 @@ class CryptoAPITrading:
             print(f"  [LTH] No eligible LTH coin to buy — returning ${spend_now:.2f} to bucket")
             return
 
+        # Pre-check min order — keep accumulating silently if bucket can't cover it yet
+        try:
+            min_cost = self.exchange.get_min_order_cost(f"{pick}_USD")
+        except Exception:
+            min_cost = 0.0
+        if min_cost > 0 and spend_now < min_cost:
+            self._pnl_ledger["lth_profit_bucket_usd"] = float(bucket + spend_now)
+            self._save_pnl_ledger()
+            return
+
         pct_map = self._read_lth_ema200_snapshot()
         pct_from_ema = pct_map.get(pick, None)
 
@@ -1246,7 +1256,7 @@ class CryptoAPITrading:
         except Exception:
             pass
 
-    def _bot_net_qty_from_selected_orders(self, base_symbol: str) -> float:
+    def _bot_net_qty_from_selected_orders(self, base_symbol: str) -> Optional[float]:
         """
         Compute the bot's current *in-trade* qty for a coin for the current trade:
 
@@ -1263,6 +1273,8 @@ class CryptoAPITrading:
 
         This stays independent of total exchange holdings; any leftover beyond in_trade_qty
         is treated as long-term/manual.
+
+        Returns None if exchange data is unavailable (caller should preserve existing ledger).
         """
         try:
             sym = str(base_symbol).upper().strip()
@@ -1273,7 +1285,7 @@ class CryptoAPITrading:
             orders = self.get_orders(symbol_full)
             results = orders.get("results", []) if isinstance(orders, dict) else []
             if not isinstance(results, list) or not results:
-                return 0.0
+                return None
 
             # Selected BUY order IDs (from GUI) are in self._bot_order_ids[sym]
             selected_ids = set()
@@ -1384,6 +1396,10 @@ class CryptoAPITrading:
                         total_qty = 0.0
 
                     in_trade_qty = self._bot_net_qty_from_selected_orders(asset)
+
+                    # None means exchange data unavailable — preserve existing ledger entry
+                    if in_trade_qty is None:
+                        continue
 
                     # Never claim more bot inventory than actually exists in holdings.
                     tradable_qty = min(float(total_qty), float(in_trade_qty))

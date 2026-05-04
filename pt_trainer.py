@@ -4,6 +4,23 @@ market = Market(url="https://api.kucoin.com")
 import time
 
 """
+BTC has much deeper history available on the exchange:
+
+Timeframe	Candles	Lookback
+1hour	37,408	~4.3 years
+2hour	18,689	~4.3 years
+4hour	9,345	~4.3 years
+8hour	4,671	~4.3 years
+12hour	3,114	~4.3 years
+1day	3,112	~8.5 years
+1week	444	~8.5 years
+~3.5x more data than POL across the board.
+The sub-daily timeframes all converge on the same ~4.3 year window
+(as deep as KuCoin's hourly data goes for BTC), while daily/weekly reach back to ~2017.
+That also explains why BTC takes much longer to train — nearly 4x the candles to process per timeframe.
+
+"""
+"""
 <------------
 newest oldest
 ------------>
