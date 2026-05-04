@@ -654,9 +654,12 @@ def step_coin(sym: str):
     current_candle = 100 * ((closePrice - openPrice) / openPrice)
 
     # ====== ORIGINAL: load threshold + memories/weights and compute moves ======
-    file = open("neural_perfect_threshold_" + tf_choices[tf_choice_index] + ".txt", "r")
-    perfect_threshold = float(file.read())
-    file.close()
+    try:
+        file = open("neural_perfect_threshold_" + tf_choices[tf_choice_index] + ".txt", "r")
+        perfect_threshold = float(file.read())
+        file.close()
+    except (FileNotFoundError, ValueError):
+        perfect_threshold = 1.0
 
     try:
         # If we can read/parse training files, this timeframe is NOT a training-file issue.
