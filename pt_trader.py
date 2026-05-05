@@ -1179,10 +1179,22 @@ class CryptoAPITrading:
             symbol_full = f"{sym}_USD"
             orders = self.get_orders(symbol_full)
             results = orders.get("results", []) if isinstance(orders, dict) else []
-            if not isinstance(results, list) or not results:
-                return
+            if not isinstance(results, list):
+                results = []
+
+            # Collect all selected bot order IDs for this coin
+            all_selected_ids = set()
+            try:
+                all_selected_ids |= set(self._bot_order_ids.get(sym, set()) or set())
+            except Exception:
+                pass
+            try:
+                all_selected_ids |= set(self._bot_order_ids_from_history.get(sym, set()) or set())
+            except Exception:
+                pass
 
             buys = []
+            seen_oids = set()
             for o in results:
                 try:
                     if str(o.get("state", "")).lower() != "filled":
@@ -1194,6 +1206,8 @@ class CryptoAPITrading:
                         continue
                     if not self._is_bot_order_id(sym, oid):
                         continue
+
+                    seen_oids.add(oid)
 
                     qty, avg_px, notional_usd, fees_usd = (
                         self._extract_amounts_and_fees_from_order(o)
@@ -1215,6 +1229,17 @@ class CryptoAPITrading:
                     buys.append((created, qty, cost))
                 except Exception:
                     continue
+
+            # Supplement with trade_history for orders that aged out of the exchange API
+            missing_ids = all_selected_ids - seen_oids
+            if missing_ids:
+                hist_fills = self._get_fills_from_trade_history(sym, missing_ids)
+                for oid, fill in hist_fills.items():
+                    if float(fill.get("qty", 0) or 0) <= 0:
+                        continue
+                    created = datetime.datetime.utcfromtimestamp(fill["ts"]).isoformat() if fill.get("ts") else ""
+                    cost = fill["notional_usd"] + fill["fees_usd"]
+                    buys.append((created, fill["qty"], cost))
 
             if not buys:
                 return
@@ -1284,8 +1309,8 @@ class CryptoAPITrading:
             symbol_full = f"{sym}_USD"
             orders = self.get_orders(symbol_full)
             results = orders.get("results", []) if isinstance(orders, dict) else []
-            if not isinstance(results, list) or not results:
-                return None
+            if not isinstance(results, list):
+                results = []
 
             # Selected BUY order IDs (from GUI) are in self._bot_order_ids[sym]
             selected_ids = set()
@@ -1303,9 +1328,14 @@ class CryptoAPITrading:
             except Exception:
                 hist_ids = set()
 
+            # If we have no results AND no selected_ids, we can't compute anything
+            if not results and not selected_ids:
+                return None
+
             # Pass 1: sum selected BUY fills and find earliest selected BUY created_at
             selected_buy_qty = 0.0
             earliest_selected_buy_created = None
+            seen_selected_oids = set()
 
             # We also cache filled sells (created_at, qty) to apply the earliest-selected-buy cutoff
             filled_bot_sells = []
@@ -1332,6 +1362,7 @@ class CryptoAPITrading:
 
                     # Selected orders are BUY-only
                     if side == "buy" and oid in selected_ids:
+                        seen_selected_oids.add(oid)
                         selected_buy_qty += qty
                         if created:
                             if (
@@ -1345,6 +1376,20 @@ class CryptoAPITrading:
                         filled_bot_sells.append((created, qty))
                 except Exception:
                     continue
+
+            # Supplement with trade_history for selected buy IDs that aged out of the exchange API
+            missing_buy_ids = selected_ids - seen_selected_oids
+            if missing_buy_ids:
+                hist_fills = self._get_fills_from_trade_history(sym, missing_buy_ids)
+                for oid, fill in hist_fills.items():
+                    qty = float(fill.get("qty", 0) or 0)
+                    if qty <= 0:
+                        continue
+                    selected_buy_qty += qty
+                    created = datetime.datetime.utcfromtimestamp(fill["ts"]).isoformat() if fill.get("ts") else ""
+                    if created:
+                        if earliest_selected_buy_created is None or created < earliest_selected_buy_created:
+                            earliest_selected_buy_created = created
 
             # If the user selected no buys, bot owns zero in-trade qty for this coin.
             if selected_buy_qty <= 0.0:
@@ -1434,6 +1479,45 @@ class CryptoAPITrading:
         except Exception:
             return False
         return False
+
+    def _get_fills_from_trade_history(self, base_symbol: str, order_ids: set) -> Dict[str, dict]:
+        """Look up fill data from trade_history.jsonl for specific order IDs.
+
+        Returns {order_id: {"qty": float, "notional_usd": float, "fees_usd": float, "ts": float}}
+        for each matched order_id found in the local history file.
+        """
+        out: Dict[str, dict] = {}
+        try:
+            if not order_ids or not os.path.isfile(TRADE_HISTORY_PATH):
+                return out
+            sym_prefix = f"{str(base_symbol).upper().strip()}_"
+            with open(TRADE_HISTORY_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = (line or "").strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    oid = str(obj.get("order_id") or "").strip()
+                    if oid not in order_ids:
+                        continue
+                    sym = str(obj.get("symbol") or "").upper()
+                    if not sym.startswith(sym_prefix):
+                        continue
+                    try:
+                        qty = float(obj.get("qty", 0) or 0)
+                        notional = float(obj.get("notional_usd", 0) or 0)
+                        fees = float(obj.get("fees_usd", 0) or 0) if obj.get("fees_usd") is not None else 0.0
+                        ts = float(obj.get("ts", 0) or 0)
+                        if qty > 0 and notional > 0:
+                            out[oid] = {"qty": qty, "notional_usd": notional, "fees_usd": fees, "ts": ts}
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return out
 
     def _get_buying_power(self) -> float:
         try:

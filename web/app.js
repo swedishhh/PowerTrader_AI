@@ -1067,6 +1067,7 @@ async function updateChartTradeMarkers(coin) {
     const allTrades = [];
     const tradesByXk = data.trades || {};
     state.exchangeList.forEach(xk => {
+      if (xk === 'control') return;
       (tradesByXk[xk] || []).forEach(t => allTrades.push({...t, _xk: xk}));
     });
 
@@ -1075,16 +1076,15 @@ async function updateChartTradeMarkers(coin) {
     const markers = allTrades.map(t => {
       const side = (t.side || '').toLowerCase();
       const tag = (t.tag || '').toUpperCase();
-      const xkLabel = XK_LABELS[t._xk] || t._xk[0].toUpperCase();
       let label, color, shape, position;
 
       if (side === 'buy') {
-        label = tag === 'DCA' ? `${xkLabel}:DCA` : `${xkLabel}:BUY`;
+        label = tag === 'DCA' ? 'DCA' : 'BUY';
         color = tag === 'DCA' ? '#A855F7' : '#FF4466';
         shape = 'arrowUp';
         position = 'belowBar';
       } else {
-        label = `${xkLabel}:SELL`;
+        label = 'SELL';
         color = '#00CC66';
         shape = 'arrowDown';
         position = 'aboveBar';
