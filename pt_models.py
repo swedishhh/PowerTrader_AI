@@ -177,6 +177,33 @@ class AccountModel:
     def account_value_history(self, limit: int = 500) -> list[dict]:
         return _read_jsonl(self.env.account_history_path(self.exchange), limit)
 
+    def lth_holdings(self) -> dict[str, dict]:
+        """Aggregate LTH holdings from trade history (tag='LTH' buys minus sells)."""
+        trades = self.trade_history(limit=0)
+        coins: dict[str, dict] = {}
+        for tr in trades:
+            if (tr.get("tag") or "").upper() != "LTH":
+                continue
+            side = (tr.get("side") or "").lower()
+            if side not in ("buy", "sell"):
+                continue
+            sym = (tr.get("symbol") or "").upper()
+            base = sym.split("_")[0] if sym else ""
+            if not base:
+                continue
+            c = coins.setdefault(base, {"qty": 0.0, "cost_usd": 0.0, "trades": 0})
+            qty = float(tr.get("qty") or 0)
+            cost = float(tr.get("notional_usd") or 0) + float(tr.get("fees_usd") or 0)
+            if side == "buy":
+                c["qty"] += qty
+                c["cost_usd"] += cost
+            else:
+                frac = min(1.0, qty / c["qty"]) if c["qty"] > 0 else 1.0
+                c["qty"] -= qty
+                c["cost_usd"] -= c["cost_usd"] * frac
+            c["trades"] += 1
+        return {k: v for k, v in coins.items() if v["qty"] > 1e-12}
+
     def dca_24h_by_coin(self) -> dict[str, int]:
         trades = self.trade_history(limit=0)
         now = time.time()

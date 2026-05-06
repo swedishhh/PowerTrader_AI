@@ -1,7 +1,10 @@
 """
 PowerTrader Neural Trainer — pattern-matching memory trainer for crypto price prediction.
 
-Usage: python pt_trainer.py BTC [reprocess_yes|reprocess_no]
+Usage:
+    python pt_trainer.py BTC
+    python pt_trainer.py ETH --source binance --timeframes 1hour,4hour
+    python pt_trainer.py BTC reprocess_no -v
 
 Trains across 7 timeframes (1h, 2h, 4h, 8h, 12h, 1d, 1w) by:
   1. Fetching OHLCV candles from a configurable data source (ArcticDB or live KuCoin API)
@@ -10,10 +13,11 @@ Trains across 7 timeframes (1h, 2h, 4h, 8h, 12h, 1d, 1w) by:
   4. Updating memory weights based on prediction accuracy
   5. Storing new patterns when no match is found
 
-Data source is configured in gui_settings.json: "training_data_source": "kucoin"|"binance"|"kraken"
-Default: "kucoin" (reads from ArcticDB kucoin libraries; falls back to live KuCoin API).
+Data source defaults to gui_settings.json "training_data_source" field.
+Override with --source kucoin|binance|kraken|kucoin_live_api.
 """
 
+import argparse
 import json
 import os
 import sys
@@ -26,6 +30,10 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+import arcticdb as adb
+import getpass
+arctic_path = f"/home/{getpass.getuser()}/dev/data/arcticdb"
+arctic = adb.Arctic(f"lmdb:///{arctic_path}")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -51,6 +59,9 @@ WEIGHT_CLAMP_CLOSE = (-2.0, 2.0)
 WEIGHT_CLAMP_HIGH_LOW = (0.0, 2.0)
 FLUSH_EVERY = 200
 PROGRESS_EVERY = 500
+WARMUP_START = 10  # original starts growing window at size 10 (positions 9..N)
+
+VALID_SOURCES = ["kucoin", "binance", "kraken", "kucoin_live_api"]
 
 
 @dataclass
@@ -63,29 +74,48 @@ class TrainerConfig:
     verbose: bool = False
 
     @classmethod
-    def from_args(cls) -> "TrainerConfig":
+    def from_args(cls, argv: list = None) -> "TrainerConfig":
         """Parse CLI args and gui_settings.json."""
-        coin = "BTC"
-        if len(sys.argv) > 1 and sys.argv[1].strip():
-            coin = sys.argv[1].strip().upper()
+        parser = argparse.ArgumentParser(
+            prog="pt_trainer",
+            description="PowerTrader neural pattern-matching trainer.",
+            epilog="Data source defaults to gui_settings.json 'training_data_source' field, "
+                   "overridden by --source.",
+        )
+        parser.add_argument("coin", nargs="?", default="BTC",
+                            help="Coin symbol to train (default: BTC)")
+        parser.add_argument("reprocess", nargs="?", default="reprocess_yes",
+                            help="'reprocess_yes' or 'reprocess_no' (default: reprocess_yes)")
+        parser.add_argument("--source", choices=VALID_SOURCES,
+                            default=None,
+                            help="Data source override (default: from gui_settings.json or kucoin)")
+        parser.add_argument("--timeframes", default=None,
+                            help="Comma-separated subset of timeframes to train (e.g. 1hour,4hour)")
+        parser.add_argument("-v", "--verbose", action="store_true",
+                            help="Enable verbose output")
 
-        reprocess = True
-        if len(sys.argv) > 2 and "no" in sys.argv[2].lower():
-            reprocess = False
+        args = parser.parse_args(argv)
+        coin = args.coin.upper()
+        reprocess = "no" not in args.reprocess.lower()
 
-        data_source = "kucoin"
-        try:
-            settings_path = _find_gui_settings()
-            if settings_path and os.path.isfile(settings_path):
-                with open(settings_path, "r", encoding="utf-8") as f:
-                    settings = json.load(f)
-                ds = settings.get("training_data_source", "kucoin")
-                if ds in ("kucoin", "binance", "kraken"):
-                    data_source = ds
-        except Exception:
-            pass
+        data_source = args.source
+        if data_source is None:
+            data_source = "kucoin"
+            try:
+                settings_path = _find_gui_settings()
+                if settings_path and os.path.isfile(settings_path):
+                    with open(settings_path, "r", encoding="utf-8") as f:
+                        settings = json.load(f)
+                    ds = settings.get("training_data_source", "kucoin")
+                    if ds in VALID_SOURCES:
+                        data_source = ds
+            except Exception:
+                pass
 
-        return cls(coin=coin, data_source=data_source, reprocess=reprocess)
+        config = cls(coin=coin, data_source=data_source, reprocess=reprocess,
+                     verbose=args.verbose)
+        config._timeframes = args.timeframes
+        return config
 
 
 def _find_gui_settings() -> Optional[str]:
@@ -110,14 +140,16 @@ def _find_gui_settings() -> Optional[str]:
 def fetch_candles(coin: str, tf_name: str, tf_minutes: int, source: str) -> pd.DataFrame:
     """Fetch OHLCV data, returning a DataFrame with columns [open, high, low, close].
 
-    Tries ArcticDB first, falls back to live KuCoin API if arctic is unavailable.
+    Source determines where data comes from:
+      kucoin/binance/kraken — ArcticDB, falls back to live KuCoin API
+      kucoin_live_api       — KuCoin REST API directly (skips ArcticDB)
     Returns oldest-first ordering.
     """
-    df = _fetch_from_arctic(coin, tf_minutes, source)
-    if df is not None and len(df) >= MIN_CANDLES:
-        return df
+    if source != "kucoin_live_api":
+        df = _fetch_from_arctic(coin, tf_minutes, source)
+        if df is not None and len(df) >= MIN_CANDLES:
+            return df
 
-    # Fallback to live KuCoin API
     df = _fetch_from_kucoin_live(coin, tf_name, tf_minutes)
     if df is not None and len(df) >= MIN_CANDLES:
         return df
@@ -130,17 +162,6 @@ def fetch_candles(coin: str, tf_name: str, tf_minutes: int, source: str) -> pd.D
 
 def _fetch_from_arctic(coin: str, tf_minutes: int, source: str) -> Optional[pd.DataFrame]:
     """Read candles from ArcticDB library."""
-    try:
-        from quant.data.arcticdb_manager import arctic
-    except ImportError:
-        try:
-            import arcticdb as adb
-            import getpass
-            arctic_path = f"/home/{getpass.getuser()}/dev/data/arcticdb"
-            arctic = adb.Arctic(f"lmdb:///{arctic_path}")
-        except (ImportError, Exception):
-            return None
-
     lib_name = f"{source}{tf_minutes}"
     if lib_name not in arctic.list_libraries():
         return None
@@ -633,7 +654,8 @@ class TrainingLoop:
         iteration = 0
 
         for phase_idx, (fetch_tf, fetch_min, fraction) in enumerate(phases):
-            df = fetch_candles(self.config.coin, fetch_tf, fetch_min, self.config.data_source)
+            df = fetch_candles(self.config.coin, fetch_tf, fetch_min,
+                              self.config.data_source)
 
             opens = df["open"].values
             closes = df["close"].values
@@ -643,18 +665,21 @@ class TrainingLoop:
             close_pct, high_pct, low_pct = compute_pct_changes(opens, closes, highs, lows)
             n_candles = len(close_pct)
 
-            # In warmup phases (0, 1): start at half, process up to 25% of total
-            # In full phase (2): start at 50%, process to end
+            # Original behavior: growing window from index 0.
+            # Warmup (phases 0,1): window grows from size 10 to 25% of data
+            #   → pattern positions 9..int(len*0.25)-1, outcome at pos+1
+            # Full (phase 2): window starts at 50% of data, grows to end
+            #   → pattern positions int(len*0.5)-1..len-2, outcome at pos+1
             if phase_idx < 2:
-                start_pos = PATTERN_LENGTH
+                start_pos = WARMUP_START
                 end_pos = int(n_candles * fraction)
             else:
                 start_pos = int(n_candles * 0.5)
                 end_pos = n_candles
 
-            # State for this phase
+            # State for this phase — threshold resets to 1.0 each phase (matches original)
             tracker = AccuracyTracker()
-            threshold = self._load_threshold(tf_name)
+            threshold = 1.0
             last_actual = None
             last_pred_close = None
             last_pred_high = None
@@ -734,10 +759,16 @@ class TrainingLoop:
                     last_pred_low = pred_low_price
                 else:
                     # No match — store as new memory
-                    # The outcome is the actual close pct at this position
-                    outcome = close_pct[pos] if pos < len(close_pct) else 0.0
-                    high_outcome = high_pct[pos] if pos < len(high_pct) else 0.0
-                    low_outcome = low_pct[pos] if pos < len(low_pct) else 0.0
+                    # Outcome = close-to-close pct change: (close[pos] - close[pos-1]) / |close[pos-1]| * 100
+                    # High/low outcomes relative to previous close (not open)
+                    if pos < n_candles and closes[pos - 1] != 0:
+                        outcome = ((closes[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100.0
+                        high_outcome = ((highs[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100.0
+                        low_outcome = ((lows[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100.0
+                    else:
+                        outcome = 0.0
+                        high_outcome = 0.0
+                        low_outcome = 0.0
 
                     full_pattern = np.append(current_pattern, outcome)
                     memory.add_entry(full_pattern, high_outcome / 100.0, low_outcome / 100.0)
@@ -749,28 +780,28 @@ class TrainingLoop:
                         last_pred_low = lows[pos - 1]
 
                 # --- Weight updates (when we have a match and can see the actual next candle) ---
-                if has_match and pos < len(close_pct):
-                    actual_next_close_pct = ((closes[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100 if closes[pos - 1] != 0 else 0
-                    actual_next_high_pct = ((highs[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100 if closes[pos - 1] != 0 else 0
-                    actual_next_low_pct = ((lows[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100 if closes[pos - 1] != 0 else 0
+                if has_match and pos < n_candles and closes[pos - 1] != 0:
+                    actual_next_close_pct = ((closes[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100
+                    actual_next_high_pct = ((highs[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100
+                    actual_next_low_pct = ((lows[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100
 
                     for idx in indices:
                         if idx >= len(memory.weights):
                             break
-                        # Close weight
-                        predicted_close_move = memory.patterns[idx][-1] * memory.weights[idx]
+                        # Original scales predicted by *100 before comparing to actual pct.
+                        # This makes tolerance bands ~100x wider than actual moves,
+                        # so weights rarely change (all remain ~1.0 in practice).
+                        predicted_close_move = memory.patterns[idx][-1] * memory.weights[idx] * 100.0
                         memory.weights[idx] = update_weight(
                             actual_next_close_pct, predicted_close_move,
                             memory.weights[idx], WEIGHT_CLAMP_CLOSE,
                         )
-                        # High weight
-                        predicted_high_move = memory.high_pcts[idx] * 100 * memory.high_weights[idx]
+                        predicted_high_move = memory.high_pcts[idx] * 100.0 * memory.high_weights[idx]
                         memory.high_weights[idx] = update_weight(
                             actual_next_high_pct, predicted_high_move,
                             memory.high_weights[idx], WEIGHT_CLAMP_HIGH_LOW,
                         )
-                        # Low weight
-                        predicted_low_move = memory.low_pcts[idx] * 100 * memory.low_weights[idx]
+                        predicted_low_move = memory.low_pcts[idx] * 100.0 * memory.low_weights[idx]
                         memory.low_weights[idx] = update_weight(
                             actual_next_low_pct, predicted_low_move,
                             memory.low_weights[idx], WEIGHT_CLAMP_HIGH_LOW,
@@ -847,98 +878,6 @@ class TrainingLoop:
 
 
 # ---------------------------------------------------------------------------
-# Reconciliation — prove equivalence with old trainer
-# ---------------------------------------------------------------------------
-
-def run_reconciliation(coin: str, tf_name: str, data_source: str, max_candles: int = 500):
-    """Run both old and new logic on the same data, output comparison.
-
-    Outputs to PowerTrader_AI/reconciliation/{coin}/{tf_name}/ (never touches state/).
-    """
-    # Find project root (walk up from cwd)
-    project_root = Path.cwd()
-    for _ in range(5):
-        if (project_root / "gui_settings.json").exists():
-            break
-        project_root = project_root.parent
-
-    out_dir = project_root / "reconciliation" / coin / tf_name
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Fetch data
-    tf_idx = TIMEFRAMES.index(tf_name)
-    tf_min = TF_MINUTES[tf_idx]
-    df = fetch_candles(coin, tf_name, tf_min, data_source)
-
-    opens = df["open"].values
-    closes = df["close"].values
-    highs = df["high"].values
-    lows = df["low"].values
-
-    close_pct, high_pct, low_pct = compute_pct_changes(opens, closes, highs, lows)
-
-    # Limit candles for comparison
-    n = min(max_candles, len(close_pct))
-
-    # Run new logic (in-memory, no file writes)
-    new_memories = []
-    new_weights = []
-    new_high_weights = []
-    new_low_weights = []
-    threshold = 1.0
-    new_predictions = []
-
-    for pos in range(PATTERN_LENGTH, n):
-        current = close_pct[pos - (PATTERN_LENGTH - 1):pos]
-        if len(current) < PATTERN_LENGTH - 1:
-            continue
-
-        # Match against accumulated memories
-        if new_memories:
-            pat_matrix = np.array([m[:PATTERN_LENGTH - 1] for m in new_memories], dtype=np.float64)
-            indices, _ = find_matches(current, pat_matrix, threshold)
-        else:
-            indices = np.array([], dtype=np.int64)
-
-        if len(indices) > THRESHOLD_TARGET_MATCHES:
-            threshold = max(0.0, threshold - (0.001 if threshold < 0.1 else 0.01))
-        else:
-            threshold = min(100.0, threshold + (0.001 if threshold < 0.1 else 0.01))
-
-        if len(indices) > 0:
-            outcomes = np.array([new_memories[i][-1] for i in indices])
-            w = np.array([new_weights[i] for i in indices])
-            pred = float(np.mean(outcomes * w)) / 100.0
-            new_predictions.append(pred)
-        else:
-            outcome = close_pct[pos] if pos < len(close_pct) else 0.0
-            full_pattern = np.append(current, outcome)
-            new_memories.append(full_pattern)
-            new_weights.append(1.0)
-            new_high_weights.append(1.0)
-            new_low_weights.append(1.0)
-            new_predictions.append(0.0)
-
-    result = {
-        "coin": coin,
-        "timeframe": tf_name,
-        "candles_processed": n,
-        "memories_created": len(new_memories),
-        "final_threshold": threshold,
-        "predictions_count": len(new_predictions),
-        "mean_prediction_pct": float(np.mean(new_predictions)) if new_predictions else 0.0,
-    }
-
-    out_path = out_dir / "comparison.json"
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
-
-    print(f"Reconciliation output: {out_path}")
-    print(f"  Candles: {n}, Memories: {len(new_memories)}, Threshold: {threshold:.4f}")
-    return result
-
-
-# ---------------------------------------------------------------------------
 # Entry Point
 # ---------------------------------------------------------------------------
 
@@ -946,10 +885,13 @@ def main():
     config = TrainerConfig.from_args()
     print(f"PowerTrader Trainer: {config.coin} (source={config.data_source})")
 
-    if "--reconcile" in sys.argv:
-        tf = sys.argv[sys.argv.index("--reconcile") + 1] if len(sys.argv) > sys.argv.index("--reconcile") + 1 else "1hour"
-        run_reconciliation(config.coin, tf, config.data_source)
-        return
+    # Timeframe subset support
+    if hasattr(config, "_timeframes") and config._timeframes:
+        tf_list = [t.strip() for t in config._timeframes.split(",")]
+        global TIMEFRAMES, TF_MINUTES
+        tf_indices = [i for i, t in enumerate(TIMEFRAMES) if t in tf_list]
+        TIMEFRAMES = [TIMEFRAMES[i] for i in tf_indices]
+        TF_MINUTES = [TF_MINUTES[i] for i in tf_indices]
 
     loop = TrainingLoop(config)
     loop.run()

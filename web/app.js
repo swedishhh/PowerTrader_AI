@@ -15,6 +15,7 @@ const state = {
   exchangeData: {},  // { control: {account, pnl}, kraken: {account, pnl} }
   positions: {},     // { control: {...}, kraken: {...} }
   dca24h: {},        // { control: {...}, kraken: {...} }
+  lth: {},           // { control: {BTC: {qty, cost_usd, trades}}, kraken: {...} }
   tradeStartLevel: 1,
   selectedCoin: null,
   selectedTf: '1hour',
@@ -212,6 +213,7 @@ async function refreshAll() {
     if (posData.positions) {
       state.positions = posData.positions;
       state.dca24h = posData.dca_24h || {};
+      state.lth = posData.lth || {};
     }
 
     mergePositionsIntoCoins();
@@ -1401,36 +1403,68 @@ async function loadCompare() {
 
 function renderLTH() {
   const container = $('#lth-list');
-  const primaryXk = state.exchangeList[0] || 'control';
-  const positions = state.positions[primaryXk] || {};
-  const lthCoins = Object.entries(positions).filter(([_, p]) => p.lth_reserved_qty > 0);
 
+  // Aggregate LTH holdings from trade-history ledger across all exchanges
+  const merged = {};
+  for (const xk of state.exchangeList) {
+    for (const [coin, h] of Object.entries((state.lth || {})[xk] || {})) {
+      if (h.qty > 0) {
+        const prev = merged[coin];
+        if (prev) {
+          prev.qty += h.qty;
+          prev.cost_usd += h.cost_usd;
+          prev.trades += h.trades;
+        } else {
+          merged[coin] = {...h, xk};
+        }
+      }
+    }
+  }
+
+  // Look up current prices from positions data
+  for (const [coin, h] of Object.entries(merged)) {
+    h.price = 0;
+    for (const xk of state.exchangeList) {
+      const p = (state.positions[xk] || {})[coin];
+      if (p && p.current_buy_price > 0) { h.price = p.current_buy_price; break; }
+    }
+  }
+
+  const lthCoins = Object.entries(merged);
   if (lthCoins.length === 0) {
     container.innerHTML = '<div class="empty-state">No long-term holdings</div>';
     return;
   }
 
-  lthCoins.sort((a, b) => {
-    const va = a[1].lth_reserved_qty * (a[1].current_buy_price || 0);
-    const vb = b[1].lth_reserved_qty * (b[1].current_buy_price || 0);
-    return vb - va;
-  });
+  lthCoins.sort((a, b) => (b[1].qty * b[1].price) - (a[1].qty * a[1].price));
 
-  container.innerHTML = lthCoins.map(([coin, p]) => {
-    const value = p.lth_reserved_qty * (p.current_buy_price || 0);
+  container.innerHTML = lthCoins.map(([coin, h]) => {
+    const value = h.qty * h.price;
+    const avgEntry = h.qty > 0 ? h.cost_usd / h.qty : 0;
+    const pnl = h.price > 0 ? value - h.cost_usd : 0;
+    const pnlPct = h.cost_usd > 0 ? (pnl / h.cost_usd) * 100 : 0;
+    const pnlColor = pnl >= 0 ? 'var(--green, #0c6)' : 'var(--red, #f46)';
     return `
       <div class="pos-card">
         <div class="pos-card-header">
           <span class="pos-coin">${coin}</span>
-          <span class="pos-pnl" style="color: var(--gold)">${fmtUSD(value)}</span>
+          <span class="pos-pnl" style="color: ${pnlColor}">${fmtSignedUSD2(pnl)} (${fmtPct(pnlPct)})</span>
         </div>
         <div class="pos-field">
           <span class="pos-field-label">Quantity</span>
-          <span class="pos-field-value">${fmtQty(p.lth_reserved_qty, coin)}</span>
+          <span class="pos-field-value">${fmtQty(h.qty, coin)}</span>
         </div>
         <div class="pos-field">
-          <span class="pos-field-label">Price</span>
-          <span class="pos-field-value">${fmtPrice(p.current_buy_price)}</span>
+          <span class="pos-field-label">Value</span>
+          <span class="pos-field-value">${fmtUSD(value)}</span>
+        </div>
+        <div class="pos-field">
+          <span class="pos-field-label">Avg Entry</span>
+          <span class="pos-field-value">${fmtPrice(avgEntry)}</span>
+        </div>
+        <div class="pos-field">
+          <span class="pos-field-label">Buys</span>
+          <span class="pos-field-value">${h.trades}</span>
         </div>
       </div>
     `;
@@ -1622,6 +1656,15 @@ function renderSettings(s) {
           <option value="kucoin" ${s.live_price_source === 'kucoin' ? 'selected' : ''}>KuCoin</option>
         </select>
       </div>
+      <div class="settings-field">
+        <label>Training Data Source</label>
+        <select id="set-training-source">
+          <option value="kucoin" ${(s.training_data_source || 'kucoin') === 'kucoin' ? 'selected' : ''}>KuCoin (ArcticDB)</option>
+          <option value="binance" ${s.training_data_source === 'binance' ? 'selected' : ''}>Binance (ArcticDB)</option>
+          <option value="kraken" ${s.training_data_source === 'kraken' ? 'selected' : ''}>Kraken (ArcticDB)</option>
+          <option value="kucoin_live_api" ${s.training_data_source === 'kucoin_live_api' ? 'selected' : ''}>KuCoin Live API</option>
+        </select>
+      </div>
     </div>
     <div class="settings-group">
       <div class="settings-group-title">Trading</div>
@@ -1714,6 +1757,7 @@ async function saveSettings() {
   updated.exchange = updated.exchanges[0] || 'control';
   updated.excluded_coins = $('#set-excluded').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
   updated.live_price_source = $('#set-price-source').value;
+  updated.training_data_source = $('#set-training-source').value;
   updated.trade_start_level = parseInt($('#set-tsl').value) || 1;
   updated.start_allocation_pct = parseFloat($('#set-alloc').value) || 0.5;
   updated.dca_levels = $('#set-dca').value.split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));

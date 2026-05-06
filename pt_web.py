@@ -207,11 +207,13 @@ async def api_coin_detail(coin: str):
 async def api_positions():
     out = {}
     dca = {}
+    lth = {}
     for xk in env.exchanges:
         acct = AccountModel(env, xk)
         out[xk] = acct.positions()
         dca[xk] = acct.dca_24h_by_coin()
-    return {"positions": out, "dca_24h": dca}
+        lth[xk] = acct.lth_holdings()
+    return {"positions": out, "dca_24h": dca, "lth": lth}
 
 
 @app.get("/api/trades")

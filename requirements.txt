@@ -8,3 +8,4 @@ kucoin-python
 ccxt
 fastapi
 uvicorn
+arcticdb

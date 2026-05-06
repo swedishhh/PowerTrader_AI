@@ -2459,24 +2459,25 @@ class CryptoAPITrading:
             order_id=order_id,
         )
 
-        try:
-            base_symbol = self.exchange.base_from_canonical(symbol)
-            self._mark_bot_order_id(base_symbol, order_id)
-        except Exception:
-            pass
+        if str(tag or "").upper().strip() != "LTH":
+            try:
+                base_symbol = self.exchange.base_from_canonical(symbol)
+                self._mark_bot_order_id(base_symbol, order_id)
+            except Exception:
+                pass
 
-        try:
-            base_symbol = self.exchange.base_from_canonical(symbol)
-            if str(tag or "").upper().strip() == "DCA":
-                current_levels = list(
-                    self.dca_levels_triggered.get(base_symbol, []) or []
-                )
-                current_levels.append(len(current_levels))
-                self.dca_levels_triggered[base_symbol] = current_levels
-            else:
-                self.dca_levels_triggered[base_symbol] = []
-        except Exception:
-            pass
+            try:
+                base_symbol = self.exchange.base_from_canonical(symbol)
+                if str(tag or "").upper().strip() == "DCA":
+                    current_levels = list(
+                        self.dca_levels_triggered.get(base_symbol, []) or []
+                    )
+                    current_levels.append(len(current_levels))
+                    self.dca_levels_triggered[base_symbol] = current_levels
+                else:
+                    self.dca_levels_triggered[base_symbol] = []
+            except Exception:
+                pass
 
         try:
             self._save_pnl_ledger()
