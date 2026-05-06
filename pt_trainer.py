@@ -1,2325 +1,959 @@
-from kucoin.client import Market
-
-market = Market(url="https://api.kucoin.com")
-import time
-
 """
-BTC has much deeper history available on the exchange:
+PowerTrader Neural Trainer — pattern-matching memory trainer for crypto price prediction.
 
-Timeframe	Candles	Lookback
-1hour	37,408	~4.3 years
-2hour	18,689	~4.3 years
-4hour	9,345	~4.3 years
-8hour	4,671	~4.3 years
-12hour	3,114	~4.3 years
-1day	3,112	~8.5 years
-1week	444	~8.5 years
-~3.5x more data than POL across the board.
-The sub-daily timeframes all converge on the same ~4.3 year window
-(as deep as KuCoin's hourly data goes for BTC), while daily/weekly reach back to ~2017.
-That also explains why BTC takes much longer to train — nearly 4x the candles to process per timeframe.
+Usage: python pt_trainer.py BTC [reprocess_yes|reprocess_no]
 
+Trains across 7 timeframes (1h, 2h, 4h, 8h, 12h, 1d, 1w) by:
+  1. Fetching OHLCV candles from a configurable data source (ArcticDB or live KuCoin API)
+  2. Computing percentage price changes (close, high, low relative to open)
+  3. Pattern-matching against stored memories to predict next-candle movement
+  4. Updating memory weights based on prediction accuracy
+  5. Storing new patterns when no match is found
+
+Data source is configured in gui_settings.json: "training_data_source": "kucoin"|"binance"|"kraken"
+Default: "kucoin" (reads from ArcticDB kucoin libraries; falls back to live KuCoin API).
 """
-"""
-<------------
-newest oldest
------------->
-oldest newest
-"""
-avg50 = []
-import sys
-import datetime
-import traceback
-import linecache
-import base64
-import calendar
-import hashlib
-import hmac
-from datetime import datetime
 
-sells_count = 0
-prediction_prices_avg_list = []
-pt_server = "server"
-import psutil
-import logging
-
-list_len = 0
-restarting = "no"
-in_trade = "no"
-updowncount = 0
-updowncount1 = 0
-updowncount1_2 = 0
-updowncount1_3 = 0
-updowncount1_4 = 0
-high_var2 = 0.0
-low_var2 = 0.0
-last_flipped = "no"
-starting_amounth02 = 100.0
-starting_amounth05 = 100.0
-starting_amounth10 = 100.0
-starting_amounth20 = 100.0
-starting_amounth50 = 100.0
-starting_amount = 100.0
-starting_amount1 = 100.0
-starting_amount1_2 = 100.0
-starting_amount1_3 = 100.0
-starting_amount1_4 = 100.0
-starting_amount2 = 100.0
-starting_amount2_2 = 100.0
-starting_amount2_3 = 100.0
-starting_amount2_4 = 100.0
-starting_amount3 = 100.0
-starting_amount3_2 = 100.0
-starting_amount3_3 = 100.0
-starting_amount3_4 = 100.0
-starting_amount4 = 100.0
-starting_amount4_2 = 100.0
-starting_amount4_3 = 100.0
-starting_amount4_4 = 100.0
-profit_list = []
-profit_list1 = []
-profit_list1_2 = []
-profit_list1_3 = []
-profit_list1_4 = []
-profit_list2 = []
-profit_list2_2 = []
-profit_list2_3 = []
-profit_list2_4 = []
-profit_list3 = []
-profit_list3_2 = []
-profit_list3_3 = []
-profit_list4 = []
-profit_list4_2 = []
-good_hits = []
-good_preds = []
-good_preds2 = []
-good_preds3 = []
-good_preds4 = []
-good_preds5 = []
-good_preds6 = []
-big_good_preds = []
-big_good_preds2 = []
-big_good_preds3 = []
-big_good_preds4 = []
-big_good_preds5 = []
-big_good_preds6 = []
-big_good_hits = []
-upordown = []
-upordown1 = []
-upordown1_2 = []
-upordown1_3 = []
-upordown1_4 = []
-upordown2 = []
-upordown2_2 = []
-upordown2_3 = []
-upordown2_4 = []
-upordown3 = []
-upordown3_2 = []
-upordown3_3 = []
-upordown3_4 = []
-upordown4 = []
-upordown4_2 = []
-upordown4_3 = []
-upordown4_4 = []
-upordown5 = []
 import json
-import uuid
 import os
+import sys
+import time
+import traceback
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
 
-# ---- speed knobs ----
-VERBOSE = False  # set True if you want the old high-volume prints
-
-
-def vprint(*args, **kwargs):
-    if VERBOSE:
-        print(*args, **kwargs)
-
-
-# Cache memory/weights in RAM (avoid re-reading and re-writing every loop)
-_memory_cache = {}  # tf_choice -> dict(memory_list, weight_list, high_weight_list, low_weight_list, dirty)
-_last_threshold_written = {}  # tf_choice -> float
+import numpy as np
+import pandas as pd
 
 
-def _read_text(path):
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+TIMEFRAMES = ["1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week"]
+TF_MINUTES = [60, 120, 240, 480, 720, 1440, 10080]
+
+# KuCoin API timeframe strings (for live fallback)
+KUCOIN_TF_MAP = {
+    60: "1hour", 120: "2hour", 240: "4hour", 480: "8hour",
+    720: "12hour", 1440: "1day", 10080: "1week",
+}
+
+PATTERN_LENGTH = 2  # number_of_candles[0] — pattern uses N-1 candles to predict 1
+CANDLES_TO_PREDICT = 1
+MIN_CANDLES = 100
+ACCURACY_WINDOW = 100
+THRESHOLD_TARGET_MATCHES = 20
+WEIGHT_STEP = 0.25
+WEIGHT_TOLERANCE = 0.1
+WEIGHT_CLAMP_CLOSE = (-2.0, 2.0)
+WEIGHT_CLAMP_HIGH_LOW = (0.0, 2.0)
+FLUSH_EVERY = 200
+PROGRESS_EVERY = 500
+
+
+@dataclass
+class TrainerConfig:
+    """All configuration for a training run."""
+
+    coin: str
+    data_source: str = "kucoin"
+    reprocess: bool = True
+    verbose: bool = False
+
+    @classmethod
+    def from_args(cls) -> "TrainerConfig":
+        """Parse CLI args and gui_settings.json."""
+        coin = "BTC"
+        if len(sys.argv) > 1 and sys.argv[1].strip():
+            coin = sys.argv[1].strip().upper()
+
+        reprocess = True
+        if len(sys.argv) > 2 and "no" in sys.argv[2].lower():
+            reprocess = False
+
+        data_source = "kucoin"
+        try:
+            settings_path = _find_gui_settings()
+            if settings_path and os.path.isfile(settings_path):
+                with open(settings_path, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+                ds = settings.get("training_data_source", "kucoin")
+                if ds in ("kucoin", "binance", "kraken"):
+                    data_source = ds
+        except Exception:
+            pass
+
+        return cls(coin=coin, data_source=data_source, reprocess=reprocess)
+
+
+def _find_gui_settings() -> Optional[str]:
+    """Locate gui_settings.json — check env, then walk up from cwd."""
+    env_path = os.environ.get("POWERTRADER_GUI_SETTINGS")
+    if env_path and os.path.isfile(env_path):
+        return env_path
+    # Walk up looking for gui_settings.json (cwd is typically state/coins/BTC/)
+    d = Path.cwd()
+    for _ in range(5):
+        candidate = d / "gui_settings.json"
+        if candidate.is_file():
+            return str(candidate)
+        d = d.parent
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Data Sources
+# ---------------------------------------------------------------------------
+
+def fetch_candles(coin: str, tf_name: str, tf_minutes: int, source: str) -> pd.DataFrame:
+    """Fetch OHLCV data, returning a DataFrame with columns [open, high, low, close].
+
+    Tries ArcticDB first, falls back to live KuCoin API if arctic is unavailable.
+    Returns oldest-first ordering.
+    """
+    df = _fetch_from_arctic(coin, tf_minutes, source)
+    if df is not None and len(df) >= MIN_CANDLES:
+        return df
+
+    # Fallback to live KuCoin API
+    df = _fetch_from_kucoin_live(coin, tf_name, tf_minutes)
+    if df is not None and len(df) >= MIN_CANDLES:
+        return df
+
+    raise InsufficientDataError(
+        f"Only {len(df) if df is not None else 0} candles for {coin} "
+        f"on {tf_name} (need {MIN_CANDLES}). Check data source '{source}'."
+    )
+
+
+def _fetch_from_arctic(coin: str, tf_minutes: int, source: str) -> Optional[pd.DataFrame]:
+    """Read candles from ArcticDB library."""
+    try:
+        from quant.data.arcticdb_manager import arctic
+    except ImportError:
+        try:
+            import arcticdb as adb
+            import getpass
+            arctic_path = f"/home/{getpass.getuser()}/dev/data/arcticdb"
+            arctic = adb.Arctic(f"lmdb:///{arctic_path}")
+        except (ImportError, Exception):
+            return None
+
+    lib_name = f"{source}{tf_minutes}"
+    if lib_name not in arctic.list_libraries():
+        return None
+
+    # Symbol format varies by exchange
+    if source == "kraken":
+        symbol = f"{coin}_USD"
+    else:
+        symbol = f"{coin}_USDT"
+
+    lib = arctic.get_library(lib_name)
+    if symbol not in lib.list_symbols():
+        # Try alternative denominator
+        alt = f"{coin}_USDT" if source == "kraken" else f"{coin}_USD"
+        if alt not in lib.list_symbols():
+            return None
+        symbol = alt
+
+    df = lib.read(symbol).data
+    if df is None or df.empty:
+        return None
+
+    # Normalize column names
+    df.columns = [c.lower() for c in df.columns]
+    required = {"open", "high", "low", "close"}
+    if not required.issubset(set(df.columns)):
+        return None
+
+    df = df[["open", "high", "low", "close"]].sort_index()
+    return df
+
+
+def _fetch_from_kucoin_live(coin: str, tf_name: str, tf_minutes: int) -> Optional[pd.DataFrame]:
+    """Fetch candles from KuCoin REST API (paginated, oldest-first)."""
+    try:
+        from kucoin.client import Market
+        market = Market(url="https://api.kucoin.com")
+    except ImportError:
+        return None
+
+    kucoin_symbol = f"{coin}-USDT"
+    all_candles = []
+    start_time = int(time.time())
+    chunk_seconds = 1500 * tf_minutes * 60
+
+    for _ in range(200):  # safety limit on pagination
+        end_time = start_time - chunk_seconds
+        time.sleep(0.5)
+        try:
+            raw = market.get_kline(kucoin_symbol, tf_name, startAt=end_time, endAt=start_time)
+        except Exception:
+            time.sleep(3.5)
+            continue
+
+        if not raw:
+            break
+
+        batch = []
+        for candle in raw:
+            try:
+                batch.append({
+                    "timestamp": int(candle[0]),
+                    "open": float(candle[1]),
+                    "close": float(candle[2]),
+                    "high": float(candle[3]),
+                    "low": float(candle[4]),
+                })
+            except (IndexError, ValueError, TypeError):
+                continue
+
+        if len(batch) < 1000:
+            all_candles.extend(batch)
+            break
+
+        all_candles.extend(batch)
+        start_time = end_time
+
+    if not all_candles:
+        return None
+
+    df = pd.DataFrame(all_candles)
+    df = df.drop_duplicates(subset=["timestamp"])
+    df = df.sort_values("timestamp").reset_index(drop=True)
+    return df[["open", "high", "low", "close"]]
+
+
+class InsufficientDataError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Memory I/O — format-compatible with pt_thinker.py consumer
+# ---------------------------------------------------------------------------
+
+@dataclass
+class MemoryStore:
+    """Manages memory patterns and weights for one timeframe.
+
+    File format (memories_{tf}.txt):
+        Entries separated by '~'. Each entry:
+        '<pct_change_1> <pct_change_2> ... <outcome_pct>{}<high_pct*100>{}<low_pct*100>'
+
+    Weight files (memory_weights_{tf}.txt, memory_weights_high_{tf}.txt, memory_weights_low_{tf}.txt):
+        Space-separated float values, one per memory entry.
+    """
+
+    tf_name: str
+    patterns: list = field(default_factory=list)      # list of np.ndarray (each is the pattern incl. outcome)
+    high_pcts: list = field(default_factory=list)     # high % for each memory (stored /100)
+    low_pcts: list = field(default_factory=list)      # low % for each memory (stored /100)
+    weights: list = field(default_factory=list)       # close weights
+    high_weights: list = field(default_factory=list)  # high weights
+    low_weights: list = field(default_factory=list)   # low weights
+    dirty: bool = False
+
+    def load(self):
+        """Load from disk. Tolerates missing files (starts empty)."""
+        self.patterns, self.high_pcts, self.low_pcts = self._load_memories()
+        self.weights = self._load_weight_file(f"memory_weights_{self.tf_name}.txt")
+        self.high_weights = self._load_weight_file(f"memory_weights_high_{self.tf_name}.txt")
+        self.low_weights = self._load_weight_file(f"memory_weights_low_{self.tf_name}.txt")
+
+        # Ensure all lists are same length (pad if needed)
+        n = len(self.patterns)
+        for wlist in (self.weights, self.high_weights, self.low_weights):
+            while len(wlist) < n:
+                wlist.append(1.0)
+
+        self.dirty = False
+
+    def _load_memories(self) -> tuple:
+        """Parse memories file into structured lists."""
+        path = f"memories_{self.tf_name}.txt"
+        if not os.path.isfile(path):
+            return [], [], []
+
+        text = _read_file(path)
+        if not text.strip():
+            return [], [], []
+
+        entries = text.split("~")
+        patterns = []
+        high_pcts = []
+        low_pcts = []
+
+        for entry in entries:
+            entry = entry.strip()
+            if not entry:
+                continue
+            parts = entry.split("{}")
+            if len(parts) < 3:
+                continue
+            try:
+                # Pattern values are space-separated floats (last value is the outcome)
+                pattern_str = parts[0].strip()
+                vals = [float(x) for x in pattern_str.split() if x.strip()]
+                if not vals:
+                    continue
+                patterns.append(np.array(vals, dtype=np.float64))
+                high_pcts.append(float(parts[1].strip()) / 100.0)
+                low_pcts.append(float(parts[2].strip()) / 100.0)
+            except (ValueError, IndexError):
+                continue
+
+        return patterns, high_pcts, low_pcts
+
+    def _load_weight_file(self, path: str) -> list:
+        """Load space-separated weight values."""
+        if not os.path.isfile(path):
+            return []
+        text = _read_file(path)
+        if not text.strip():
+            return []
+        values = []
+        for x in text.split():
+            x = x.strip()
+            if x:
+                try:
+                    values.append(float(x))
+                except ValueError:
+                    continue
+        return values
+
+    def flush(self):
+        """Write all data back to disk in the original format."""
+        if not self.dirty:
+            return
+
+        # Write memories
+        entries = []
+        for i, pat in enumerate(self.patterns):
+            pattern_str = " ".join(str(v) for v in pat)
+            high_str = str(self.high_pcts[i] * 100.0)
+            low_str = str(self.low_pcts[i] * 100.0)
+            entries.append(f"{pattern_str}{{}}{high_str}{{}}{low_str}")
+
+        _write_file(f"memories_{self.tf_name}.txt", "~".join(entries))
+        _write_file(
+            f"memory_weights_{self.tf_name}.txt",
+            " ".join(str(w) for w in self.weights),
+        )
+        _write_file(
+            f"memory_weights_high_{self.tf_name}.txt",
+            " ".join(str(w) for w in self.high_weights),
+        )
+        _write_file(
+            f"memory_weights_low_{self.tf_name}.txt",
+            " ".join(str(w) for w in self.low_weights),
+        )
+        self.dirty = False
+
+    def add_entry(self, pattern: np.ndarray, high_pct: float, low_pct: float):
+        """Store a new memory pattern with default weight 1.0."""
+        self.patterns.append(pattern)
+        self.high_pcts.append(high_pct)
+        self.low_pcts.append(low_pct)
+        self.weights.append(1.0)
+        self.high_weights.append(1.0)
+        self.low_weights.append(1.0)
+        self.dirty = True
+
+    @property
+    def count(self) -> int:
+        return len(self.patterns)
+
+    def get_patterns_matrix(self) -> Optional[np.ndarray]:
+        """Return Nx(pattern_length-1) matrix of pattern values (excluding outcome)."""
+        if not self.patterns:
+            return None
+        # Each pattern has pattern_length values; first N-1 are the pattern, last is outcome
+        pat_len = PATTERN_LENGTH - 1  # number of candle changes in the matching part
+        valid = [p for p in self.patterns if len(p) > pat_len]
+        if not valid:
+            return None
+        return np.array([p[:pat_len] for p in valid], dtype=np.float64)
+
+    def get_outcomes(self) -> np.ndarray:
+        """Return the outcome (last element) for each pattern."""
+        return np.array([p[-1] if len(p) > 0 else 0.0 for p in self.patterns], dtype=np.float64)
+
+
+# ---------------------------------------------------------------------------
+# Pattern Matching — vectorized with numpy
+# ---------------------------------------------------------------------------
+
+def compute_pct_changes(opens: np.ndarray, closes: np.ndarray,
+                        highs: np.ndarray, lows: np.ndarray) -> tuple:
+    """Compute percentage price changes: 100 * (price - open) / open.
+
+    Returns (close_pct, high_pct, low_pct) arrays.
+    """
+    mask = opens != 0
+    close_pct = np.where(mask, 100.0 * (closes - opens) / opens, 0.0)
+    high_pct = np.where(mask, 100.0 * (highs - opens) / opens, 0.0)
+    low_pct = np.where(mask, 100.0 * (lows - opens) / opens, 0.0)
+    return close_pct, high_pct, low_pct
+
+
+def find_matches(current_pattern: np.ndarray, memory_matrix: np.ndarray,
+                 threshold: float) -> tuple:
+    """Find memory patterns within threshold of current pattern.
+
+    Uses mean absolute percentage difference:
+        diff_per_elem = |a - b| / (|a + b| / 2) * 100  (0 if a+b == 0)
+        match if mean(diff_per_elem) <= threshold
+
+    Returns (matching_indices, diff_values) as numpy arrays.
+    """
+    if memory_matrix is None or len(memory_matrix) == 0:
+        return np.array([], dtype=np.int64), np.array([], dtype=np.float64)
+
+    # Broadcast: current_pattern is (pat_len,), memory_matrix is (N, pat_len)
+    sums = current_pattern + memory_matrix
+    diffs_abs = np.abs(current_pattern - memory_matrix)
+
+    # Avoid division by zero: where sum==0, difference is 0
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pct_diffs = np.where(sums == 0, 0.0, diffs_abs / (np.abs(sums) / 2.0) * 100.0)
+
+    mean_diffs = pct_diffs.mean(axis=1)
+    mask = mean_diffs <= threshold
+    indices = np.where(mask)[0]
+    return indices, mean_diffs[indices]
+
+
+def compute_weighted_prediction(indices: np.ndarray, outcomes: np.ndarray,
+                                weights: np.ndarray, high_pcts: np.ndarray,
+                                high_weights: np.ndarray, low_pcts: np.ndarray,
+                                low_weights: np.ndarray) -> tuple:
+    """Compute weighted average predictions for matched patterns.
+
+    Returns (close_pred_pct, high_pred_pct, low_pred_pct) where each is the
+    weighted mean of the matched outcomes divided by 100 (as a fraction for price calc).
+    """
+    if len(indices) == 0:
+        return 0.0, 0.0, 0.0
+
+    matched_outcomes = outcomes[indices]
+    matched_weights = weights[indices]
+    matched_high_pcts = high_pcts[indices]
+    matched_high_weights = high_weights[indices]
+    matched_low_pcts = low_pcts[indices]
+    matched_low_weights = low_weights[indices]
+
+    # Weighted averages
+    close_pred = np.mean(matched_outcomes * matched_weights) / 100.0
+    high_pred = np.mean(matched_high_pcts * matched_high_weights)
+    low_pred = np.mean(matched_low_pcts * matched_low_weights)
+
+    return close_pred, high_pred, low_pred
+
+
+# ---------------------------------------------------------------------------
+# Weight Updates
+# ---------------------------------------------------------------------------
+
+def update_weight(actual_pct: float, predicted_pct: float, current_weight: float,
+                  clamp: tuple) -> float:
+    """Adjust a single weight based on prediction accuracy.
+
+    If actual exceeds prediction by >10%: increase weight by 0.25
+    If actual falls below prediction by >10%: decrease weight by 0.25
+    Otherwise: unchanged.
+    """
+    tolerance_band = abs(predicted_pct) * WEIGHT_TOLERANCE
+    if actual_pct > predicted_pct + tolerance_band:
+        new_weight = current_weight + WEIGHT_STEP
+    elif actual_pct < predicted_pct - tolerance_band:
+        new_weight = current_weight - WEIGHT_STEP
+    else:
+        return current_weight
+    return max(clamp[0], min(clamp[1], new_weight))
+
+
+# ---------------------------------------------------------------------------
+# Accuracy Tracking
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AccuracyTracker:
+    """Rolling window accuracy tracker."""
+
+    window: int = ACCURACY_WINDOW
+    hits: list = field(default_factory=list)
+
+    def record(self, hit: bool):
+        self.hits.append(1 if hit else 0)
+        if len(self.hits) > self.window:
+            self.hits.pop(0)
+
+    @property
+    def accuracy(self) -> float:
+        if not self.hits:
+            return 0.0
+        return (sum(self.hits) / len(self.hits)) * 100.0
+
+
+# ---------------------------------------------------------------------------
+# Status & File I/O
+# ---------------------------------------------------------------------------
+
+class StatusWriter:
+    """Writes trainer status files compatible with the hub GUI."""
+
+    def __init__(self, coin: str):
+        self.coin = coin
+        self.started_at = int(time.time())
+
+    def write_training(self):
+        self._write_json("trainer_status.json", {
+            "coin": self.coin,
+            "state": "TRAINING",
+            "started_at": self.started_at,
+            "timestamp": self.started_at,
+        })
+        self._write_json("trainer_failure_info.json", {})
+
+    def write_finished(self):
+        finished_at = int(time.time())
+        self._write_json("trainer_status.json", {
+            "coin": self.coin,
+            "state": "FINISHED",
+            "started_at": self.started_at,
+            "finished_at": finished_at,
+            "timestamp": finished_at,
+        })
+        _write_file("trainer_last_training_time.txt", str(finished_at))
+        _write_file("trainer_last_start_time.txt", str(self.started_at))
+
+    def write_failure(self, exc: BaseException, tb_str: str = ""):
+        failed_at = int(time.time())
+        error_msg = f"{type(exc).__name__}: {exc}"
+        self._write_json("trainer_status.json", {
+            "coin": self.coin,
+            "state": "FAILED",
+            "started_at": self.started_at,
+            "failed_at": failed_at,
+            "timestamp": failed_at,
+            "error": error_msg,
+        })
+        self._write_json("trainer_failure_info.json", {
+            "coin": self.coin,
+            "state": "FAILED",
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
+            "traceback": tb_str,
+            "timestamp": failed_at,
+            "started_at": self.started_at,
+        })
+
+    def _write_json(self, path: str, data: dict):
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+
+def write_threshold(tf_name: str, value: float):
+    """Write the adaptive threshold for the thinker to read."""
+    _write_file(f"neural_perfect_threshold_{tf_name}.txt", str(value))
+
+
+def should_stop() -> bool:
+    """Check if training should stop (killer.txt == 'yes')."""
+    try:
+        with open("killer.txt", "r", encoding="utf-8", errors="ignore") as f:
+            return f.read().strip().lower() == "yes"
+    except (FileNotFoundError, OSError):
+        return False
+
+
+def _read_file(path: str) -> str:
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
 
 
-def load_memory(tf_choice):
-    """Load memories/weights for a timeframe once and keep them in RAM."""
-    if tf_choice in _memory_cache:
-        return _memory_cache[tf_choice]
-    data = {
-        "memory_list": [],
-        "weight_list": [],
-        "high_weight_list": [],
-        "low_weight_list": [],
-        "dirty": False,
-    }
-    try:
-        data["memory_list"] = (
-            _read_text(f"memories_{tf_choice}.txt")
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split("~")
-        )
-    except:
-        data["memory_list"] = []
-    try:
-        data["weight_list"] = (
-            _read_text(f"memory_weights_{tf_choice}.txt")
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split(" ")
-        )
-    except:
-        data["weight_list"] = []
-    try:
-        data["high_weight_list"] = (
-            _read_text(f"memory_weights_high_{tf_choice}.txt")
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split(" ")
-        )
-    except:
-        data["high_weight_list"] = []
-    try:
-        data["low_weight_list"] = (
-            _read_text(f"memory_weights_low_{tf_choice}.txt")
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split(" ")
-        )
-    except:
-        data["low_weight_list"] = []
-    _memory_cache[tf_choice] = data
-    return data
+def _write_file(path: str, content: str):
+    with open(path, "w+", encoding="utf-8") as f:
+        f.write(content)
 
 
-def flush_memory(tf_choice, force=False):
-    """Write memories/weights back to disk only when they changed (batch IO)."""
-    data = _memory_cache.get(tf_choice)
-    if not data:
-        return
-    if (not data.get("dirty")) and (not force):
-        return
-    try:
-        with open(f"memories_{tf_choice}.txt", "w+", encoding="utf-8") as f:
-            f.write("~".join([x for x in data["memory_list"] if str(x).strip() != ""]))
-    except:
-        pass
-    try:
-        with open(f"memory_weights_{tf_choice}.txt", "w+", encoding="utf-8") as f:
-            f.write(
-                " ".join([str(x) for x in data["weight_list"] if str(x).strip() != ""])
-            )
-    except:
-        pass
-    try:
-        with open(f"memory_weights_high_{tf_choice}.txt", "w+", encoding="utf-8") as f:
-            f.write(
-                " ".join(
-                    [str(x) for x in data["high_weight_list"] if str(x).strip() != ""]
-                )
-            )
-    except:
-        pass
-    try:
-        with open(f"memory_weights_low_{tf_choice}.txt", "w+", encoding="utf-8") as f:
-            f.write(
-                " ".join(
-                    [str(x) for x in data["low_weight_list"] if str(x).strip() != ""]
-                )
-            )
-    except:
-        pass
-    data["dirty"] = False
+# ---------------------------------------------------------------------------
+# Training Loop
+# ---------------------------------------------------------------------------
 
+class TrainingLoop:
+    """Orchestrates the full training process across all timeframes."""
 
-def write_threshold_sometimes(tf_choice, perfect_threshold, loop_i, every=200):
-    """Avoid writing neural_perfect_threshold_* every single loop."""
-    last = _last_threshold_written.get(tf_choice)
-    # write occasionally, or if it changed meaningfully
-    if (
-        (loop_i % every != 0)
-        and (last is not None)
-        and (abs(perfect_threshold - last) < 0.05)
-    ):
-        return
-    try:
-        with open(
-            f"neural_perfect_threshold_{tf_choice}.txt", "w+", encoding="utf-8"
-        ) as f:
-            f.write(str(perfect_threshold))
-        _last_threshold_written[tf_choice] = perfect_threshold
-    except:
-        pass
+    def __init__(self, config: TrainerConfig):
+        self.config = config
+        self.status = StatusWriter(config.coin)
 
+    def run(self):
+        """Execute training across all timeframes."""
+        self.status.write_training()
 
-def should_stop_training(loop_i, every=50):
-    """Check killer.txt less often (still responsive, way less IO)."""
-    if loop_i % every != 0:
-        return False
-    try:
-        with open("killer.txt", "r", encoding="utf-8", errors="ignore") as f:
-            return f.read().strip().lower() == "yes"
-    except:
-        return False
-
-
-def PrintException():
-    exc_type, exc_obj, tb = sys.exc_info()
-
-    # IMPORTANT: don't swallow clean exits (sys.exit()) or Ctrl+C
-    if isinstance(exc_obj, (SystemExit, KeyboardInterrupt)):
-        raise
-
-    # Safety: sometimes tb can be None
-    if tb is None:
-        print(f"EXCEPTION: {exc_obj}")
-        return
-
-    f = tb.tb_frame
-    lineno = tb.tb_lineno
-    filename = f.f_code.co_filename
-    linecache.checkcache(filename)
-    line = linecache.getline(filename, lineno, f.f_globals)
-    print('EXCEPTION IN (LINE {} "{}"): {}'.format(lineno, line.strip(), exc_obj))
-
-
-def _write_failure_state(exc_type, exc_value, exc_tb):
-    """Write comprehensive failure info on unhandled exception."""
-    tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-
-    g = globals()
-    _safe_get = lambda k: g.get(k, "<not set>")
-    state_snapshot = {}
-    for key in (
-        "the_big_index",
-        "restarted_yet",
-        "tf_choice",
-        "timeframe",
-        "timeframe_minutes",
-        "start_time",
-        "end_time",
-        "coin_choice",
-        "price_list_length",
-        "choice_index",
-        "restarting",
-        "number_of_candles_index",
-        "loop_i",
-    ):
-        state_snapshot[key] = str(_safe_get(key))
-    for key in (
-        "history_list",
-        "price_list",
-        "price_list2",
-        "open_price_list",
-        "open_price_list2",
-        "price_change_list",
-    ):
         try:
-            val = g.get(key)
-            state_snapshot[f"len_{key}"] = len(val) if val is not None else "<not set>"
-        except Exception:
-            state_snapshot[f"len_{key}"] = "<error>"
-    try:
-        state_snapshot["tf_choices"] = _safe_get("tf_choices")
-        state_snapshot["tf_minutes"] = _safe_get("tf_minutes")
-    except Exception:
-        pass
-
-    failure_info = {
-        "coin": g.get("_arg_coin", "???"),
-        "state": "FAILED",
-        "exception_type": exc_type.__name__ if exc_type else "Unknown",
-        "exception_message": str(exc_value),
-        "traceback": tb_str,
-        "trainer_state": state_snapshot,
-        "timestamp": int(time.time()),
-        "started_at": g.get("_trainer_started_at", 0),
-    }
-
-    try:
-        with open("trainer_failure_info.json", "w", encoding="utf-8") as f:
-            json.dump(failure_info, f, indent=2)
-    except Exception:
-        pass
-
-    try:
-        with open("trainer_status.json", "w", encoding="utf-8") as f:
-            json.dump(
-                {
-                    "coin": g.get("_arg_coin", "???"),
-                    "state": "FAILED",
-                    "started_at": g.get("_trainer_started_at", 0),
-                    "failed_at": int(time.time()),
-                    "timestamp": int(time.time()),
-                    "error": f"{exc_type.__name__}: {exc_value}"
-                    if exc_type
-                    else str(exc_value),
-                },
-                f,
-            )
-    except Exception:
-        pass
-
-    print(f"\n{'=' * 60}")
-    print(
-        f"TRAINING FAILED: {exc_type.__name__ if exc_type else 'Unknown'}: {exc_value}"
-    )
-    print(f"{'=' * 60}")
-    print(tb_str)
-    print(f"Trainer state: {json.dumps(state_snapshot, indent=2, default=str)}")
-    print(f"Full failure info written to trainer_failure_info.json")
-    print(f"{'=' * 60}")
-    sys.stdout.flush()
-
-
-_orig_excepthook = sys.excepthook
-
-
-def _fatal_exception_handler(exc_type, exc_value, exc_tb):
-    if issubclass(exc_type, (SystemExit, KeyboardInterrupt)):
-        _orig_excepthook(exc_type, exc_value, exc_tb)
-        return
-    _write_failure_state(exc_type, exc_value, exc_tb)
-    _orig_excepthook(exc_type, exc_value, exc_tb)
-
-
-sys.excepthook = _fatal_exception_handler
-
-how_far_to_look_back = 100000
-number_of_candles = [2]
-number_of_candles_index = 0
-
-
-def restart_program():
-    """Restarts the current program, with file objects and descriptors cleanup"""
-
-    try:
-        p = psutil.Process(os.getpid())
-        for handler in p.open_files() + p.connections():
-            os.close(handler.fd)
-    except Exception as e:
-        logging.error(e)
-    python = sys.executable
-    os.execl(python, python, *sys.argv)
-
-
-try:
-    if restarted_yet > 2:
-        restarted_yet = 0
-    else:
-        pass
-except:
-    restarted_yet = 0
-tf_choices = ["1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week"]
-tf_minutes = [60, 120, 240, 480, 720, 1440, 10080]
-# --- GUI HUB INPUT (NO PROMPTS) ---
-# Usage: python pt_trainer.py BTC [reprocess_yes|reprocess_no]
-_arg_coin = "BTC"
-
-try:
-    if len(sys.argv) > 1 and str(sys.argv[1]).strip():
-        _arg_coin = str(sys.argv[1]).strip().upper()
-except Exception:
-    _arg_coin = "BTC"
-
-coin_choice = _arg_coin + "-USDT"
-
-restart_processing = "yes"
-
-# GUI reads this status file to know if this coin is TRAINING or FINISHED
-_trainer_started_at = int(time.time())
-try:
-    with open("trainer_status.json", "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "coin": _arg_coin,
-                "state": "TRAINING",
-                "started_at": _trainer_started_at,
-                "timestamp": _trainer_started_at,
-            },
-            f,
-        )
-except Exception:
-    pass
-
-try:
-    with open("trainer_failure_info.json", "w", encoding="utf-8") as f:
-        json.dump({}, f)
-except Exception:
-    pass
-
-the_big_index = 0
-while True:
-    list_len = 0
-    restarting = "no"
-    in_trade = "no"
-    updowncount = 0
-    updowncount1 = 0
-    updowncount1_2 = 0
-    updowncount1_3 = 0
-    updowncount1_4 = 0
-    high_var2 = 0.0
-    low_var2 = 0.0
-    last_flipped = "no"
-    starting_amounth02 = 100.0
-    starting_amounth05 = 100.0
-    starting_amounth10 = 100.0
-    starting_amounth20 = 100.0
-    starting_amounth50 = 100.0
-    starting_amount = 100.0
-    starting_amount1 = 100.0
-    starting_amount1_2 = 100.0
-    starting_amount1_3 = 100.0
-    starting_amount1_4 = 100.0
-    starting_amount2 = 100.0
-    starting_amount2_2 = 100.0
-    starting_amount2_3 = 100.0
-    starting_amount2_4 = 100.0
-    starting_amount3 = 100.0
-    starting_amount3_2 = 100.0
-    starting_amount3_3 = 100.0
-    starting_amount3_4 = 100.0
-    starting_amount4 = 100.0
-    starting_amount4_2 = 100.0
-    starting_amount4_3 = 100.0
-    starting_amount4_4 = 100.0
-    profit_list = []
-    profit_list1 = []
-    profit_list1_2 = []
-    profit_list1_3 = []
-    profit_list1_4 = []
-    profit_list2 = []
-    profit_list2_2 = []
-    profit_list2_3 = []
-    profit_list2_4 = []
-    profit_list3 = []
-    profit_list3_2 = []
-    profit_list3_3 = []
-    profit_list4 = []
-    profit_list4_2 = []
-    good_hits = []
-    good_preds = []
-    good_preds2 = []
-    good_preds3 = []
-    good_preds4 = []
-    good_preds5 = []
-    good_preds6 = []
-    big_good_preds = []
-    big_good_preds2 = []
-    big_good_preds3 = []
-    big_good_preds4 = []
-    big_good_preds5 = []
-    big_good_preds6 = []
-    big_good_hits = []
-    upordown = []
-    upordown1 = []
-    upordown1_2 = []
-    upordown1_3 = []
-    upordown1_4 = []
-    upordown2 = []
-    upordown2_2 = []
-    upordown2_3 = []
-    upordown2_4 = []
-    upordown3 = []
-    upordown3_2 = []
-    upordown3_3 = []
-    upordown3_4 = []
-    upordown4 = []
-    upordown4_2 = []
-    upordown4_3 = []
-    upordown4_4 = []
-    upordown5 = []
-    tf_choice = tf_choices[the_big_index]
-    _mem = load_memory(tf_choice)
-    memory_list = _mem["memory_list"]
-    weight_list = _mem["weight_list"]
-    high_weight_list = _mem["high_weight_list"]
-    low_weight_list = _mem["low_weight_list"]
-    no_list = "no" if len(memory_list) > 0 else "yes"
-
-    tf_list = ["1hour", tf_choice, tf_choice]
-    choice_index = tf_choices.index(tf_choice)
-    minutes_list = [60, tf_minutes[choice_index], tf_minutes[choice_index]]
-    if restarted_yet < 2:
-        timeframe = tf_list[
-            restarted_yet
-        ]  # droplet setting (create list for all timeframes)
-        timeframe_minutes = minutes_list[
-            restarted_yet
-        ]  # droplet setting (create list for all timeframe_minutes)
-    else:
-        timeframe = tf_list[2]  # droplet setting (create list for all timeframes)
-        timeframe_minutes = minutes_list[
-            2
-        ]  # droplet setting (create list for all timeframe_minutes)
-    start_time = int(time.time())
-    restarting = "no"
-    success_rate = 85
-    volume_success_rate = 60
-    candles_to_predict = (
-        1  # droplet setting (Max is half of number_of_candles)(Min is 2)
-    )
-    max_difference = 0.5
-    preferred_difference = 0.4  # droplet setting (max profit_margin) (Min 0.01)
-    min_good_matches = 1  # droplet setting (Max 100) (Min 4)
-    max_good_matches = 1  # droplet setting (Max 100) (Min is min_good_matches)
-    prediction_expander = 1.33
-    prediction_expander2 = 1.5
-    prediction_adjuster = 0.0
-    diff_avg_setting = 0.01
-    min_success_rate = 90
-    histories = "off"
-    coin_choice_index = 0
-    list_of_ys_count = 0
-    last_difference_between = 0.0
-    history_list = []
-    history_list2 = []
-    len_avg = []
-    list_len = 0
-    start_time = int(time.time())
-    start_time_yes = start_time
-    if "n" in restart_processing.lower():
-        try:
-            file = open("trainer_last_start_time.txt", "r")
-            last_start_time = int(file.read())
-            file.close()
-        except:
-            last_start_time = 0.0
-    else:
-        last_start_time = 0.0
-    end_time = int(start_time - ((1500 * timeframe_minutes) * 60))
-    perc_comp = format((len(history_list2) / how_far_to_look_back) * 100, ".2f")
-    last_perc_comp = perc_comp + "kjfjakjdakd"
-    while True:
-        time.sleep(0.5)
-        try:
-            history = (
-                str(
-                    market.get_kline(
-                        coin_choice, timeframe, startAt=end_time, endAt=start_time
-                    )
-                )
-                .replace("]]", "], ")
-                .replace("[[", "[")
-                .split("], [")
-            )
+            for tf_idx, (tf_name, tf_min) in enumerate(zip(TIMEFRAMES, TF_MINUTES)):
+                self._train_timeframe(tf_idx, tf_name, tf_min)
+            self.status.write_finished()
+        except InsufficientDataError as e:
+            tb = traceback.format_exc()
+            self.status.write_failure(e, tb)
+            print(f"\n{'=' * 60}\nTRAINING FAILED: {e}\n{'=' * 60}")
+            sys.exit(1)
+        except (SystemExit, KeyboardInterrupt):
+            raise
         except Exception as e:
-            PrintException()
-            time.sleep(3.5)
-            continue
-        index = 0
-        while True:
-            history_list.append(history[index])
-            index += 1
-            if index >= len(history):
-                break
+            tb = traceback.format_exc()
+            self.status.write_failure(e, tb)
+            print(f"\n{'=' * 60}\nTRAINING FAILED: {type(e).__name__}: {e}\n{'=' * 60}")
+            print(tb)
+            sys.exit(1)
+
+    def _train_timeframe(self, tf_idx: int, tf_name: str, tf_minutes: int):
+        """Train one timeframe through its 3 phases (warmup + full)."""
+        memory = MemoryStore(tf_name)
+        memory.load()
+
+        # Phase 0: 1hour warmup (first 25%)
+        # Phase 1: target TF warmup (first 25%)
+        # Phase 2: target TF full (remaining data)
+        phases = [
+            ("1hour", 60, 0.25),
+            (tf_name, tf_minutes, 0.25),
+            (tf_name, tf_minutes, 1.0),
+        ]
+
+        iteration = 0
+
+        for phase_idx, (fetch_tf, fetch_min, fraction) in enumerate(phases):
+            df = fetch_candles(self.config.coin, fetch_tf, fetch_min, self.config.data_source)
+
+            opens = df["open"].values
+            closes = df["close"].values
+            highs = df["high"].values
+            lows = df["low"].values
+
+            close_pct, high_pct, low_pct = compute_pct_changes(opens, closes, highs, lows)
+            n_candles = len(close_pct)
+
+            # In warmup phases (0, 1): start at half, process up to 25% of total
+            # In full phase (2): start at 50%, process to end
+            if phase_idx < 2:
+                start_pos = PATTERN_LENGTH
+                end_pos = int(n_candles * fraction)
             else:
-                continue
-        perc_comp = format((len(history_list) / how_far_to_look_back) * 100, ".2f")
-        current_change = len(history_list) - list_len
-        vprint(f"gathering history: +{current_change} candles, total {len(history_list)}")
-        try:
-            vprint(current_change)
-            if current_change < 1000:
-                break
-            else:
-                pass
-        except:
-            PrintException()
-            pass
-        len_avg.append(current_change)
-        list_len = len(history_list)
-        last_perc_comp = perc_comp
-        start_time = end_time
-        end_time = int(start_time - ((1500 * timeframe_minutes) * 60))
-        vprint(f"time range: {last_start_time} -> {start_time} -> {end_time}")
-        if start_time <= last_start_time:
-            break
-        else:
-            continue
-    if timeframe == "1day" or timeframe == "1week":
-        if restarted_yet == 0:
-            index = int(len(history_list) / 2)
-        else:
-            index = 1
-    else:
-        index = int(len(history_list) / 2)
-    price_list = []
-    high_price_list = []
-    low_price_list = []
-    open_price_list = []
-    volume_list = []
-    minutes_passed = 0
-    try:
-        while True:
-            working_minute = (
-                str(history_list[index]).replace('"', "").replace("'", "").split(", ")
-            )
-            try:
-                if index == 1:
-                    current_tf_time = float(working_minute[0].replace("[", ""))
-                    last_tf_time = current_tf_time
-                else:
-                    pass
-                candle_time = float(working_minute[0].replace("[", ""))
-                openPrice = float(working_minute[1])
-                closePrice = float(working_minute[2])
-                highPrice = float(working_minute[3])
-                lowPrice = float(working_minute[4])
-                open_price_list.append(openPrice)
-                price_list.append(closePrice)
-                high_price_list.append(highPrice)
-                low_price_list.append(lowPrice)
-                index += 1
-                if index >= len(history_list):
-                    break
-                else:
+                start_pos = int(n_candles * 0.5)
+                end_pos = n_candles
+
+            # State for this phase
+            tracker = AccuracyTracker()
+            threshold = self._load_threshold(tf_name)
+            last_actual = None
+            last_pred_close = None
+            last_pred_high = None
+            last_pred_low = None
+            high_var2 = 0.0
+            low_var2 = 0.0
+
+            for pos in range(start_pos, end_pos):
+                iteration += 1
+
+                # Extract current pattern (the close pct change at this position)
+                pat_start = pos - (PATTERN_LENGTH - 1)
+                if pat_start < 0:
                     continue
-            except:
-                PrintException()
-                index += 1
-                if index >= len(history_list):
-                    break
-                else:
+                current_pattern = close_pct[pat_start:pos]  # excludes outcome
+
+                if len(current_pattern) < PATTERN_LENGTH - 1:
                     continue
-        open_price_list.reverse()
-        price_list.reverse()
-        high_price_list.reverse()
-        low_price_list.reverse()
-        ticker_data = (
-            str(market.get_ticker(coin_choice))
-            .replace('"', "")
-            .replace("'", "")
-            .replace("[", "")
-            .replace("{", "")
-            .replace("]", "")
-            .replace("}", "")
-            .replace(",", "")
-            .lower()
-            .split(" ")
-        )
-        price = float(ticker_data[ticker_data.index("price:") + 1])
-    except:
-        PrintException()
 
-    _MIN_CANDLES = 100
-    if len(price_list) < _MIN_CANDLES:
-        msg = (f"Only {len(price_list)} candles gathered (need {_MIN_CANDLES}). "
-               f"Likely rate-limited by exchange.")
-        print(f"\n{'=' * 60}")
-        print(f"TRAINING FAILED: {msg}")
-        print(f"{'=' * 60}")
-        failure_info = {
-            "coin": _arg_coin,
-            "state": "FAILED",
-            "exception_type": "InsufficientData",
-            "exception_message": msg,
-            "traceback": "",
-            "trainer_state": {"len_price_list": len(price_list), "tf_choice": tf_choice},
-            "timestamp": int(time.time()),
-            "started_at": _trainer_started_at,
-        }
-        try:
-            with open("trainer_failure_info.json", "w", encoding="utf-8") as f:
-                json.dump(failure_info, f, indent=2)
-        except Exception:
-            pass
-        try:
-            with open("trainer_status.json", "w", encoding="utf-8") as f:
-                json.dump({
-                    "coin": _arg_coin,
-                    "state": "FAILED",
-                    "started_at": _trainer_started_at,
-                    "failed_at": int(time.time()),
-                    "timestamp": int(time.time()),
-                    "error": msg,
-                }, f)
-        except Exception:
-            pass
-        sys.exit(1)
+                # --- Pattern matching against memory ---
+                memory_matrix = memory.get_patterns_matrix()
+                indices, diffs = find_matches(current_pattern, memory_matrix, threshold)
 
-    history_list = []
-    history_list2 = []
-    perfect_threshold = 1.0
-    loop_i = 0  # counts inner training iterations (used to throttle disk IO)
-    if restarted_yet < 2:
-        price_list_length = 10
-    else:
-        price_list_length = int(len(price_list) * 0.5)
-    while True:
-        while True:
-            loop_i += 1
-            matched_patterns_count = 0
-            list_of_ys = []
-            list_of_ys_count = 0
-            next_coin = "no"
-            all_current_patterns = []
-            memory_or_history = []
-            memory_weights = []
+                has_match = len(indices) > 0
 
-            high_memory_weights = []
-            low_memory_weights = []
-            final_moves = 0.0
-            high_final_moves = 0.0
-            low_final_moves = 0.0
-            memory_indexes = []
-            matches_yep = []
-            flipped = "no"
-            last_minute = int(time.time() / 60)
-            overunder = "nothing"
-            overunder2 = "nothing"
-            list_of_ys = []
-            all_predictions = []
-            all_preds = []
-            high_all_predictions = []
-            high_all_preds = []
-            low_all_predictions = []
-            low_all_preds = []
-            try:
-                open_price_list2 = []
-                open_price_list_index = 0
-                while True:
-                    open_price_list2.append(open_price_list[open_price_list_index])
-                    open_price_list_index += 1
-                    if open_price_list_index >= price_list_length:
-                        break
-                    else:
-                        continue
-            except:
-                break
-            low_all_preds = []
-            try:
-                price_list2 = []
-                price_list_index = 0
-                while True:
-                    price_list2.append(price_list[price_list_index])
-                    price_list_index += 1
-                    if price_list_index >= price_list_length:
-                        break
-                    else:
-                        continue
-            except:
-                break
-            high_price_list2 = []
-            high_price_list_index = 0
-            while True:
-                high_price_list2.append(high_price_list[high_price_list_index])
-                high_price_list_index += 1
-                if high_price_list_index >= price_list_length:
-                    break
+                # --- Adaptive threshold ---
+                if len(indices) > THRESHOLD_TARGET_MATCHES:
+                    step = 0.001 if threshold < 0.1 else 0.01
+                    threshold = max(0.0, threshold - step)
                 else:
-                    continue
-            low_price_list2 = []
-            low_price_list_index = 0
-            while True:
-                low_price_list2.append(low_price_list[low_price_list_index])
-                low_price_list_index += 1
-                if low_price_list_index >= price_list_length:
-                    break
-                else:
-                    continue
-            index = 0
-            index2 = index + 1
-            price_change_list = []
-            while True:
-                _open = open_price_list2[index]
-                price_change = 100 * ((price_list2[index] - _open) / _open) if _open != 0 else 0.0
-                price_change_list.append(price_change)
-                index += 1
-                if index >= len(price_list2):
-                    break
-                else:
-                    continue
-            index = 0
-            index2 = index + 1
-            high_price_change_list = []
-            while True:
-                _open = open_price_list2[index]
-                high_price_change = 100 * ((high_price_list2[index] - _open) / _open) if _open != 0 else 0.0
-                high_price_change_list.append(high_price_change)
-                index += 1
-                if index >= len(price_list2):
-                    break
-                else:
-                    continue
-            index = 0
-            index2 = index + 1
-            low_price_change_list = []
-            while True:
-                _open = open_price_list2[index]
-                low_price_change = 100 * ((low_price_list2[index] - _open) / _open) if _open != 0 else 0.0
-                low_price_change_list.append(low_price_change)
-                index += 1
-                if index >= len(price_list2):
-                    break
-                else:
-                    continue
-            # Check stop signal occasionally (much less disk IO)
-            if should_stop_training(loop_i):
-                exited = "yes"
-                print("training stopped")
-                file = open("trainer_last_start_time.txt", "w+")
-                file.write(str(start_time_yes))
-                file.close()
+                    step = 0.001 if threshold < 0.1 else 0.01
+                    threshold = min(100.0, threshold + step)
 
-                # Mark training finished for the GUI
-                try:
-                    _trainer_finished_at = int(time.time())
-                    file = open("trainer_last_training_time.txt", "w+")
-                    file.write(str(_trainer_finished_at))
-                    file.close()
-                except:
-                    pass
-                try:
-                    with open("trainer_status.json", "w", encoding="utf-8") as f:
-                        json.dump(
-                            {
-                                "coin": _arg_coin,
-                                "state": "FINISHED",
-                                "started_at": _trainer_started_at,
-                                "finished_at": _trainer_finished_at,
-                                "timestamp": _trainer_finished_at,
-                            },
-                            f,
-                        )
-                except Exception:
-                    pass
+                if iteration % FLUSH_EVERY == 0:
+                    write_threshold(tf_name, threshold)
 
-                # Flush any cached memory/weights before we spin
-                flush_memory(tf_choice, force=True)
+                # --- Prediction ---
+                if has_match:
+                    outcomes = memory.get_outcomes()
+                    weights_arr = np.array(memory.weights, dtype=np.float64)
+                    high_pcts_arr = np.array(memory.high_pcts, dtype=np.float64)
+                    high_weights_arr = np.array(memory.high_weights, dtype=np.float64)
+                    low_pcts_arr = np.array(memory.low_pcts, dtype=np.float64)
+                    low_weights_arr = np.array(memory.low_weights, dtype=np.float64)
 
-                sys.exit(0)
-
-                the_big_index += 1
-                restarted_yet = 0
-                avg50 = []
-                import sys
-                import datetime
-                import traceback
-                import linecache
-                import base64
-                import calendar
-                import hashlib
-                import hmac
-                from datetime import datetime
-
-                sells_count = 0
-                prediction_prices_avg_list = []
-                pt_server = "server"
-                import psutil
-                import logging
-
-                list_len = 0
-                restarting = "no"
-                in_trade = "no"
-                updowncount = 0
-                updowncount1 = 0
-                updowncount1_2 = 0
-                updowncount1_3 = 0
-                updowncount1_4 = 0
-                high_var2 = 0.0
-                low_var2 = 0.0
-                last_flipped = "no"
-                starting_amounth02 = 100.0
-                starting_amounth05 = 100.0
-                starting_amounth10 = 100.0
-                starting_amounth20 = 100.0
-                starting_amounth50 = 100.0
-                starting_amount = 100.0
-                starting_amount1 = 100.0
-                starting_amount1_2 = 100.0
-                starting_amount1_3 = 100.0
-                starting_amount1_4 = 100.0
-                starting_amount2 = 100.0
-                starting_amount2_2 = 100.0
-                starting_amount2_3 = 100.0
-                starting_amount2_4 = 100.0
-                starting_amount3 = 100.0
-                starting_amount3_2 = 100.0
-                starting_amount3_3 = 100.0
-                starting_amount3_4 = 100.0
-                starting_amount4 = 100.0
-                starting_amount4_2 = 100.0
-                starting_amount4_3 = 100.0
-                starting_amount4_4 = 100.0
-                profit_list = []
-                profit_list1 = []
-                profit_list1_2 = []
-                profit_list1_3 = []
-                profit_list1_4 = []
-                profit_list2 = []
-                profit_list2_2 = []
-                profit_list2_3 = []
-                profit_list2_4 = []
-                profit_list3 = []
-                profit_list3_2 = []
-                profit_list3_3 = []
-                profit_list4 = []
-                profit_list4_2 = []
-                good_hits = []
-                good_preds = []
-                good_preds2 = []
-                good_preds3 = []
-                good_preds4 = []
-                good_preds5 = []
-                good_preds6 = []
-                big_good_preds = []
-                big_good_preds2 = []
-                big_good_preds3 = []
-                big_good_preds4 = []
-                big_good_preds5 = []
-                big_good_preds6 = []
-                big_good_hits = []
-                upordown = []
-                upordown1 = []
-                upordown1_2 = []
-                upordown1_3 = []
-                upordown1_4 = []
-                upordown2 = []
-                upordown2_2 = []
-                upordown2_3 = []
-                upordown2_4 = []
-                upordown3 = []
-                upordown3_2 = []
-                upordown3_3 = []
-                upordown3_4 = []
-                upordown4 = []
-                upordown4_2 = []
-                upordown4_3 = []
-                upordown4_4 = []
-                upordown5 = []
-                import json
-                import uuid
-
-                how_far_to_look_back = 100000
-                list_len = 0
-                if the_big_index >= len(tf_choices):
-                    if len(number_of_candles) == 1:
-                        print(
-                            "Finished processing all timeframes (number_of_candles has only one entry). Exiting."
-                        )
-                        try:
-                            file = open("trainer_last_start_time.txt", "w+")
-                            file.write(str(start_time_yes))
-                            file.close()
-                        except:
-                            pass
-
-                        # Mark training finished for the GUI
-                        try:
-                            _trainer_finished_at = int(time.time())
-                            file = open("trainer_last_training_time.txt", "w+")
-                            file.write(str(_trainer_finished_at))
-                            file.close()
-                        except:
-                            pass
-                        try:
-                            with open(
-                                "trainer_status.json", "w", encoding="utf-8"
-                            ) as f:
-                                json.dump(
-                                    {
-                                        "coin": _arg_coin,
-                                        "state": "FINISHED",
-                                        "started_at": _trainer_started_at,
-                                        "finished_at": _trainer_finished_at,
-                                        "timestamp": _trainer_finished_at,
-                                    },
-                                    f,
-                                )
-                        except Exception:
-                            pass
-
-                        sys.exit(0)
-                    else:
-                        the_big_index = 0
-                else:
-                    pass
-
-                break
-            else:
-                exited = "no"
-            perfect = []
-            while True:
-                try:
-                    vprint(f"\nchoice={choice_index} restart={restarted_yet} tf={tf_list[restarted_yet]}")
-                    try:
-                        current_pattern_length = number_of_candles[
-                            number_of_candles_index
-                        ]
-                        index = (len(price_change_list)) - (
-                            number_of_candles[number_of_candles_index] - 1
-                        )
-                        current_pattern = []
-                        history_pattern_start_index = (len(price_change_list)) - (
-                            (
-                                number_of_candles[number_of_candles_index]
-                                + candles_to_predict
-                            )
-                            * 2
-                        )
-                        history_pattern_index = history_pattern_start_index
-                        while True:
-                            current_pattern.append(price_change_list[index])
-                            index += 1
-                            if len(current_pattern) >= (
-                                number_of_candles[number_of_candles_index] - 1
-                            ):
-                                break
-                            else:
-                                continue
-                    except:
-                        PrintException()
-                    try:
-                        high_current_pattern_length = number_of_candles[
-                            number_of_candles_index
-                        ]
-                        index = (len(high_price_change_list)) - (
-                            number_of_candles[number_of_candles_index] - 1
-                        )
-                        high_current_pattern = []
-                        while True:
-                            high_current_pattern.append(high_price_change_list[index])
-                            index += 1
-                            if len(high_current_pattern) >= (
-                                number_of_candles[number_of_candles_index] - 1
-                            ):
-                                break
-                            else:
-                                continue
-                    except:
-                        PrintException()
-                    try:
-                        low_current_pattern_length = number_of_candles[
-                            number_of_candles_index
-                        ]
-                        index = (len(low_price_change_list)) - (
-                            number_of_candles[number_of_candles_index] - 1
-                        )
-                        low_current_pattern = []
-                        while True:
-                            low_current_pattern.append(low_price_change_list[index])
-                            index += 1
-                            if len(low_current_pattern) >= (
-                                number_of_candles[number_of_candles_index] - 1
-                            ):
-                                break
-                            else:
-                                continue
-                    except:
-                        PrintException()
-                    history_diff = 1000000.0
-                    memory_diff = 1000000.0
-                    history_diffs = []
-                    memory_diffs = []
-                    if 1 == 1:
-                        try:
-                            file = open("memories_" + tf_choice + ".txt", "r")
-                            memory_list = (
-                                file.read()
-                                .replace("'", "")
-                                .replace(",", "")
-                                .replace('"', "")
-                                .replace("]", "")
-                                .replace("[", "")
-                                .split("~")
-                            )
-                            file.close()
-                            file = open("memory_weights_" + tf_choice + ".txt", "r")
-                            weight_list = (
-                                file.read()
-                                .replace("'", "")
-                                .replace(",", "")
-                                .replace('"', "")
-                                .replace("]", "")
-                                .replace("[", "")
-                                .split(" ")
-                            )
-                            file.close()
-                            file = open(
-                                "memory_weights_high_" + tf_choice + ".txt", "r"
-                            )
-                            high_weight_list = (
-                                file.read()
-                                .replace("'", "")
-                                .replace(",", "")
-                                .replace('"', "")
-                                .replace("]", "")
-                                .replace("[", "")
-                                .split(" ")
-                            )
-                            file.close()
-                            file = open("memory_weights_low_" + tf_choice + ".txt", "r")
-                            low_weight_list = (
-                                file.read()
-                                .replace("'", "")
-                                .replace(",", "")
-                                .replace('"', "")
-                                .replace("]", "")
-                                .replace("[", "")
-                                .split(" ")
-                            )
-                            file.close()
-                            mem_ind = 0
-                            diffs_list = []
-                            any_perfect = "no"
-                            perfect_dexs = []
-                            perfect_diffs = []
-                            moves = []
-                            move_weights = []
-                            high_move_weights = []
-                            low_move_weights = []
-                            unweighted = []
-                            high_unweighted = []
-                            low_unweighted = []
-                            high_moves = []
-                            low_moves = []
-                            while True:
-                                memory_pattern = (
-                                    memory_list[mem_ind]
-                                    .split("{}")[0]
-                                    .replace("'", "")
-                                    .replace(",", "")
-                                    .replace('"', "")
-                                    .replace("]", "")
-                                    .replace("[", "")
-                                    .split(" ")
-                                )
-                                avgs = []
-                                checks = []
-                                check_dex = 0
-                                while True:
-                                    current_candle = float(current_pattern[check_dex])
-                                    memory_candle = float(memory_pattern[check_dex])
-                                    if current_candle + memory_candle == 0.0:
-                                        difference = 0.0
-                                    else:
-                                        try:
-                                            difference = abs(
-                                                (
-                                                    abs(current_candle - memory_candle)
-                                                    / (
-                                                        (current_candle + memory_candle)
-                                                        / 2
-                                                    )
-                                                )
-                                                * 100
-                                            )
-                                        except:
-                                            difference = 0.0
-                                    checks.append(difference)
-                                    check_dex += 1
-                                    if check_dex >= len(current_pattern):
-                                        break
-                                    else:
-                                        continue
-                                diff_avg = sum(checks) / len(checks)
-                                if diff_avg <= perfect_threshold:
-                                    any_perfect = "yes"
-                                    high_diff = (
-                                        float(
-                                            memory_list[mem_ind]
-                                            .split("{}")[1]
-                                            .replace("'", "")
-                                            .replace(",", "")
-                                            .replace('"', "")
-                                            .replace("]", "")
-                                            .replace("[", "")
-                                            .replace(" ", "")
-                                        )
-                                        / 100
-                                    )
-                                    low_diff = (
-                                        float(
-                                            memory_list[mem_ind]
-                                            .split("{}")[2]
-                                            .replace("'", "")
-                                            .replace(",", "")
-                                            .replace('"', "")
-                                            .replace("]", "")
-                                            .replace("[", "")
-                                            .replace(" ", "")
-                                        )
-                                        / 100
-                                    )
-                                    unweighted.append(
-                                        float(memory_pattern[len(memory_pattern) - 1])
-                                    )
-                                    move_weights.append(float(weight_list[mem_ind]))
-                                    high_move_weights.append(
-                                        float(high_weight_list[mem_ind])
-                                    )
-                                    low_move_weights.append(
-                                        float(low_weight_list[mem_ind])
-                                    )
-                                    high_unweighted.append(high_diff)
-                                    low_unweighted.append(low_diff)
-                                    moves.append(
-                                        float(memory_pattern[len(memory_pattern) - 1])
-                                        * float(weight_list[mem_ind])
-                                    )
-                                    high_moves.append(
-                                        high_diff * float(high_weight_list[mem_ind])
-                                    )
-                                    low_moves.append(
-                                        low_diff * float(low_weight_list[mem_ind])
-                                    )
-                                    perfect_dexs.append(mem_ind)
-                                    perfect_diffs.append(diff_avg)
-                                else:
-                                    pass
-                                diffs_list.append(diff_avg)
-                                mem_ind += 1
-                                if mem_ind >= len(memory_list):
-                                    if any_perfect == "no":
-                                        memory_diff = min(diffs_list)
-                                        which_memory_index = diffs_list.index(
-                                            memory_diff
-                                        )
-                                        perfect.append("no")
-                                        final_moves = 0.0
-                                        high_final_moves = 0.0
-                                        low_final_moves = 0.0
-                                        new_memory = "yes"
-                                    else:
-                                        try:
-                                            final_moves = sum(moves) / len(moves)
-                                            high_final_moves = sum(high_moves) / len(
-                                                high_moves
-                                            )
-                                            low_final_moves = sum(low_moves) / len(
-                                                low_moves
-                                            )
-                                        except:
-                                            final_moves = 0.0
-                                            high_final_moves = 0.0
-                                            low_final_moves = 0.0
-                                        which_memory_index = perfect_dexs[
-                                            perfect_diffs.index(min(perfect_diffs))
-                                        ]
-                                        perfect.append("yes")
-                                    break
-                                else:
-                                    continue
-                        except FileNotFoundError:
-                            memory_list = []
-                            weight_list = []
-                            high_weight_list = []
-                            low_weight_list = []
-                            which_memory_index = "no"
-                            perfect.append("no")
-                            diffs_list = []
-                            any_perfect = "no"
-                            perfect_dexs = []
-                            perfect_diffs = []
-                            moves = []
-                            move_weights = []
-                            high_move_weights = []
-                            low_move_weights = []
-                            unweighted = []
-                            high_moves = []
-                            low_moves = []
-                            final_moves = 0.0
-                            high_final_moves = 0.0
-                            low_final_moves = 0.0
-                        except:
-                            PrintException()
-                            memory_list = []
-                            weight_list = []
-                            high_weight_list = []
-                            low_weight_list = []
-                            which_memory_index = "no"
-                            perfect.append("no")
-                            diffs_list = []
-                            any_perfect = "no"
-                            perfect_dexs = []
-                            perfect_diffs = []
-                            moves = []
-                            move_weights = []
-                            high_move_weights = []
-                            low_move_weights = []
-                            unweighted = []
-                            high_moves = []
-                            low_moves = []
-                            final_moves = 0.0
-                            high_final_moves = 0.0
-                            low_final_moves = 0.0
-                    else:
-                        pass
-                    all_current_patterns.append(current_pattern)
-                    if len(unweighted) > 20:
-                        if perfect_threshold < 0.1:
-                            perfect_threshold -= 0.001
-                        else:
-                            perfect_threshold -= 0.01
-                        if perfect_threshold < 0.0:
-                            perfect_threshold = 0.0
-                        else:
-                            pass
-                    else:
-                        if perfect_threshold < 0.1:
-                            perfect_threshold += 0.001
-                        else:
-                            perfect_threshold += 0.01
-                        if perfect_threshold > 100.0:
-                            perfect_threshold = 100.0
-                        else:
-                            pass
-                    write_threshold_sometimes(
-                        tf_choice, perfect_threshold, loop_i, every=200
+                    pred_close, pred_high, pred_low = compute_weighted_prediction(
+                        indices, outcomes, weights_arr,
+                        high_pcts_arr, high_weights_arr,
+                        low_pcts_arr, low_weights_arr,
                     )
 
-                    try:
-                        index = 0
-                        current_pattern_length = number_of_candles[
-                            number_of_candles_index
-                        ]
-                        index = (len(price_list2)) - current_pattern_length
-                        current_pattern = []
-                        while True:
-                            current_pattern.append(price_list2[index])
-                            if (
-                                len(current_pattern)
-                                >= number_of_candles[number_of_candles_index]
-                            ):
-                                break
-                            else:
-                                index += 1
-                                if index >= len(price_list2):
-                                    break
-                                else:
-                                    continue
-                    except:
-                        PrintException()
-                    if 1 == 1:
-                        while True:
-                            try:
-                                c_diff = final_moves / 100
-                                high_diff = high_final_moves
-                                low_diff = low_final_moves
-                                prediction_prices = [
-                                    current_pattern[len(current_pattern) - 1]
-                                ]
-                                high_prediction_prices = [
-                                    current_pattern[len(current_pattern) - 1]
-                                ]
-                                low_prediction_prices = [
-                                    current_pattern[len(current_pattern) - 1]
-                                ]
-                                start_price = current_pattern[len(current_pattern) - 1]
-                                new_price = start_price + (start_price * c_diff)
-                                high_new_price = start_price + (start_price * high_diff)
-                                low_new_price = start_price + (start_price * low_diff)
-                                prediction_prices = [start_price, new_price]
-                                high_prediction_prices = [start_price, high_new_price]
-                                low_prediction_prices = [start_price, low_new_price]
-                            except:
-                                start_price = current_pattern[len(current_pattern) - 1]
-                                new_price = start_price
-                                prediction_prices = [start_price, start_price]
-                                high_prediction_prices = [start_price, start_price]
-                                low_prediction_prices = [start_price, start_price]
+                    # Compute predicted prices from last close
+                    start_price = closes[pos - 1]
+                    pred_close_price = start_price + (start_price * pred_close)
+                    pred_high_price = start_price + (start_price * pred_high)
+                    pred_low_price = start_price + (start_price * pred_low)
+
+                    # --- Accuracy tracking ---
+                    if last_actual is not None and last_pred_high is not None:
+                        actual_close_pct = ((closes[pos - 1] - last_actual) / abs(last_actual)) * 100 if last_actual != 0 else 0
+                        actual_high_pct = ((highs[pos - 1] - last_actual) / abs(last_actual)) * 100 if last_actual != 0 else 0
+                        actual_low_pct = ((lows[pos - 1] - last_actual) / abs(last_actual)) * 100 if last_actual != 0 else 0
+
+                        hit = self._score_accuracy(
+                            actual_close_pct, actual_high_pct, actual_low_pct,
+                            high_var2, low_var2,
+                        )
+                        if hit is not None:
+                            tracker.record(hit)
+
+                    high_var2 = ((pred_high_price - start_price) / abs(start_price)) * 100 if start_price != 0 else 0
+                    low_var2 = ((pred_low_price - start_price) / abs(start_price)) * 100 if start_price != 0 else 0
+
+                    last_actual = start_price
+                    last_pred_close = pred_close_price
+                    last_pred_high = pred_high_price
+                    last_pred_low = pred_low_price
+                else:
+                    # No match — store as new memory
+                    # The outcome is the actual close pct at this position
+                    outcome = close_pct[pos] if pos < len(close_pct) else 0.0
+                    high_outcome = high_pct[pos] if pos < len(high_pct) else 0.0
+                    low_outcome = low_pct[pos] if pos < len(low_pct) else 0.0
+
+                    full_pattern = np.append(current_pattern, outcome)
+                    memory.add_entry(full_pattern, high_outcome / 100.0, low_outcome / 100.0)
+
+                    if last_actual is not None:
+                        last_actual = closes[pos - 1]
+                        last_pred_close = closes[pos - 1]  # no prediction
+                        last_pred_high = highs[pos - 1]
+                        last_pred_low = lows[pos - 1]
+
+                # --- Weight updates (when we have a match and can see the actual next candle) ---
+                if has_match and pos < len(close_pct):
+                    actual_next_close_pct = ((closes[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100 if closes[pos - 1] != 0 else 0
+                    actual_next_high_pct = ((highs[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100 if closes[pos - 1] != 0 else 0
+                    actual_next_low_pct = ((lows[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100 if closes[pos - 1] != 0 else 0
+
+                    for idx in indices:
+                        if idx >= len(memory.weights):
                             break
-                        index = len(current_pattern) - 1
-                        index2 = 0
-                        all_preds.append(prediction_prices)
-                        high_all_preds.append(high_prediction_prices)
-                        low_all_preds.append(low_prediction_prices)
-                        overunder = "within"
-                        all_predictions.append(prediction_prices)
-                        high_all_predictions.append(high_prediction_prices)
-                        low_all_predictions.append(low_prediction_prices)
-                        index = 0
-                        vprint(tf_choice)
-                        page_info = ""
-                        current_pattern_length = 3
-                        index = (len(price_list2) - 1) - current_pattern_length
-                        current_pattern = []
-                        while True:
-                            current_pattern.append(price_list2[index])
-                            index += 1
-                            if index >= len(price_list2):
-                                break
-                            else:
-                                continue
-                        high_current_pattern_length = 3
-                        high_index = (
-                            len(high_price_list2) - 1
-                        ) - high_current_pattern_length
-                        high_current_pattern = []
-                        while True:
-                            high_current_pattern.append(high_price_list2[high_index])
-                            high_index += 1
-                            if high_index >= len(high_price_list2):
-                                break
-                            else:
-                                continue
-                        low_current_pattern_length = 3
-                        low_index = (
-                            len(low_price_list2) - 1
-                        ) - low_current_pattern_length
-                        low_current_pattern = []
-                        while True:
-                            low_current_pattern.append(low_price_list2[low_index])
-                            low_index += 1
-                            if low_index >= len(low_price_list2):
-                                break
-                            else:
-                                continue
-                        try:
-                            which_pattern_length = 0
-                            new_y = [start_price, new_price]
-                            high_new_y = [start_price, high_new_price]
-                            low_new_y = [start_price, low_new_price]
-                        except:
-                            PrintException()
-                            new_y = [
-                                current_pattern[len(current_pattern) - 1],
-                                current_pattern[len(current_pattern) - 1],
-                            ]
-                            high_new_y = [
-                                current_pattern[len(current_pattern) - 1],
-                                high_current_pattern[len(high_current_pattern) - 1],
-                            ]
-                            low_new_y = [
-                                current_pattern[len(current_pattern) - 1],
-                                low_current_pattern[len(low_current_pattern) - 1],
-                            ]
-                    else:
-                        current_pattern_length = 3
-                        index = (len(price_list2)) - current_pattern_length
-                        current_pattern = []
-                        while True:
-                            current_pattern.append(price_list2[index])
-                            index += 1
-                            if index >= len(price_list2):
-                                break
-                            else:
-                                continue
-                        high_current_pattern_length = 3
-                        high_index = (
-                            len(high_price_list2) - 1
-                        ) - high_current_pattern_length
-                        high_current_pattern = []
-                        while True:
-                            high_current_pattern.append(high_price_list2[high_index])
-                            high_index += 1
-                            if high_index >= len(high_price_list2):
-                                break
-                            else:
-                                continue
-                        low_current_pattern_length = 3
-                        low_index = (
-                            len(low_price_list2) - 1
-                        ) - low_current_pattern_length
-                        low_current_pattern = []
-                        while True:
-                            low_current_pattern.append(low_price_list2[low_index])
-                            low_index += 1
-                            if low_index >= len(low_price_list2):
-                                break
-                            else:
-                                continue
-                        new_y = [
-                            current_pattern[len(current_pattern) - 1],
-                            current_pattern[len(current_pattern) - 1],
-                        ]
-                        number_of_candles_index += 1
-                        if number_of_candles_index >= len(number_of_candles):
-                            print("Processed all number_of_candles. Exiting.")
-                            sys.exit(0)
-                    perfect_yes = "no"
-                    if 1 == 1:
-                        high_current_price = high_current_pattern[
-                            len(high_current_pattern) - 1
-                        ]
-                        low_current_price = low_current_pattern[
-                            len(low_current_pattern) - 1
-                        ]
-                        try:
-                            try:
-                                difference_of_actuals = last_actual - new_y[0]
-                                difference_of_last = last_actual - last_prediction
-                                percent_difference_of_actuals = (
-                                    (new_y[0] - last_actual) / abs(last_actual)
-                                ) * 100
-                                high_difference_of_actuals = (
-                                    last_actual - high_current_price
-                                )
-                                high_percent_difference_of_actuals = (
-                                    (high_current_price - last_actual)
-                                    / abs(last_actual)
-                                ) * 100
-                                low_difference_of_actuals = (
-                                    last_actual - low_current_price
-                                )
-                                low_percent_difference_of_actuals = (
-                                    (low_current_price - last_actual) / abs(last_actual)
-                                ) * 100
-                                percent_difference_of_last = (
-                                    (last_prediction - last_actual) / abs(last_actual)
-                                ) * 100
-                                high_percent_difference_of_last = (
-                                    (high_last_prediction - last_actual)
-                                    / abs(last_actual)
-                                ) * 100
-                                low_percent_difference_of_last = (
-                                    (low_last_prediction - last_actual)
-                                    / abs(last_actual)
-                                ) * 100
-                                if in_trade == "no":
-                                    percent_for_no_sell = (
-                                        (new_y[1] - last_actual) / abs(last_actual)
-                                    ) * 100
-                                    og_actual = last_actual
-                                    in_trade = "yes"
-                                else:
-                                    percent_for_no_sell = (
-                                        (new_y[1] - og_actual) / abs(og_actual)
-                                    ) * 100
-                            except:
-                                difference_of_actuals = 0.0
-                                difference_of_last = 0.0
-                                percent_difference_of_actuals = 0.0
-                                percent_difference_of_last = 0.0
-                                high_difference_of_actuals = 0.0
-                                high_percent_difference_of_actuals = 0.0
-                                low_difference_of_actuals = 0.0
-                                low_percent_difference_of_actuals = 0.0
-                                high_percent_difference_of_last = 0.0
-                                low_percent_difference_of_last = 0.0
-                        except:
-                            PrintException()
-                        try:
-                            perdex = 0
-                            while True:
-                                if perfect[perdex] == "yes":
-                                    perfect_yes = "yes"
-                                    break
-                                else:
-                                    perdex += 1
-                                    if perdex >= len(perfect):
-                                        perfect_yes = "no"
-                                        break
-                                    else:
-                                        continue
-                            high_var = high_percent_difference_of_last
-                            low_var = low_percent_difference_of_last
-                            if last_flipped == "no":
-                                if (
-                                    high_percent_difference_of_actuals
-                                    >= high_var2 + (high_var2 * 0.005)
-                                    and percent_difference_of_actuals < high_var2
-                                ):
-                                    upordown3.append(1)
-                                    upordown.append(1)
-                                    upordown4.append(1)
-                                    if len(upordown4) > 100:
-                                        del upordown4[0]
-                                    else:
-                                        pass
-                                elif (
-                                    low_percent_difference_of_actuals
-                                    <= low_var2 - (low_var2 * 0.005)
-                                    and percent_difference_of_actuals > low_var2
-                                ):
-                                    upordown.append(1)
-                                    upordown3.append(1)
-                                    upordown4.append(1)
-                                    if len(upordown4) > 100:
-                                        del upordown4[0]
-                                    else:
-                                        pass
-                                elif (
-                                    high_percent_difference_of_actuals
-                                    >= high_var2 + (high_var2 * 0.005)
-                                    and percent_difference_of_actuals > high_var2
-                                ):
-                                    upordown3.append(0)
-                                    upordown2.append(0)
-                                    upordown.append(0)
-                                    upordown4.append(0)
-                                    if len(upordown4) > 100:
-                                        del upordown4[0]
-                                    else:
-                                        pass
-                                elif (
-                                    low_percent_difference_of_actuals
-                                    <= low_var2 - (low_var2 * 0.005)
-                                    and percent_difference_of_actuals < low_var2
-                                ):
-                                    upordown3.append(0)
-                                    upordown2.append(0)
-                                    upordown.append(0)
-                                    upordown4.append(0)
-                                    if len(upordown4) > 100:
-                                        del upordown4[0]
-                                    else:
-                                        pass
-                                else:
-                                    pass
-                            else:
-                                pass
-                            try:
-                                _cur = len(price_list2)
-                                _tot = int(len(price_list))
-                                _acc = format((sum(upordown4) / len(upordown4)) * 100, ".2f")
-                                if _cur % 500 == 0 or _cur == _tot:
-                                    _pct = format(_cur / _tot * 100, ".0f") if _tot > 0 else "?"
-                                    _mem_count = len(memory_list)
-                                    print(f"[{tf_choice} {the_big_index+1}/{len(tf_choices)}] candle {_cur}/{_tot} ({_pct}%)  accuracy={_acc}%  memories={_mem_count}  threshold={perfect_threshold:.3f}")
-                            except:
-                                pass
-                        except:
-                            PrintException()
-                    else:
-                        pass
-                    cc_on = "no"
-                    try:
-                        long_trade = "no"
-                        short_trade = "no"
-                        last_moves = moves
-                        last_high_moves = high_moves
-                        last_low_moves = low_moves
-                        last_move_weights = move_weights
-                        last_high_move_weights = high_move_weights
-                        last_low_move_weights = low_move_weights
-                        last_perfect_dexs = perfect_dexs
-                        last_perfect_diffs = perfect_diffs
-                        percent_difference_of_now = (
-                            (new_y[1] - new_y[0]) / abs(new_y[0])
-                        ) * 100
-                        high_percent_difference_of_now = (
-                            (high_new_y[1] - high_new_y[0]) / abs(high_new_y[0])
-                        ) * 100
-                        low_percent_difference_of_now = (
-                            (low_new_y[1] - low_new_y[0]) / abs(low_new_y[0])
-                        ) * 100
-                        high_var2 = high_percent_difference_of_now
-                        low_var2 = low_percent_difference_of_now
-                        var2 = percent_difference_of_now
-                        if flipped == "yes":
-                            new1 = high_percent_difference_of_now
-                            high_percent_difference_of_now = (
-                                low_percent_difference_of_now
-                            )
-                            low_percent_difference_of_now = new1
-                        else:
-                            pass
-                    except:
-                        PrintException()
-                    last_actual = new_y[0]
-                    last_prediction = new_y[1]
-                    high_last_prediction = high_new_y[1]
-                    low_last_prediction = low_new_y[1]
-                    prediction_adjuster = 0.0
-                    prediction_expander2 = 1.5
-                    ended_on = number_of_candles_index
-                    next_coin = "yes"
-                    profit_hit = "no"
-                    long_profit = 0
-                    short_profit = 0
-                    """
-					expander_move = input('Expander good? yes or new number: ')
-					if expander_move == 'yes':
-						pass
-					else:
-						prediction_expander = expander_move
-						continue
-					"""
-                    last_flipped = flipped
-                    which_candle_of_the_prediction_index = 0
-                    if 1 == 1:
-                        current_pattern_ending = [
-                            current_pattern[len(current_pattern) - 1]
-                        ]
-                        while True:
-                            try:
-                                try:
-                                    price_list_length += 1
-                                    which_candle_of_the_prediction_index += 1
-                                    try:
-                                        if (
-                                            len(price_list2)
-                                            >= int(len(price_list) * 0.25)
-                                            and restarted_yet < 2
-                                        ):
-                                            restarted_yet += 1
-                                            restarting = "yes"
-                                            break
-                                        else:
-                                            restarting = "no"
-                                    except:
-                                        restarting = "no"
-                                    if len(price_list2) == len(price_list):
-                                        the_big_index += 1
-                                        restarted_yet = 0
-                                        print(f"restarting tf_index={the_big_index + 1}/{len(tf_choices)}")
-                                        restarting = "yes"
-                                        avg50 = []
-                                        import sys
-                                        import datetime
-                                        import traceback
-                                        import linecache
-                                        import base64
-                                        import calendar
-                                        import hashlib
-                                        import hmac
-                                        from datetime import datetime
+                        # Close weight
+                        predicted_close_move = memory.patterns[idx][-1] * memory.weights[idx]
+                        memory.weights[idx] = update_weight(
+                            actual_next_close_pct, predicted_close_move,
+                            memory.weights[idx], WEIGHT_CLAMP_CLOSE,
+                        )
+                        # High weight
+                        predicted_high_move = memory.high_pcts[idx] * 100 * memory.high_weights[idx]
+                        memory.high_weights[idx] = update_weight(
+                            actual_next_high_pct, predicted_high_move,
+                            memory.high_weights[idx], WEIGHT_CLAMP_HIGH_LOW,
+                        )
+                        # Low weight
+                        predicted_low_move = memory.low_pcts[idx] * 100 * memory.low_weights[idx]
+                        memory.low_weights[idx] = update_weight(
+                            actual_next_low_pct, predicted_low_move,
+                            memory.low_weights[idx], WEIGHT_CLAMP_HIGH_LOW,
+                        )
+                    memory.dirty = True
 
-                                        sells_count = 0
-                                        prediction_prices_avg_list = []
-                                        pt_server = "server"
-                                        import psutil
-                                        import logging
+                # --- Periodic flush and progress ---
+                if iteration % FLUSH_EVERY == 0:
+                    memory.flush()
 
-                                        list_len = 0
-                                        in_trade = "no"
-                                        updowncount = 0
-                                        updowncount1 = 0
-                                        updowncount1_2 = 0
-                                        updowncount1_3 = 0
-                                        updowncount1_4 = 0
-                                        high_var2 = 0.0
-                                        low_var2 = 0.0
-                                        last_flipped = "no"
-                                        starting_amounth02 = 100.0
-                                        starting_amounth05 = 100.0
-                                        starting_amounth10 = 100.0
-                                        starting_amounth20 = 100.0
-                                        starting_amounth50 = 100.0
-                                        starting_amount = 100.0
-                                        starting_amount1 = 100.0
-                                        starting_amount1_2 = 100.0
-                                        starting_amount1_3 = 100.0
-                                        starting_amount1_4 = 100.0
-                                        starting_amount2 = 100.0
-                                        starting_amount2_2 = 100.0
-                                        starting_amount2_3 = 100.0
-                                        starting_amount2_4 = 100.0
-                                        starting_amount3 = 100.0
-                                        starting_amount3_2 = 100.0
-                                        starting_amount3_3 = 100.0
-                                        starting_amount3_4 = 100.0
-                                        starting_amount4 = 100.0
-                                        starting_amount4_2 = 100.0
-                                        starting_amount4_3 = 100.0
-                                        starting_amount4_4 = 100.0
-                                        profit_list = []
-                                        profit_list1 = []
-                                        profit_list1_2 = []
-                                        profit_list1_3 = []
-                                        profit_list1_4 = []
-                                        profit_list2 = []
-                                        profit_list2_2 = []
-                                        profit_list2_3 = []
-                                        profit_list2_4 = []
-                                        profit_list3 = []
-                                        profit_list3_2 = []
-                                        profit_list3_3 = []
-                                        profit_list4 = []
-                                        profit_list4_2 = []
-                                        good_hits = []
-                                        good_preds = []
-                                        good_preds2 = []
-                                        good_preds3 = []
-                                        good_preds4 = []
-                                        good_preds5 = []
-                                        good_preds6 = []
-                                        big_good_preds = []
-                                        big_good_preds2 = []
-                                        big_good_preds3 = []
-                                        big_good_preds4 = []
-                                        big_good_preds5 = []
-                                        big_good_preds6 = []
-                                        big_good_hits = []
-                                        upordown = []
-                                        upordown1 = []
-                                        upordown1_2 = []
-                                        upordown1_3 = []
-                                        upordown1_4 = []
-                                        upordown2 = []
-                                        upordown2_2 = []
-                                        upordown2_3 = []
-                                        upordown2_4 = []
-                                        upordown3 = []
-                                        upordown3_2 = []
-                                        upordown3_3 = []
-                                        upordown3_4 = []
-                                        upordown4 = []
-                                        upordown4_2 = []
-                                        upordown4_3 = []
-                                        upordown4_4 = []
-                                        upordown5 = []
-                                        import json
-                                        import uuid
+                if iteration % PROGRESS_EVERY == 0 or pos == end_pos - 1:
+                    pct_done = (pos - start_pos) / max(1, end_pos - start_pos) * 100
+                    print(
+                        f"[{tf_name} {tf_idx+1}/{len(TIMEFRAMES)}] "
+                        f"phase={phase_idx} candle {pos}/{end_pos} ({pct_done:.0f}%)  "
+                        f"accuracy={tracker.accuracy:.1f}%  "
+                        f"memories={memory.count}  "
+                        f"threshold={threshold:.4f}"
+                    )
 
-                                        how_far_to_look_back = 100000
-                                        list_len = 0
-                                        vprint(f"big_index={the_big_index} tf_choices={len(tf_choices)}")
-                                        if the_big_index >= len(tf_choices):
-                                            if len(number_of_candles) == 1:
-                                                print(
-                                                    "Finished processing all timeframes (number_of_candles has only one entry). Exiting."
-                                                )
-                                                try:
-                                                    file = open(
-                                                        "trainer_last_start_time.txt",
-                                                        "w+",
-                                                    )
-                                                    file.write(str(start_time_yes))
-                                                    file.close()
-                                                except:
-                                                    pass
+                # --- Stop check ---
+                if iteration % 50 == 0 and should_stop():
+                    memory.flush()
+                    write_threshold(tf_name, threshold)
+                    self.status.write_finished()
+                    print("Training stopped by killer.txt")
+                    sys.exit(0)
 
-                                                # Mark training finished for the GUI
-                                                try:
-                                                    _trainer_finished_at = int(
-                                                        time.time()
-                                                    )
-                                                    file = open(
-                                                        "trainer_last_training_time.txt",
-                                                        "w+",
-                                                    )
-                                                    file.write(
-                                                        str(_trainer_finished_at)
-                                                    )
-                                                    file.close()
-                                                except:
-                                                    pass
-                                                try:
-                                                    with open(
-                                                        "trainer_status.json",
-                                                        "w",
-                                                        encoding="utf-8",
-                                                    ) as f:
-                                                        json.dump(
-                                                            {
-                                                                "coin": _arg_coin,
-                                                                "state": "FINISHED",
-                                                                "started_at": _trainer_started_at,
-                                                                "finished_at": _trainer_finished_at,
-                                                                "timestamp": _trainer_finished_at,
-                                                            },
-                                                            f,
-                                                        )
-                                                except Exception:
-                                                    pass
+            # End of phase: flush
+            memory.flush()
+            write_threshold(tf_name, threshold)
 
-                                                sys.exit(0)
-                                            else:
-                                                the_big_index = 0
-                                        else:
-                                            pass
-                                        break
-                                    else:
-                                        exited = "no"
-                                        try:
-                                            price_list2 = []
-                                            price_list_index = 0
-                                            while True:
-                                                price_list2.append(
-                                                    price_list[price_list_index]
-                                                )
-                                                price_list_index += 1
-                                                if (
-                                                    len(price_list2)
-                                                    >= price_list_length
-                                                ):
-                                                    break
-                                                else:
-                                                    continue
-                                            high_price_list2 = []
-                                            high_price_list_index = 0
-                                            while True:
-                                                high_price_list2.append(
-                                                    high_price_list[
-                                                        high_price_list_index
-                                                    ]
-                                                )
-                                                high_price_list_index += 1
-                                                if (
-                                                    high_price_list_index
-                                                    >= price_list_length
-                                                ):
-                                                    break
-                                                else:
-                                                    continue
-                                            low_price_list2 = []
-                                            low_price_list_index = 0
-                                            while True:
-                                                low_price_list2.append(
-                                                    low_price_list[low_price_list_index]
-                                                )
-                                                low_price_list_index += 1
-                                                if (
-                                                    low_price_list_index
-                                                    >= price_list_length
-                                                ):
-                                                    break
-                                                else:
-                                                    continue
-                                            price2 = price_list2[len(price_list2) - 1]
-                                            high_price2 = high_price_list2[
-                                                len(high_price_list2) - 1
-                                            ]
-                                            low_price2 = low_price_list2[
-                                                len(low_price_list2) - 1
-                                            ]
-                                            highlowind = 0
-                                            this_differ = (
-                                                (price2 - new_y[1]) / abs(new_y[1])
-                                            ) * 100
-                                            high_this_differ = (
-                                                (high_price2 - new_y[1]) / abs(new_y[1])
-                                            ) * 100
-                                            low_this_differ = (
-                                                (low_price2 - new_y[1]) / abs(new_y[1])
-                                            ) * 100
-                                            this_diff = (
-                                                (price2 - new_y[0]) / abs(new_y[0])
-                                            ) * 100
-                                            high_this_diff = (
-                                                (high_price2 - new_y[0]) / abs(new_y[0])
-                                            ) * 100
-                                            low_this_diff = (
-                                                (low_price2 - new_y[0]) / abs(new_y[0])
-                                            ) * 100
-                                            difference_list = []
-                                            list_of_predictions = all_predictions
-                                            close_enough_counter = []
-                                            which_pattern_length_index = 0
-                                            while True:
-                                                current_prediction_price = all_predictions[
-                                                    highlowind
-                                                ][which_candle_of_the_prediction_index]
-                                                high_current_prediction_price = high_all_predictions[
-                                                    highlowind
-                                                ][which_candle_of_the_prediction_index]
-                                                low_current_prediction_price = low_all_predictions[
-                                                    highlowind
-                                                ][which_candle_of_the_prediction_index]
-                                                perc_diff_now = (
-                                                    (
-                                                        current_prediction_price
-                                                        - new_y[0]
-                                                    )
-                                                    / abs(new_y[0])
-                                                ) * 100
-                                                perc_diff_now_actual = (
-                                                    (price2 - new_y[0]) / abs(new_y[0])
-                                                ) * 100
-                                                high_perc_diff_now_actual = (
-                                                    (high_price2 - new_y[0])
-                                                    / abs(new_y[0])
-                                                ) * 100
-                                                low_perc_diff_now_actual = (
-                                                    (low_price2 - new_y[0])
-                                                    / abs(new_y[0])
-                                                ) * 100
-                                                try:
-                                                    difference = abs(
-                                                        (
-                                                            abs(
-                                                                current_prediction_price
-                                                                - float(price2)
-                                                            )
-                                                            / (
-                                                                (
-                                                                    current_prediction_price
-                                                                    + float(price2)
-                                                                )
-                                                                / 2
-                                                            )
-                                                        )
-                                                        * 100
-                                                    )
-                                                except:
-                                                    difference = 100.0
-                                                try:
-                                                    direction = "down"
-                                                    try:
-                                                        if len(moves) == 0:
-                                                            raise IndexError("no moves — seed first memory")
-                                                        indy = 0
-                                                        while indy < len(moves):
-                                                            new_memory = "no"
-                                                            var3 = moves[indy] * 100
-                                                            high_var3 = (
-                                                                high_moves[indy] * 100
-                                                            )
-                                                            low_var3 = (
-                                                                low_moves[indy] * 100
-                                                            )
-                                                            if (
-                                                                high_perc_diff_now_actual
-                                                                > high_var3
-                                                                + (high_var3 * 0.1)
-                                                            ):
-                                                                high_new_weight = (
-                                                                    high_move_weights[
-                                                                        indy
-                                                                    ]
-                                                                    + 0.25
-                                                                )
-                                                                if (
-                                                                    high_new_weight
-                                                                    > 2.0
-                                                                ):
-                                                                    high_new_weight = (
-                                                                        2.0
-                                                                    )
-                                                                else:
-                                                                    pass
-                                                            elif (
-                                                                high_perc_diff_now_actual
-                                                                < high_var3
-                                                                - (high_var3 * 0.1)
-                                                            ):
-                                                                high_new_weight = (
-                                                                    high_move_weights[
-                                                                        indy
-                                                                    ]
-                                                                    - 0.25
-                                                                )
-                                                                if (
-                                                                    high_new_weight
-                                                                    < 0.0
-                                                                ):
-                                                                    high_new_weight = (
-                                                                        0.0
-                                                                    )
-                                                                else:
-                                                                    pass
-                                                            else:
-                                                                high_new_weight = (
-                                                                    high_move_weights[
-                                                                        indy
-                                                                    ]
-                                                                )
-                                                            if (
-                                                                low_perc_diff_now_actual
-                                                                < low_var3
-                                                                - (low_var3 * 0.1)
-                                                            ):
-                                                                low_new_weight = (
-                                                                    low_move_weights[
-                                                                        indy
-                                                                    ]
-                                                                    + 0.25
-                                                                )
-                                                                if low_new_weight > 2.0:
-                                                                    low_new_weight = 2.0
-                                                                else:
-                                                                    pass
-                                                            elif (
-                                                                low_perc_diff_now_actual
-                                                                > low_var3
-                                                                + (low_var3 * 0.1)
-                                                            ):
-                                                                low_new_weight = (
-                                                                    low_move_weights[
-                                                                        indy
-                                                                    ]
-                                                                    - 0.25
-                                                                )
-                                                                if low_new_weight < 0.0:
-                                                                    low_new_weight = 0.0
-                                                                else:
-                                                                    pass
-                                                            else:
-                                                                low_new_weight = (
-                                                                    low_move_weights[
-                                                                        indy
-                                                                    ]
-                                                                )
-                                                            if (
-                                                                perc_diff_now_actual
-                                                                > var3 + (var3 * 0.1)
-                                                            ):
-                                                                new_weight = (
-                                                                    move_weights[indy]
-                                                                    + 0.25
-                                                                )
-                                                                if new_weight > 2.0:
-                                                                    new_weight = 2.0
-                                                                else:
-                                                                    pass
-                                                            elif (
-                                                                perc_diff_now_actual
-                                                                < var3 - (var3 * 0.1)
-                                                            ):
-                                                                new_weight = (
-                                                                    move_weights[indy]
-                                                                    - 0.25
-                                                                )
-                                                                if new_weight < (
-                                                                    0.0 - 2.0
-                                                                ):
-                                                                    new_weight = (
-                                                                        0.0 - 2.0
-                                                                    )
-                                                                else:
-                                                                    pass
-                                                            else:
-                                                                new_weight = (
-                                                                    move_weights[indy]
-                                                                )
-                                                            del weight_list[
-                                                                perfect_dexs[indy]
-                                                            ]
-                                                            weight_list.insert(
-                                                                perfect_dexs[indy],
-                                                                new_weight,
-                                                            )
-                                                            del high_weight_list[
-                                                                perfect_dexs[indy]
-                                                            ]
-                                                            high_weight_list.insert(
-                                                                perfect_dexs[indy],
-                                                                high_new_weight,
-                                                            )
-                                                            del low_weight_list[
-                                                                perfect_dexs[indy]
-                                                            ]
-                                                            low_weight_list.insert(
-                                                                perfect_dexs[indy],
-                                                                low_new_weight,
-                                                            )
+        print(f"[{tf_name}] Complete — {memory.count} memories, threshold={threshold:.4f}")
 
-                                                            # mark dirty (we will flush in batches)
-                                                            _mem = load_memory(
-                                                                tf_choice
-                                                            )
-                                                            _mem["dirty"] = True
+    def _load_threshold(self, tf_name: str) -> float:
+        """Load the last threshold or default to 1.0."""
+        path = f"neural_perfect_threshold_{tf_name}.txt"
+        try:
+            if os.path.isfile(path):
+                return float(_read_file(path).strip())
+        except (ValueError, OSError):
+            pass
+        return 1.0
 
-                                                            # occasional batch flush
-                                                            if loop_i % 200 == 0:
-                                                                flush_memory(tf_choice)
+    def _score_accuracy(self, actual_close_pct: float, actual_high_pct: float,
+                        actual_low_pct: float, pred_high_pct: float,
+                        pred_low_pct: float) -> Optional[bool]:
+        """Score whether prediction correctly bounded the actual movement.
 
-                                                            indy += 1
-                                                            if indy >= len(unweighted) or indy >= len(moves):
-                                                                break
-                                                            else:
-                                                                pass
-                                                    except:
-                                                        PrintException()
-                                                        all_current_patterns[
-                                                            highlowind
-                                                        ].append(this_diff)
+        Hit conditions (matches original logic):
+        - High bounded correctly: actual_high >= predicted_high + 0.5% AND actual_close < predicted_high
+        - Low bounded correctly: actual_low <= predicted_low - 0.5% AND actual_close > predicted_low
+        Miss conditions:
+        - High exceeded in wrong direction
+        - Low exceeded in wrong direction
+        Returns None if no scoring condition met.
+        """
+        high_tolerance = abs(pred_high_pct) * 0.005 if pred_high_pct != 0 else 0
+        low_tolerance = abs(pred_low_pct) * 0.005 if pred_low_pct != 0 else 0
 
-                                                        # build the same memory entry format, but store in RAM
-                                                        mem_entry = (
-                                                            str(
-                                                                all_current_patterns[
-                                                                    highlowind
-                                                                ]
-                                                            )
-                                                            .replace("'", "")
-                                                            .replace(",", "")
-                                                            .replace('"', "")
-                                                            .replace("]", "")
-                                                            .replace("[", "")
-                                                            + "{}"
-                                                            + str(high_this_diff)
-                                                            + "{}"
-                                                            + str(low_this_diff)
-                                                        )
+        if (actual_high_pct >= pred_high_pct + high_tolerance
+                and actual_close_pct < pred_high_pct):
+            return True
+        if (actual_low_pct <= pred_low_pct - low_tolerance
+                and actual_close_pct > pred_low_pct):
+            return True
+        if (actual_high_pct >= pred_high_pct + high_tolerance
+                and actual_close_pct > pred_high_pct):
+            return False
+        if (actual_low_pct <= pred_low_pct - low_tolerance
+                and actual_close_pct < pred_low_pct):
+            return False
+        return None
 
-                                                        _mem = load_memory(tf_choice)
-                                                        _mem["memory_list"].append(
-                                                            mem_entry
-                                                        )
-                                                        _mem["weight_list"].append(
-                                                            "1.0"
-                                                        )
-                                                        _mem["high_weight_list"].append(
-                                                            "1.0"
-                                                        )
-                                                        _mem["low_weight_list"].append(
-                                                            "1.0"
-                                                        )
-                                                        _mem["dirty"] = True
 
-                                                        # occasional batch flush
-                                                        if loop_i % 200 == 0:
-                                                            flush_memory(tf_choice)
+# ---------------------------------------------------------------------------
+# Reconciliation — prove equivalence with old trainer
+# ---------------------------------------------------------------------------
 
-                                                except:
-                                                    PrintException()
-                                                    pass
-                                                highlowind += 1
-                                                if highlowind >= len(all_predictions):
-                                                    break
-                                                else:
-                                                    continue
-                                        except SystemExit:
-                                            raise
-                                        except KeyboardInterrupt:
-                                            raise
-                                        except Exception:
-                                            PrintException()
-                                            break
+def run_reconciliation(coin: str, tf_name: str, data_source: str, max_candles: int = 500):
+    """Run both old and new logic on the same data, output comparison.
 
-                                    if (
-                                        which_candle_of_the_prediction_index
-                                        >= candles_to_predict
-                                    ):
-                                        break
-                                    else:
-                                        continue
-                                except SystemExit:
-                                    raise
-                                except KeyboardInterrupt:
-                                    raise
-                                except Exception:
-                                    PrintException()
-                                    break
-
-                            except SystemExit:
-                                raise
-                            except KeyboardInterrupt:
-                                raise
-                            except Exception:
-                                PrintException()
-                                break
-
-                    else:
-                        pass
-                    coin_choice_index += 1
-                    history_list = []
-                    price_change_list = []
-                    current_pattern = []
-                    break
-                except SystemExit:
-                    raise
-                except KeyboardInterrupt:
-                    raise
-                except Exception:
-                    PrintException()
-                    break
-
-            if restarting == "yes":
-                break
-            else:
-                continue
-        if restarting == "yes":
+    Outputs to PowerTrader_AI/reconciliation/{coin}/{tf_name}/ (never touches state/).
+    """
+    # Find project root (walk up from cwd)
+    project_root = Path.cwd()
+    for _ in range(5):
+        if (project_root / "gui_settings.json").exists():
             break
-        else:
+        project_root = project_root.parent
+
+    out_dir = project_root / "reconciliation" / coin / tf_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Fetch data
+    tf_idx = TIMEFRAMES.index(tf_name)
+    tf_min = TF_MINUTES[tf_idx]
+    df = fetch_candles(coin, tf_name, tf_min, data_source)
+
+    opens = df["open"].values
+    closes = df["close"].values
+    highs = df["high"].values
+    lows = df["low"].values
+
+    close_pct, high_pct, low_pct = compute_pct_changes(opens, closes, highs, lows)
+
+    # Limit candles for comparison
+    n = min(max_candles, len(close_pct))
+
+    # Run new logic (in-memory, no file writes)
+    new_memories = []
+    new_weights = []
+    new_high_weights = []
+    new_low_weights = []
+    threshold = 1.0
+    new_predictions = []
+
+    for pos in range(PATTERN_LENGTH, n):
+        current = close_pct[pos - (PATTERN_LENGTH - 1):pos]
+        if len(current) < PATTERN_LENGTH - 1:
             continue
+
+        # Match against accumulated memories
+        if new_memories:
+            pat_matrix = np.array([m[:PATTERN_LENGTH - 1] for m in new_memories], dtype=np.float64)
+            indices, _ = find_matches(current, pat_matrix, threshold)
+        else:
+            indices = np.array([], dtype=np.int64)
+
+        if len(indices) > THRESHOLD_TARGET_MATCHES:
+            threshold = max(0.0, threshold - (0.001 if threshold < 0.1 else 0.01))
+        else:
+            threshold = min(100.0, threshold + (0.001 if threshold < 0.1 else 0.01))
+
+        if len(indices) > 0:
+            outcomes = np.array([new_memories[i][-1] for i in indices])
+            w = np.array([new_weights[i] for i in indices])
+            pred = float(np.mean(outcomes * w)) / 100.0
+            new_predictions.append(pred)
+        else:
+            outcome = close_pct[pos] if pos < len(close_pct) else 0.0
+            full_pattern = np.append(current, outcome)
+            new_memories.append(full_pattern)
+            new_weights.append(1.0)
+            new_high_weights.append(1.0)
+            new_low_weights.append(1.0)
+            new_predictions.append(0.0)
+
+    result = {
+        "coin": coin,
+        "timeframe": tf_name,
+        "candles_processed": n,
+        "memories_created": len(new_memories),
+        "final_threshold": threshold,
+        "predictions_count": len(new_predictions),
+        "mean_prediction_pct": float(np.mean(new_predictions)) if new_predictions else 0.0,
+    }
+
+    out_path = out_dir / "comparison.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2)
+
+    print(f"Reconciliation output: {out_path}")
+    print(f"  Candles: {n}, Memories: {len(new_memories)}, Threshold: {threshold:.4f}")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Entry Point
+# ---------------------------------------------------------------------------
+
+def main():
+    config = TrainerConfig.from_args()
+    print(f"PowerTrader Trainer: {config.coin} (source={config.data_source})")
+
+    if "--reconcile" in sys.argv:
+        tf = sys.argv[sys.argv.index("--reconcile") + 1] if len(sys.argv) > sys.argv.index("--reconcile") + 1 else "1hour"
+        run_reconciliation(config.coin, tf, config.data_source)
+        return
+
+    loop = TrainingLoop(config)
+    loop.run()
+
+
+if __name__ == "__main__":
+    main()
