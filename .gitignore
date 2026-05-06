@@ -2,7 +2,7 @@ state/
 state-20260505-1543/
 output/
 hub_data/
-gui_settings.json
+*_api_keys.json
 r_key.txt
 r_secret.txt
 __pycache__/

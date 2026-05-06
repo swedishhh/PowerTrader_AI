@@ -1716,17 +1716,6 @@ function renderSettings(s) {
       </div>
     </div>
     <div class="settings-group">
-      <div class="settings-group-title">Kraken API</div>
-      <div class="settings-field">
-        <label>API Key</label>
-        <input type="password" id="set-kraken-key" value="${s.kraken_api_key || ''}" autocomplete="off">
-      </div>
-      <div class="settings-field">
-        <label>API Secret</label>
-        <input type="password" id="set-kraken-secret" value="${s.kraken_api_secret || ''}" autocomplete="off">
-      </div>
-    </div>
-    <div class="settings-group">
       <div class="settings-group-title">Control Exchange</div>
       <div class="settings-field">
         <label title="0 = auto-sync from Kraken balance on first run">Starting USD (0 = sync from Kraken)</label>
@@ -1768,8 +1757,6 @@ async function saveSettings() {
   updated.trailing_gap_pct = parseFloat($('#set-gap').value) || 0.1;
   updated.long_term_holdings = $('#set-lth').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
   updated.lth_profit_alloc_pct = parseFloat($('#set-lth-pct').value) || 50;
-  updated.kraken_api_key = $('#set-kraken-key').value.trim();
-  updated.kraken_api_secret = $('#set-kraken-secret').value.trim();
   updated.control_starting_usd = parseFloat($('#set-ctrl-usd').value) || 0;
   updated.auto_start_scripts = $('#set-autostart').checked;
 

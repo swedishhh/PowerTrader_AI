@@ -433,21 +433,19 @@ def create_adapter() -> KrakenAdapter:
     import json
     import os
 
-    settings_path = os.environ.get("POWERTRADER_GUI_SETTINGS") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "gui_settings.json"
-    )
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    keys_path = os.path.join(base_dir, "kraken_api_keys.json")
     api_key = ""
     api_secret = ""
     try:
-        if os.path.isfile(settings_path):
-            with open(settings_path, "r", encoding="utf-8") as f:
+        if os.path.isfile(keys_path):
+            with open(keys_path, "r", encoding="utf-8") as f:
                 data = json.load(f) or {}
-            api_key = str(data.get("kraken_api_key", "")).strip()
-            api_secret = str(data.get("kraken_api_secret", "")).strip()
+            api_key = str(data.get("api_key", "")).strip()
+            api_secret = str(data.get("api_secret", "")).strip()
     except Exception:
         pass
 
-    base_dir = os.path.dirname(os.path.abspath(__file__))
     hub_data = os.environ.get(
         "POWERTRADER_HUB_DIR", os.path.join(base_dir, "state", "hub_data"),
     )
