@@ -13,7 +13,7 @@ Trains across 7 timeframes (1h, 2h, 4h, 8h, 12h, 1d, 1w) by:
   4. Updating memory weights based on prediction accuracy
   5. Storing new patterns when no match is found
 
-Data source defaults to gui_settings.json "training_data_source" field.
+Data source defaults to pt_config.json "training_data_source" field.
 Override with --source kucoin|binance|kraken|kucoin_live_api.
 """
 
@@ -61,7 +61,7 @@ FLUSH_EVERY = 200
 PROGRESS_EVERY = 500
 WARMUP_START = 10  # original starts growing window at size 10 (positions 9..N)
 
-VALID_SOURCES = ["kucoin", "binance", "kraken", "kucoin_live_api"]
+from pt_env import VALID_DATA_SOURCES
 
 
 @dataclass
@@ -75,20 +75,20 @@ class TrainerConfig:
 
     @classmethod
     def from_args(cls, argv: list = None) -> "TrainerConfig":
-        """Parse CLI args and gui_settings.json."""
+        """Parse CLI args and pt_config.json."""
         parser = argparse.ArgumentParser(
             prog="pt_trainer",
             description="PowerTrader neural pattern-matching trainer.",
-            epilog="Data source defaults to gui_settings.json 'training_data_source' field, "
+            epilog="Data source defaults to pt_config.json 'training_data_source' field, "
                    "overridden by --source.",
         )
         parser.add_argument("coin", nargs="?", default="BTC",
                             help="Coin symbol to train (default: BTC)")
         parser.add_argument("reprocess", nargs="?", default="reprocess_yes",
                             help="'reprocess_yes' or 'reprocess_no' (default: reprocess_yes)")
-        parser.add_argument("--source", choices=VALID_SOURCES,
+        parser.add_argument("--source", choices=VALID_DATA_SOURCES,
                             default=None,
-                            help="Data source override (default: from gui_settings.json or kucoin)")
+                            help="Data source override (default: from pt_config.json or kucoin)")
         parser.add_argument("--timeframes", default=None,
                             help="Comma-separated subset of timeframes to train (e.g. 1hour,4hour)")
         parser.add_argument("-v", "--verbose", action="store_true",
@@ -102,13 +102,11 @@ class TrainerConfig:
         if data_source is None:
             data_source = "kucoin"
             try:
-                settings_path = _find_gui_settings()
-                if settings_path and os.path.isfile(settings_path):
-                    with open(settings_path, "r", encoding="utf-8") as f:
-                        settings = json.load(f)
-                    ds = settings.get("training_data_source", "kucoin")
-                    if ds in VALID_SOURCES:
-                        data_source = ds
+                from pt_env import PTEnv as _PTEnv
+                _cfg = _PTEnv().get_config()
+                ds = _cfg["training_data_source"]
+                if ds in VALID_DATA_SOURCES:
+                    data_source = ds
             except Exception:
                 pass
 
@@ -117,20 +115,6 @@ class TrainerConfig:
         config._timeframes = args.timeframes
         return config
 
-
-def _find_gui_settings() -> Optional[str]:
-    """Locate gui_settings.json — check env, then walk up from cwd."""
-    env_path = os.environ.get("POWERTRADER_GUI_SETTINGS")
-    if env_path and os.path.isfile(env_path):
-        return env_path
-    # Walk up looking for gui_settings.json (cwd is typically state/coins/BTC/)
-    d = Path.cwd()
-    for _ in range(5):
-        candidate = d / "gui_settings.json"
-        if candidate.is_file():
-            return str(candidate)
-        d = d.parent
-    return None
 
 
 # ---------------------------------------------------------------------------

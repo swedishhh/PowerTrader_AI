@@ -1303,6 +1303,28 @@ body {
   box-shadow: 0 0 0 2px rgba(240, 180, 41, 0.15);
 }
 
+.settings-field-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.settings-field-hint-toggle {
+  margin-left: 4px;
+  flex: 1;
+}
+
+.settings-field-error {
+  font-size: 10px;
+  color: var(--red);
+  min-height: 14px;
+}
+
+.cfg-input-error {
+  border-color: var(--red) !important;
+  box-shadow: 0 0 0 2px rgba(255, 68, 102, 0.15) !important;
+}
+
 .settings-save {
   position: sticky;
   bottom: 0;

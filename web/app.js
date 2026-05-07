@@ -29,7 +29,8 @@ const state = {
   chartMode: 'candle',
   accountRange: 0,
   logRefreshTimer: null,
-  settings: {},
+  cfg: {},
+  cfgSchema: {},
   cardMode: 'simple',
   historyFilterCoin: null,
 };
@@ -183,6 +184,8 @@ function handleWSMessage(msg) {
 
 // ── Initialize ──
 
+let _refreshInterval = null;
+
 async function init() {
   setupTabs();
   setupMobileNav();
@@ -191,21 +194,46 @@ async function init() {
   setupSash();
   setupViewToggle();
 
+  // Load schema once at startup
+  try {
+    state.cfgSchema = await api('config/schema');
+  } catch (e) {
+    console.warn('Could not load config schema:', e);
+  }
+
   await refreshAll();
   connectWS();
 
-  setInterval(refreshAll, 10000);
+  _refreshInterval = setInterval(refreshAll, 10000);
+}
+
+function _applyUiPrefs(cfg) {
+  // Refresh interval
+  const refreshMs = Math.max(1000, (cfg.ui_refresh_seconds || 10) * 1000);
+  if (_refreshInterval) clearInterval(_refreshInterval);
+  _refreshInterval = setInterval(refreshAll, refreshMs);
+
+  // Font size
+  const fs = cfg.ui_font_size;
+  if (fs) document.documentElement.style.setProperty('--ui-font-size', fs + 'px');
+
+  // Default timeframe (only set on first load, not on subsequent refreshes)
+  if (!state.selectedCoin && cfg.default_timeframe) {
+    state.selectedTf = cfg.default_timeframe;
+  }
 }
 
 async function refreshAll() {
   try {
-    const [statusData, coinsData, posData, settingsData] = await Promise.all([
-      api('status'), api('coins'), api('positions'), api('settings'),
+    const [statusData, coinsData, posData, cfgData] = await Promise.all([
+      api('status'), api('coins'), api('positions'), api('config'),
     ]);
 
-    state.settings = settingsData;
-    state.tradeStartLevel = settingsData.trade_start_level || 1;
+    state.cfg = cfgData;
+    state.tradeStartLevel = cfgData.trade_start_level || 1;
     state.exchangeList = statusData.exchange_list || ['control'];
+
+    _applyUiPrefs(cfgData);
 
     if (statusData.exchanges) {
       state.exchangeData = statusData.exchanges;
@@ -231,7 +259,7 @@ async function refreshAll() {
     if ($('#tab-compare').classList.contains('active')) loadCompare();
     if (!$('#training-list').querySelector('.train-log-panel')) renderTraining(coinsData.coins);
     else updateTrainingBadges(coinsData.coins);
-    if (!$('#tab-settings').classList.contains('active')) renderSettings(settingsData);
+    if (!$('#tab-settings').classList.contains('active')) renderConfig(cfgData);
   } catch (e) {
     console.error('refreshAll failed:', e);
   }
@@ -496,10 +524,10 @@ function _updateCard(card, c, modeOverride) {
       const pnl = pos.gain_loss_pct_buy;
       const pnlClass = pnl >= 0 ? 'positive' : 'negative';
       const color = XK_COLORS[xk] || '#888';
-      const maxDca = state.settings.max_dca_buys_per_24h || 1;
+      const maxDca = state.cfg.max_dca_buys_per_24h || 1;
       const dca24 = (state.dca24h[xk] || {})[c.coin] || 0;
       const sellPrice = pos.trail_line > 0 ? fmtPrice(pos.trail_line) : '—';
-      const totalDcaLevels = (state.settings.dca_levels || []).length;
+      const totalDcaLevels = (state.cfg.dca_levels || []).length;
       const dcaChip = pos.dca_triggered_stages > 0 ? `<span class="pos-dca-chip">stg ${pos.dca_triggered_stages}/${totalDcaLevels}</span>` : '—';
       const nextDca = pos.next_dca_display ? `${pos.dca_line_price ? fmtPrice(pos.dca_line_price) + ' ' : ''}(${pos.next_dca_display})` : '—';
       const krakenFields = xk !== 'control' ? `
@@ -731,7 +759,7 @@ async function loadChart(coin, tf) {
   });
 
   try {
-    const data = await api(`candles/${coin}?timeframe=${tf}&limit=300`);
+    const data = await api(`candles/${coin}?timeframe=${tf}&limit=${state.cfg.candles_limit || 300}`);
     if (data.candles && data.candles.length > 0) {
       state.candleSeries.setData(data.candles);
       const last = data.candles[data.candles.length - 1];
@@ -748,7 +776,7 @@ async function loadChart(coin, tf) {
   updateMidPriceLine();
   await updateChartTradeMarkers(coin);
 
-  const refreshMs = TF_REFRESH_MS[tf] || 60_000;
+  const refreshMs = (state.cfg.chart_refresh_seconds && state.cfg.chart_refresh_seconds * 1000) || TF_REFRESH_MS[tf] || 60_000;
   state.chartRefreshTimer = setInterval(async () => {
     if (!state.candleSeries || state.selectedCoin !== coin || state.selectedTf !== tf) return;
     try {
@@ -927,7 +955,7 @@ async function loadAccountChart(hours) {
   state.chartRefreshTimer = setInterval(async () => {
     if (state.chartMode !== 'account') return;
     await _applyAccountData(state.accountRange);
-  }, 30_000);
+  }, (state.cfg.chart_refresh_seconds && state.cfg.chart_refresh_seconds * 1000) || 30_000);
 
   const resizeObserver = new ResizeObserver(() => {
     if (state.chart) {
@@ -1611,157 +1639,204 @@ window.toggleTrainerLog = function(coin) {
   logEl.dataset.timer = timer;
 };
 
-// ── Settings Tab ──
+// ── Config Tab ──
 
-async function loadAndRenderSettings() {
+const _CFG_GROUP_ORDER = [
+  'General', 'Trading', 'Trailing Profit', 'Long-Term Holdings',
+  'Control Exchange', 'UI Preferences', 'Training', 'Startup',
+];
+
+function _cfgParseField(el, rule) {
+  if (rule.type === 'bool') return el.checked;
+  if (rule.type === 'int') return parseInt(el.value, 10);
+  if (rule.type === 'float') return parseFloat(el.value);
+  if (rule.type === 'list_float') {
+    return el.value.split(',').map(s => parseFloat(s.trim())).filter(s => s === 0 || !isNaN(s));
+  }
+  if (rule.type === 'list_str') {
+    return el.value.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  return el.value;
+}
+
+function _cfgValidateField(key, value, rule) {
+  if (rule.type === 'int') {
+    if (!Number.isFinite(value) || !Number.isInteger(value)) return 'Must be a whole number';
+    if (rule.min !== undefined && value < rule.min) return `Min ${rule.min}`;
+    if (rule.max !== undefined && value > rule.max) return `Max ${rule.max}`;
+  } else if (rule.type === 'float') {
+    if (!Number.isFinite(value)) return 'Must be a number';
+    if (rule.min !== undefined && value < rule.min) return `Min ${rule.min}`;
+    if (rule.max !== undefined && value > rule.max) return `Max ${rule.max}`;
+  } else if (rule.type === 'list_float') {
+    if (!Array.isArray(value) || value.some(v => !Number.isFinite(v))) return 'Comma-separated numbers required';
+    if (rule.min_len && value.length < rule.min_len) return `At least ${rule.min_len} value(s) required`;
+    if (rule.each_max !== undefined && value.some(v => v > rule.each_max)) return `All values must be ≤ ${rule.each_max}`;
+  } else if (rule.type === 'list_str') {
+    if (rule.min_len && value.length < rule.min_len) return `At least ${rule.min_len} value(s) required`;
+  } else if (rule.type === 'enum') {
+    if (rule.options && !rule.options.includes(value)) return `Must be one of: ${(rule.options || []).join(', ')}`;
+  }
+  return null;
+}
+
+function _cfgReadForm() {
+  const schema = state.cfgSchema || {};
+  const patch = {};
+  for (const [key, rule] of Object.entries(schema)) {
+    if (!rule.group) continue;
+    const el = $(`#cfg-field-${key}`);
+    if (!el) continue;
+    patch[key] = _cfgParseField(el, rule);
+  }
+  return patch;
+}
+
+function _cfgCheckDirty(original) {
+  const schema = state.cfgSchema || {};
+  const btn = $('#btn-save-cfg');
+  if (!btn) return;
+
+  let dirty = false;
+  let allValid = true;
+
+  for (const [key, rule] of Object.entries(schema)) {
+    if (!rule.group) continue;
+    const el = $(`#cfg-field-${key}`);
+    if (!el) continue;
+
+    const val = _cfgParseField(el, rule);
+    const err = _cfgValidateField(key, val, rule);
+
+    const fieldEl = el.closest('.settings-field');
+    const errEl = fieldEl && fieldEl.querySelector('.settings-field-error');
+
+    if (err) {
+      allValid = false;
+      el.classList.add('cfg-input-error');
+      if (errEl) errEl.textContent = err;
+    } else {
+      el.classList.remove('cfg-input-error');
+      if (errEl) errEl.textContent = '';
+    }
+
+    const orig = original[key];
+    if (rule.type === 'list_float' || rule.type === 'list_str') {
+      if (JSON.stringify(orig) !== JSON.stringify(val)) dirty = true;
+    } else {
+      if (orig !== val) dirty = true;
+    }
+  }
+
+  btn.disabled = !(dirty && allValid);
+}
+
+function _cfgBuildInput(key, rule, value) {
+  const id = `cfg-field-${key}`;
+  if (rule.type === 'bool') {
+    return `<div class="settings-field settings-field-toggle">
+      <input type="checkbox" id="${id}" ${value ? 'checked' : ''}>
+      <label for="${id}">${rule.label}</label>
+      ${rule.hint ? `<div class="settings-field-hint settings-field-hint-toggle">${rule.hint}</div>` : ''}
+    </div>`;
+  }
+  if (rule.type === 'enum') {
+    const opts = (rule.options || []).map(o =>
+      `<option value="${o}" ${value === o ? 'selected' : ''}>${o}</option>`
+    ).join('');
+    return `<div class="settings-field">
+      <label for="${id}">${rule.label}</label>
+      <select id="${id}">${opts}</select>
+      ${rule.hint ? `<div class="settings-field-hint">${rule.hint}</div>` : ''}
+      <div class="settings-field-error"></div>
+    </div>`;
+  }
+  if (rule.type === 'int' || rule.type === 'float') {
+    const attrs = [`type="number"`, `id="${id}"`, `value="${value ?? ''}"`];
+    if (rule.min !== undefined) attrs.push(`min="${rule.min}"`);
+    if (rule.max !== undefined) attrs.push(`max="${rule.max}"`);
+    attrs.push(rule.type === 'int' ? 'step="1"' : 'step="any"');
+    return `<div class="settings-field">
+      <label for="${id}">${rule.label}</label>
+      <input ${attrs.join(' ')}>
+      ${rule.hint ? `<div class="settings-field-hint">${rule.hint}</div>` : ''}
+      <div class="settings-field-error"></div>
+    </div>`;
+  }
+  // list_str, list_float, str
+  const displayVal = Array.isArray(value) ? value.join(', ') : (value ?? '');
+  return `<div class="settings-field">
+    <label for="${id}">${rule.label}</label>
+    <input type="text" id="${id}" value="${displayVal}">
+    ${rule.hint ? `<div class="settings-field-hint">${rule.hint}</div>` : ''}
+    <div class="settings-field-error"></div>
+  </div>`;
+}
+
+function renderConfig(cfg) {
+  if (!cfg) return;
+  const schema = state.cfgSchema || {};
+  const form = $('#settings-form');
+
+  // Group fields by group, maintaining canonical order
+  const grouped = {};
+  for (const g of _CFG_GROUP_ORDER) grouped[g] = [];
+  for (const [key, rule] of Object.entries(schema)) {
+    if (rule.group && grouped[rule.group]) grouped[rule.group].push(key);
+  }
+
+  let html = '';
+  for (const group of _CFG_GROUP_ORDER) {
+    const fields = grouped[group];
+    if (!fields || !fields.length) continue;
+    html += `<div class="settings-group"><div class="settings-group-title">${group}</div>`;
+    for (const key of fields) {
+      html += _cfgBuildInput(key, schema[key], cfg[key]);
+    }
+    html += '</div>';
+  }
+  html += `<div class="settings-save">
+    <button class="btn btn-primary" id="btn-save-cfg" disabled>Save Config</button>
+  </div>`;
+
+  form.innerHTML = html;
+
+  const original = {...cfg};
+  form.addEventListener('input', () => _cfgCheckDirty(original));
+  form.addEventListener('change', () => _cfgCheckDirty(original));
+
+  $('#btn-save-cfg').addEventListener('click', () => saveConfig(original));
+}
+
+async function loadAndRenderConfig() {
   try {
-    const s = await api('settings');
-    state.settings = s;
-    renderSettings(s);
+    const cfg = await api('config');
+    state.cfg = cfg;
+    renderConfig(cfg);
   } catch (e) {
-    console.error('loadAndRenderSettings failed:', e);
+    console.error('loadAndRenderConfig failed:', e);
   }
 }
 
-function renderSettings(s) {
-  if (!s) return;
-  const form = $('#settings-form');
+async function saveConfig(original) {
+  const patch = _cfgReadForm();
+  const btn = $('#btn-save-cfg');
+  btn.disabled = true;
 
-  form.innerHTML = `
-    <div class="settings-group">
-      <div class="settings-group-title">General</div>
-      <div class="settings-field">
-        <label>Coins (comma-separated)</label>
-        <input type="text" id="set-coins" value="${(s.coins || []).join(', ')}">
-      </div>
-      <div class="settings-field">
-        <label>Exchanges (comma-separated)</label>
-        <input type="text" id="set-exchanges" value="${(s.exchanges || ['control']).join(', ')}">
-      </div>
-      <div class="settings-field">
-        <label>Excluded Coins (no trading)</label>
-        <input type="text" id="set-excluded" value="${(s.excluded_coins || []).join(', ')}">
-      </div>
-      <div class="settings-field">
-        <label>Live Price Source</label>
-        <select id="set-price-source">
-          <option value="kraken" ${(s.live_price_source || 'kraken') === 'kraken' ? 'selected' : ''}>Kraken</option>
-          <option value="kucoin" ${s.live_price_source === 'kucoin' ? 'selected' : ''}>KuCoin</option>
-        </select>
-      </div>
-      <div class="settings-field">
-        <label>Training Data Source</label>
-        <select id="set-training-source">
-          <option value="kucoin" ${(s.training_data_source || 'kucoin') === 'kucoin' ? 'selected' : ''}>KuCoin (ArcticDB)</option>
-          <option value="binance" ${s.training_data_source === 'binance' ? 'selected' : ''}>Binance (ArcticDB)</option>
-          <option value="kraken" ${s.training_data_source === 'kraken' ? 'selected' : ''}>Kraken (ArcticDB)</option>
-          <option value="kucoin_live_api" ${s.training_data_source === 'kucoin_live_api' ? 'selected' : ''}>KuCoin Live API</option>
-        </select>
-      </div>
-    </div>
-    <div class="settings-group">
-      <div class="settings-group-title">Trading</div>
-      <div class="settings-field">
-        <label>Trade Start Level (1-7)</label>
-        <input type="number" id="set-tsl" value="${s.trade_start_level || 1}" min="1" max="7">
-      </div>
-      <div class="settings-field">
-        <label>Start Allocation %</label>
-        <input type="number" id="set-alloc" value="${s.start_allocation_pct || 0.5}" step="0.1">
-      </div>
-      <div class="settings-field">
-        <label>DCA Levels (% list)</label>
-        <input type="text" id="set-dca" value="${(s.dca_levels || []).join(', ')}">
-      </div>
-      <div class="settings-field">
-        <label>DCA Multiplier</label>
-        <input type="number" id="set-dca-mult" value="${s.dca_multiplier || 2}" step="0.5">
-      </div>
-      <div class="settings-field">
-        <label>Max DCA Buys / 24h</label>
-        <input type="number" id="set-max-dca" value="${s.max_dca_buys_per_24h || 1}" min="1">
-      </div>
-    </div>
-    <div class="settings-group">
-      <div class="settings-group-title">Trailing Profit</div>
-      <div class="settings-field">
-        <label>PM Start % (no DCA)</label>
-        <input type="number" id="set-pm-no" value="${s.pm_start_pct_no_dca || 3}" step="0.5">
-      </div>
-      <div class="settings-field">
-        <label>PM Start % (with DCA)</label>
-        <input type="number" id="set-pm-dca" value="${s.pm_start_pct_with_dca || 3}" step="0.5">
-      </div>
-      <div class="settings-field">
-        <label title="Once in profit, the sell line trails the peak price by this %. E.g. 0.5% gap: if peak is $100, sell line sits at $99.50. The line only ratchets up, never down — locking in gains while allowing room to fluctuate.">Trailing Gap %</label>
-        <input type="number" id="set-gap" value="${s.trailing_gap_pct || 0.1}" step="0.05">
-      </div>
-    </div>
-    <div class="settings-group">
-      <div class="settings-group-title">Long-Term Holdings</div>
-      <div class="settings-field">
-        <label>LTH Coins</label>
-        <input type="text" id="set-lth" value="${(s.long_term_holdings || []).join(', ')}">
-      </div>
-      <div class="settings-field">
-        <label>LTH Profit Allocation %</label>
-        <input type="number" id="set-lth-pct" value="${s.lth_profit_alloc_pct || 50}" step="5">
-      </div>
-    </div>
-    <div class="settings-group">
-      <div class="settings-group-title">Control Exchange</div>
-      <div class="settings-field">
-        <label title="0 = auto-sync from Kraken balance on first run">Starting USD (0 = sync from Kraken)</label>
-        <input type="number" id="set-ctrl-usd" value="${s.control_starting_usd || 0}" step="1000">
-      </div>
-    </div>
-    <div class="settings-group">
-      <div class="settings-group-title">Startup</div>
-      <div class="settings-field settings-field-toggle">
-        <label>Auto-start scripts on launch</label>
-        <input type="checkbox" id="set-autostart" ${s.auto_start_scripts ? 'checked' : ''}>
-      </div>
-    </div>
-    <div class="settings-save">
-      <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
-    </div>
-  `;
-
-  $('#btn-save-settings').addEventListener('click', saveSettings);
-}
-
-async function saveSettings() {
-  const current = state.settings;
-  const updated = {...current};
-
-  updated.coins = $('#set-coins').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-  updated.exchanges = $('#set-exchanges').value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-  updated.exchange = updated.exchanges[0] || 'control';
-  updated.excluded_coins = $('#set-excluded').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-  updated.live_price_source = $('#set-price-source').value;
-  updated.training_data_source = $('#set-training-source').value;
-  updated.trade_start_level = parseInt($('#set-tsl').value) || 1;
-  updated.start_allocation_pct = parseFloat($('#set-alloc').value) || 0.5;
-  updated.dca_levels = $('#set-dca').value.split(',').map(s => parseFloat(s.trim())).filter(v => !isNaN(v));
-  updated.dca_multiplier = parseFloat($('#set-dca-mult').value) || 2;
-  updated.max_dca_buys_per_24h = parseInt($('#set-max-dca').value) || 1;
-  updated.pm_start_pct_no_dca = parseFloat($('#set-pm-no').value) || 3;
-  updated.pm_start_pct_with_dca = parseFloat($('#set-pm-dca').value) || 3;
-  updated.trailing_gap_pct = parseFloat($('#set-gap').value) || 0.1;
-  updated.long_term_holdings = $('#set-lth').value.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
-  updated.lth_profit_alloc_pct = parseFloat($('#set-lth-pct').value) || 50;
-  updated.control_starting_usd = parseFloat($('#set-ctrl-usd').value) || 0;
-  updated.auto_start_scripts = $('#set-autostart').checked;
-
-  delete updated.system;
-  delete updated.account;
-  delete updated.pnl;
-
-  const result = await apiPut('settings', updated);
+  const result = await apiPut('config', patch);
   if (result.ok) {
-    const btn = $('#btn-save-settings');
+    state.cfg = {...state.cfg, ...patch};
+    _applyUiPrefs(state.cfg);
     btn.textContent = 'Saved!';
-    setTimeout(() => { btn.textContent = 'Save Settings'; }, 2000);
+    setTimeout(() => {
+      btn.textContent = 'Save Config';
+      // Re-render with new original so dirty-tracking resets
+      renderConfig(state.cfg);
+    }, 1500);
+  } else {
+    btn.disabled = false;
+    btn.textContent = 'Error — retry?';
+    setTimeout(() => { btn.textContent = 'Save Config'; _cfgCheckDirty(original); }, 2500);
   }
 }
 
@@ -1801,7 +1876,7 @@ function setupTabs() {
       if (tab === 'compare') loadCompare();
       if (tab === 'lth') renderLTH();
       if (tab === 'training') loadAndRenderTraining();
-      if (tab === 'settings') loadAndRenderSettings();
+      if (tab === 'settings') loadAndRenderConfig();
       if (tab === 'logs') {
         refreshLogs();
         state.logRefreshTimer = setInterval(refreshLogs, 3000);

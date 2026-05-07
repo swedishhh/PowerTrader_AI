@@ -1,96 +1,504 @@
-"""Centralized environment and path resolution for PowerTrader_AI.
+"""Centralized environment, path resolution, and config management for PowerTrader_AI.
 
 All file paths used for inter-process communication live here so that
 pt_hub, pt_web, pt_models, and pt_controller share a single source of truth.
+
+Config is read from pt_config.json (formerly gui_settings.json).  Callers should
+use get_config() for a cached, mtime-fresh snapshot and set_config() to write changes.
 """
 
 import json
 import os
+import threading
 from pathlib import Path
+from typing import Any
 
+
+# ---------------------------------------------------------------------------
+# Timeframe constants
+# ---------------------------------------------------------------------------
 
 TIMEFRAMES = ["1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week"]
 DISPLAY_TIMEFRAMES = [
     "1min", "5min", "15min", "30min",
     "1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week",
 ]
-TRAINING_STALENESS_DAYS = 14
+VALID_DATA_SOURCES = ["kucoin", "binance", "kraken", "kucoin_live_api"]
+_VALID_PRICE_SOURCES = ["kraken", "kucoin"]
 
+
+# ---------------------------------------------------------------------------
+# CONFIG_DEFAULTS — canonical starting values; also used to bootstrap a missing file
+# ---------------------------------------------------------------------------
+
+CONFIG_DEFAULTS: dict[str, Any] = {
+    # Coins
+    "coins": ["BTC", "ETH", "BNB", "PAXG", "SOL", "XRP", "DOGE", "TRX", "HYPE",
+              "ADA", "XMR", "XLM", "LINK", "ZEC", "AVAX", "DOT", "CRO", "BCH",
+              "LTC", "SUI", "SHIB", "TAO", "MNT", "UNI", "NEAR", "POL", "ATOM", "ALGO"],
+    "exchanges": ["control", "kraken"],
+    "exchange": "control",
+    "excluded_coins": [],
+    "long_term_holdings": ["BTC", "ETH", "SOL"],
+
+    # Trading
+    "trade_start_level": 4,
+    "start_allocation_pct": 1.0,
+    "dca_multiplier": 1.0,
+    "dca_levels": [-5, -10, -20, -30, -40, -50, -50],
+    "max_dca_buys_per_24h": 1,
+
+    # Trailing profit
+    "pm_start_pct_no_dca": 3.0,
+    "pm_start_pct_with_dca": 3.0,
+    "trailing_gap_pct": 0.5,
+
+    # LTH
+    "lth_profit_alloc_pct": 50.0,
+
+    # Data sources
+    "live_price_source": "kucoin",
+    "training_data_source": "kucoin",
+
+    # Paths / scripts
+    "main_neural_dir": "state",
+    "hub_data_dir": "",
+    "script_neural_runner2": "pt_thinker.py",
+    "script_neural_trainer": "pt_trainer.py",
+    "script_trader": "pt_trader.py",
+
+    # Timeframes
+    "timeframes": DISPLAY_TIMEFRAMES,
+    "default_timeframe": "1hour",
+
+    # UI preferences
+    "ui_refresh_seconds": 10,
+    "chart_refresh_seconds": 4,
+    "candles_limit": 300,
+    "ui_font_size": 16,
+
+    # Control exchange
+    "control_starting_usd": 0,
+    "control_slippage_factor": 0,
+
+    # Demo exchange
+    "demo_starting_usd": 10000,
+    "demo_slippage_factor": 0.001,
+
+    # Startup
+    "auto_start_scripts": False,
+
+    # Training
+    "training_staleness_days": 14,
+}
+
+
+# ---------------------------------------------------------------------------
+# CONFIG_SCHEMA — validation rules and UI metadata for each field
+#
+# Keys per entry:
+#   type       : "int" | "float" | "list_float" | "list_str" | "enum" | "bool" | "str"
+#   min / max  : numeric bounds (inclusive)
+#   each_max   : per-element bound for list_float (e.g. each_max=0 → all negative)
+#   min_len    : minimum list length
+#   options    : valid choices for enum
+#   label      : human-readable field name for the UI
+#   hint       : helper text shown below the input
+#   group      : UI group heading (None = internal, not shown in settings pane)
+# ---------------------------------------------------------------------------
+
+CONFIG_SCHEMA: dict[str, dict] = {
+    # ── General ───────────────────────────────────────────────────────────
+    "coins": {
+        "type": "list_str", "min_len": 1,
+        "label": "Active Coins",
+        "hint": "Comma-separated symbols to trade (e.g. BTC, ETH, SOL)",
+        "group": "General",
+    },
+    "exchanges": {
+        "type": "list_str", "min_len": 1,
+        "label": "Exchanges",
+        "hint": "Comma-separated exchange names (e.g. control, kraken)",
+        "group": "General",
+    },
+    "excluded_coins": {
+        "type": "list_str",
+        "label": "Excluded Coins",
+        "hint": "Coins excluded from bot trading (still tracked)",
+        "group": "General",
+    },
+    "live_price_source": {
+        "type": "enum", "options": _VALID_PRICE_SOURCES,
+        "label": "Live Price Source",
+        "hint": "Exchange used for live price feeds",
+        "group": "General",
+    },
+    # ── Trading ───────────────────────────────────────────────────────────
+    "trade_start_level": {
+        "type": "int", "min": 1, "max": 11,
+        "label": "Trade Start Level",
+        "hint": "Min long-voting timeframes required to open a new position (1–11)",
+        "group": "Trading",
+    },
+    "start_allocation_pct": {
+        "type": "float", "min": 0.01,
+        "label": "Start Allocation %",
+        "hint": "% of buying power used for the initial entry (e.g. 1 = 1%)",
+        "group": "Trading",
+    },
+    "dca_multiplier": {
+        "type": "float", "min": 0,
+        "label": "DCA Multiplier",
+        "hint": "Each DCA buy is this multiple of the previous buy size (0 = DCA disabled)",
+        "group": "Trading",
+    },
+    "dca_levels": {
+        "type": "list_float", "each_max": 0, "min_len": 1,
+        "label": "DCA Levels (%)",
+        "hint": "Negative price-drop % thresholds for each DCA buy (e.g. -5, -10, -20, -30)",
+        "group": "Trading",
+    },
+    "max_dca_buys_per_24h": {
+        "type": "int", "min": 0,
+        "label": "Max DCA Buys / 24 h",
+        "hint": "Maximum number of DCA top-ups per coin per 24-hour window (0 = unlimited)",
+        "group": "Trading",
+    },
+
+    # ── Trailing Profit ───────────────────────────────────────────────────
+    "pm_start_pct_no_dca": {
+        "type": "float", "min": 0,
+        "label": "PM Start % (no DCA)",
+        "hint": "Profit % needed to activate the trailing stop when no DCA was used",
+        "group": "Trailing Profit",
+    },
+    "pm_start_pct_with_dca": {
+        "type": "float", "min": 0,
+        "label": "PM Start % (with DCA)",
+        "hint": "Profit % needed to activate the trailing stop when DCA was used",
+        "group": "Trailing Profit",
+    },
+    "trailing_gap_pct": {
+        "type": "float", "min": 0,
+        "label": "Trailing Gap %",
+        "hint": "Sell line trails peak by this %. E.g. 0.5: peak=$100 → sell=$99.50",
+        "group": "Trailing Profit",
+    },
+
+    # ── Long-Term Holdings ────────────────────────────────────────────────
+    "long_term_holdings": {
+        "type": "list_str",
+        "label": "LTH Coins",
+        "hint": "Coins held long-term; realised profits may auto-buy into these",
+        "group": "Long-Term Holdings",
+    },
+    "lth_profit_alloc_pct": {
+        "type": "float", "min": 0, "max": 100,
+        "label": "LTH Profit Allocation %",
+        "hint": "% of each realised profit automatically reinvested into LTH coins (0 = disabled)",
+        "group": "Long-Term Holdings",
+    },
+
+    # ── Control Exchange ──────────────────────────────────────────────────
+    "control_starting_usd": {
+        "type": "float", "min": 0,
+        "label": "Control Starting USD",
+        "hint": "Starting USD for the control mirror (0 = auto-sync from Kraken balance on first run)",
+        "group": "Control Exchange",
+    },
+
+    # ── UI Preferences ────────────────────────────────────────────────────
+    "default_timeframe": {
+        "type": "enum", "options": DISPLAY_TIMEFRAMES,
+        "label": "Default Chart Timeframe",
+        "hint": "Timeframe shown when opening a coin chart",
+        "group": "UI Preferences",
+    },
+    "ui_refresh_seconds": {
+        "type": "int", "min": 1, "max": 60,
+        "label": "Dashboard Refresh (s)",
+        "hint": "How often the dashboard auto-refreshes (1–60 s)",
+        "group": "UI Preferences",
+    },
+    "chart_refresh_seconds": {
+        "type": "int", "min": 1, "max": 300,
+        "label": "Chart Refresh (s)",
+        "hint": "How often the coin chart polls for new candles (1–300 s)",
+        "group": "UI Preferences",
+    },
+    "candles_limit": {
+        "type": "int", "min": 50, "max": 1000,
+        "label": "Chart Candle Count",
+        "hint": "Number of candles to load on the chart (50–1000)",
+        "group": "UI Preferences",
+    },
+    "ui_font_size": {
+        "type": "int", "min": 10, "max": 24,
+        "label": "Font Size (px)",
+        "hint": "Dashboard font size in pixels (10–24)",
+        "group": "UI Preferences",
+    },
+
+    # ── Startup ───────────────────────────────────────────────────────────
+    "auto_start_scripts": {
+        "type": "bool",
+        "label": "Auto-start Scripts",
+        "hint": "Automatically start the neural runner and traders when the app launches",
+        "group": "Startup",
+    },
+    # ── Training ─────────────────────────────────────────────────────────
+    "training_data_source": {
+        "type": "enum", "options": VALID_DATA_SOURCES,
+        "label": "Training Data Source",
+        "hint": "Data source for the neural trainer",
+        "group": "Training",
+    },
+    "training_staleness_days": {
+        "type": "int", "min": 1,
+        "label": "Training Staleness (days)",
+        "hint": "Coins whose training is older than this are treated as untrained",
+        "group": "Training",
+    },
+
+    # ── Internal (no UI group) ────────────────────────────────────────────
+    "exchange":              {"type": "str",       "group": None},
+    "main_neural_dir":       {"type": "str",       "group": None},
+    "hub_data_dir":          {"type": "str",       "group": None},
+    "script_neural_runner2": {"type": "str",       "group": None},
+    "script_neural_trainer": {"type": "str",       "group": None},
+    "script_trader":         {"type": "str",       "group": None},
+    "timeframes":            {"type": "list_str",  "group": None},
+    "control_slippage_factor": {"type": "float", "min": 0, "group": None},
+    "demo_starting_usd":     {"type": "float", "min": 0, "group": None},
+    "demo_slippage_factor":  {"type": "float", "min": 0, "group": None},
+}
+
+
+def _validate_field(key: str, value: Any, rule: dict) -> str | None:
+    """Return an error string if value violates rule, else None."""
+    t = rule.get("type", "str")
+    try:
+        if t == "int":
+            v = int(float(value))
+            mn, mx = rule.get("min"), rule.get("max")
+            if mn is not None and v < mn:
+                return f"Must be ≥ {mn}"
+            if mx is not None and v > mx:
+                return f"Must be ≤ {mx}"
+
+        elif t == "float":
+            v = float(str(value).replace("%", "").strip())
+            mn, mx = rule.get("min"), rule.get("max")
+            if mn is not None and v < mn:
+                return f"Must be ≥ {mn}"
+            if mx is not None and v > mx:
+                return f"Must be ≤ {mx}"
+
+        elif t == "list_float":
+            if isinstance(value, str):
+                items = [x.strip() for x in value.split(",") if x.strip()]
+            else:
+                items = list(value)
+            parsed = [float(x) for x in items]
+            min_len = rule.get("min_len", 0)
+            if len(parsed) < min_len:
+                return f"Need at least {min_len} value(s)"
+            each_max = rule.get("each_max")
+            if each_max is not None and any(x > each_max for x in parsed):
+                return f"All values must be ≤ {each_max}"
+
+        elif t == "list_str":
+            if isinstance(value, str):
+                items = [x.strip() for x in value.split(",") if x.strip()]
+            else:
+                items = [str(x).strip() for x in value if str(x).strip()]
+            min_len = rule.get("min_len", 0)
+            if len(items) < min_len:
+                return f"Need at least {min_len} item(s)"
+
+        elif t == "enum":
+            options = rule.get("options", [])
+            if str(value) not in options:
+                return f"Must be one of: {', '.join(options)}"
+
+        elif t == "bool":
+            if not isinstance(value, bool):
+                return "Must be true or false"
+
+    except (ValueError, TypeError) as e:
+        return f"Invalid value: {e}"
+
+    return None
+
+
+# ---------------------------------------------------------------------------
+# PTEnv
+# ---------------------------------------------------------------------------
 
 class PTEnv:
-    """Resolves all PowerTrader file paths from gui_settings.json."""
+    """Resolves all PowerTrader file paths and manages pt_config.json."""
 
     def __init__(self, project_dir: str | Path | None = None,
-                 settings_path: str | Path | None = None):
+                 config_path: str | Path | None = None):
         if project_dir is None:
             project_dir = Path(__file__).resolve().parent
         self.project_dir = Path(project_dir).resolve()
-        self.settings_path = (
-            Path(settings_path) if settings_path
-            else self.project_dir / "gui_settings.json"
+
+        # Accept either POWERTRADER_CONFIG (new) or POWERTRADER_GUI_SETTINGS (legacy)
+        env_override = (
+            os.environ.get("POWERTRADER_CONFIG")
+            or os.environ.get("POWERTRADER_GUI_SETTINGS")
         )
-        self._reload_settings()
-
-    def _reload_settings(self):
-        if self.settings_path.exists():
-            with open(self.settings_path) as f:
-                self._settings = json.load(f)
+        if config_path is not None:
+            self.config_path = Path(config_path).resolve()
+        elif env_override:
+            self.config_path = Path(env_override).resolve()
         else:
-            self._settings = {}
+            # Prefer pt_config.json; fall back to gui_settings.json for compat
+            preferred = self.project_dir / "pt_config.json"
+            legacy = self.project_dir / "gui_settings.json"
+            self.config_path = preferred if preferred.exists() else legacy
 
-        raw_main = (self._settings.get("main_neural_dir") or "state").strip()
-        if raw_main and not os.path.isabs(raw_main):
+        self._lock = threading.Lock()
+        self._config_mtime: float | None = None
+        self._config_cache: dict | None = None
+
+        # Derived path fields (updated whenever config changes)
+        self._main_dir: Path = self.project_dir / "state"
+        self._hub_dir: Path = self._main_dir / "hub_data"
+
+        # Initial load
+        self.get_config()
+
+    # ── Public config API ─────────────────────────────────────────────────
+
+    def get_config(self) -> dict:
+        """Return a fresh copy of config, reloading from disk if the file changed."""
+        with self._lock:
+            return self._read_config_locked()
+
+    def set_config(self, patch: dict) -> None:
+        """Validate patch, merge with current config, and write atomically."""
+        errors: dict[str, str] = {}
+        for key, value in patch.items():
+            rule = CONFIG_SCHEMA.get(key)
+            if rule is None:
+                continue
+            err = _validate_field(key, value, rule)
+            if err:
+                errors[key] = err
+        if errors:
+            raise ValueError(f"Config validation failed: {errors}")
+
+        with self._lock:
+            current = self._read_config_locked()
+            merged = {**current, **patch}
+            tmp = self.config_path.with_suffix(".tmp")
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(merged, f, indent=2)
+                tmp.rename(self.config_path)
+            finally:
+                if tmp.exists():
+                    try:
+                        tmp.unlink()
+                    except Exception:
+                        pass
+            # Invalidate cache so next get_config() re-reads
+            self._config_mtime = None
+            self._config_cache = None
+
+    def _read_config_locked(self) -> dict:
+        """Must be called with self._lock held."""
+        if self.config_path.exists():
+            mtime = self.config_path.stat().st_mtime
+            if mtime != self._config_mtime:
+                try:
+                    with open(self.config_path, encoding="utf-8") as f:
+                        raw = json.load(f) or {}
+                except Exception:
+                    raw = {}
+                self._config_cache = {**CONFIG_DEFAULTS, **raw}
+                self._config_mtime = mtime
+                self._update_derived_paths(self._config_cache)
+        elif self._config_cache is None:
+            self._config_cache = dict(CONFIG_DEFAULTS)
+            self._update_derived_paths(self._config_cache)
+        return dict(self._config_cache)
+
+    def _update_derived_paths(self, cfg: dict) -> None:
+        raw_main = str(cfg.get("main_neural_dir") or "state").strip() or "state"
+        if os.path.isabs(raw_main):
+            self._main_dir = Path(raw_main)
+        else:
             self._main_dir = (self.project_dir / raw_main).resolve()
-        else:
-            self._main_dir = Path(raw_main).resolve() if raw_main else self.project_dir / "state"
 
-        raw_hub = (self._settings.get("hub_data_dir") or "").strip()
+        raw_hub = str(cfg.get("hub_data_dir") or "").strip()
         if raw_hub:
-            if not os.path.isabs(raw_hub):
-                self._hub_dir = (self.project_dir / raw_hub).resolve()
-            else:
-                self._hub_dir = Path(raw_hub).resolve()
+            self._hub_dir = (
+                Path(raw_hub) if os.path.isabs(raw_hub)
+                else (self.project_dir / raw_hub).resolve()
+            )
         else:
             self._hub_dir = self._main_dir / "hub_data"
 
-    def reload(self):
-        self._reload_settings()
+    # Backward-compat alias used by a few older call sites
+    def reload(self) -> None:
+        with self._lock:
+            self._config_mtime = None
+            self._config_cache = None
+        self.get_config()
+
+    # ── Properties ───────────────────────────────────────────────────────
 
     @property
+    def config(self) -> dict:
+        return self.get_config()
+
+    # Legacy alias kept so existing callers (pt_models, pt_web) don't break
+    @property
     def settings(self) -> dict:
-        return dict(self._settings)
+        return self.get_config()
+
+    # Legacy alias for config_path
+    @property
+    def settings_path(self) -> Path:
+        return self.config_path
 
     @property
     def exchange(self) -> str:
-        return (self._settings.get("exchange") or "control").strip().lower()
+        return (self.get_config().get("exchange") or "control").strip().lower()
 
     @property
     def exchanges(self) -> list[str]:
-        raw = self._settings.get("exchanges")
+        raw = self.get_config().get("exchanges")
         if isinstance(raw, list) and raw:
             return [x.strip().lower() for x in raw]
         return [self.exchange]
 
     @property
     def coins(self) -> list[str]:
-        return list(self._settings.get("coins") or [])
+        return list(self.get_config().get("coins") or [])
 
     @property
     def main_dir(self) -> Path:
+        # Ensure derived paths are current
+        self.get_config()
         return self._main_dir
 
     @property
     def hub_data_dir(self) -> Path:
+        self.get_config()
         return self._hub_dir
 
     @property
     def coins_dir(self) -> Path:
-        return self._main_dir / "coins"
+        return self.main_dir / "coins"
 
     def coin_dir(self, coin: str) -> Path:
         return self.coins_dir / coin
 
-    # -- Per-coin signal/training files --
+    # ── Per-coin signal/training files ────────────────────────────────────
 
     def long_signal_path(self, coin: str) -> Path:
         return self.coin_dir(coin) / "long_dca_signal.txt"
@@ -116,7 +524,7 @@ class PTEnv:
     def killer_path(self, coin: str) -> Path:
         return self.coin_dir(coin) / "killer.txt"
 
-    # -- Hub-level state files --
+    # ── Hub-level state files ─────────────────────────────────────────────
 
     def runner_ready_path(self) -> Path:
         return self._hub_dir / "runner_ready.json"
@@ -147,17 +555,15 @@ class PTEnv:
         xk = exchange or self.exchange
         return self._hub_dir / f"bot_order_ids_{xk}.json"
 
-    # -- Script paths --
+    # ── Script paths ──────────────────────────────────────────────────────
 
     def script_path(self, key: str) -> Path:
         mapping = {
             "thinker": "script_neural_runner2",
             "trainer": "script_neural_trainer",
-            "trader": "script_trader",
+            "trader":  "script_trader",
         }
-        settings_key = mapping.get(key, key)
-        filename = self._settings.get(settings_key, f"pt_{key}.py")
+        cfg_key = mapping.get(key, key)
+        filename = self.get_config().get(cfg_key, f"pt_{key}.py")
         p = Path(filename)
-        if not p.is_absolute():
-            p = self.project_dir / p
-        return p
+        return p if p.is_absolute() else self.project_dir / p

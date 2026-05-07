@@ -9,7 +9,7 @@ import json
 import time
 from pathlib import Path
 
-from pt_env import PTEnv, TRAINING_STALENESS_DAYS
+from pt_env import PTEnv
 
 
 def _read_json(path: Path) -> dict | None:
@@ -113,7 +113,7 @@ class CoinModel:
         try:
             ts = float(path.read_text().strip())
             age_days = (time.time() - ts) / 86400
-            if age_days > TRAINING_STALENESS_DAYS:
+            if age_days > self.env.get_config()["training_staleness_days"]:
                 return False
         except (FileNotFoundError, ValueError):
             return False
@@ -254,5 +254,5 @@ class SystemModel:
         data = _cache.get(self.env.ema200_path(), _read_json)
         return data or {}
 
-    def settings(self) -> dict:
-        return self.env.settings
+    def config(self) -> dict:
+        return self.env.get_config()
