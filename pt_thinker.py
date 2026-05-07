@@ -1,3 +1,52 @@
+"""
+pt_thinker.py — Neural signal runner
+
+FUNCTION
+--------
+Continuously cycles through every active coin, scoring each against its trained
+neural memories across 11 timeframes (1min … 1week).  The score for a given
+timeframe is the average normalised "diff" between the memory bank and the
+current candle sequence.  When that diff falls at or below the adaptive
+threshold (neural_perfect_threshold_<tf>.txt) the timeframe votes "long";
+above it votes "short".  After a full sweep of all timeframes the votes are
+summed into per-coin signals that the trader acts on.
+
+ALGORITHM (per coin, per timeframe)
+------------------------------------
+1. Fetch the most recent candles from KuCoin live API.
+2. Load the memory bank (memories_<tf>.json) and per-memory weights
+   (weights_<tf>.json) written by pt_trainer.py.
+3. Compute the weighted mean absolute difference between the memory
+   sequences and the latest candles.
+4. Compare diff_avg to the persisted threshold; classify as long/short.
+5. After all timeframes complete, aggregate long/short counts and compute
+   the average profit-margin target across non-zero margins.
+6. Write output files into the coin's working directory (state/coins/<SYM>/).
+
+COMMUNICATION LINKS
+--------------------
+Reads (inputs):
+  gui_settings.json              — coin list, LTH coins, main_neural_dir
+  state/coins/<SYM>/
+    memories_<tf>.json           — memory bank (written by pt_trainer.py)
+    weights_<tf>.json            — per-memory weights (written by pt_trainer.py)
+    neural_perfect_threshold_<tf>.txt  — adaptive decision threshold (r/w)
+    trainer_last_training_time.txt     — freshness gate (written by pt_trainer.py)
+
+Writes (outputs consumed by pt_trader.py):
+  state/coins/<SYM>/
+    long_dca_signal.txt          — integer: number of long-voting timeframes
+    short_dca_signal.txt         — integer: number of short-voting timeframes
+    futures_long_profit_margin.txt   — float: mean profit-margin for longs
+    futures_short_profit_margin.txt  — float: mean profit-margin for shorts
+    low_bound_prices.html        — space-separated predicted buy price levels
+    high_bound_prices.html       — space-separated predicted sell price levels
+
+  state/hub_data/
+    runner_ready.json            — readiness status polled by pt_web.py / UI
+    lth_daily_ema200.json        — 200-day EMA snapshots for LTH coins (read
+                                   by pt_trader.py for LTH buy gating)
+"""
 import os
 import time
 import random

@@ -85,6 +85,14 @@ function fmtQty(v, coin) {
   return n.toPrecision(4);
 }
 
+function pricePrecision(price) {
+  const ap = Math.abs(Number(price));
+  if (!ap || isNaN(ap)) return {precision: 2, minMove: 0.01};
+  if (ap >= 1) return {precision: 2, minMove: 0.01};
+  const decimals = Math.min(12, Math.max(2, Math.floor(-Math.log10(ap)) + 3));
+  return {precision: decimals, minMove: Math.pow(10, -decimals)};
+}
+
 function fmtPrice(v) {
   if (v == null || isNaN(v)) return '—';
   const n = Number(v);
@@ -730,9 +738,11 @@ async function loadChart(coin, tf) {
     const data = await api(`candles/${coin}?timeframe=${tf}&limit=300`);
     if (data.candles && data.candles.length > 0) {
       state.candleSeries.setData(data.candles);
-      state.chart.timeScale().fitContent();
       const last = data.candles[data.candles.length - 1];
       state._currentBar = { ...last };
+      const pp = pricePrecision(last.close);
+      state.candleSeries.applyOptions({priceFormat: {type: 'price', ...pp}});
+      state.chart.timeScale().fitContent();
     }
   } catch (e) {
     console.error('Failed to load candles:', e);

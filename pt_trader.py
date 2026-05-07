@@ -1,3 +1,62 @@
+"""
+pt_trader.py — Live trading engine
+
+FUNCTION
+--------
+Executes buy/sell orders on a configured exchange (Kraken, demo, or control)
+based on signals produced by pt_thinker.py.  It manages the full lifecycle of
+each position: initial entry, DCA (dollar-cost-averaging) top-ups, profit-
+margin trailing stops, and long-term-holding (LTH) purchases funded from
+realised profits.
+
+ALGORITHM
+---------
+Runs manage_trades() in a continuous loop (≈1–5 s cadence per coin):
+
+  1. Refresh prices and account holdings from the exchange.
+  2. For each coin:
+     a. Read long_dca_signal / short_dca_signal from the thinker's output.
+     b. If signal ≥ TRADE_START_LEVEL and no open position exists → place
+        initial buy (START_ALLOC_PCT % of buying power).
+     c. If an open position exists and the price has dropped through the next
+        DCA level → place a DCA buy (DCA_MULTIPLIER × previous size),
+        subject to MAX_DCA_BUYS_PER_24H.
+     d. Once in profit (price above avg cost + PM threshold), activate a
+        trailing stop.  When the trail is broken → sell entire position.
+     e. On realised profit, optionally allocate LTH_PROFIT_ALLOC_PCT % to a
+        market buy of the lowest-EMA-discounted LTH coin.
+  3. Persist state after every trade cycle via the hub_data files below.
+
+COMMUNICATION LINKS
+--------------------
+Reads (inputs from pt_thinker.py):
+  state/coins/<SYM>/
+    long_dca_signal.txt            — long vote count (thinker output)
+    short_dca_signal.txt           — short vote count (thinker output)
+    futures_long_profit_margin.txt — profit-margin target (thinker output)
+    low_bound_prices.html          — predicted buy levels (thinker output)
+  state/hub_data/
+    runner_ready.json              — gate: only trade when thinker is ready
+    lth_daily_ema200.json          — 200-day EMAs for LTH coin selection
+
+Reads (config):
+  gui_settings.json                — coins, DCA params, trailing gap, LTH %
+
+Writes (outputs for pt_web.py / UI):
+  state/hub_data/
+    trader_status_<exchange>.json        — per-coin position snapshot
+    trade_history_<exchange>.jsonl       — append-only fill ledger
+    pnl_ledger_<exchange>.json           — open positions + realised P&L
+    account_value_history_<exchange>.jsonl — equity curve
+    bot_order_ids_<exchange>.json        — order IDs owned by this bot
+    lth_daily_ema200.json                — (also written here for initial seed)
+
+Exchange adapter:
+  exchange_api.py / exchange_kraken.py / exchange_binance.py
+  Loaded via load_exchange_adapter(EXCHANGE_KEY).  All order placement and
+  balance queries go through ExchangeAdapter so the trading logic is exchange-
+  agnostic.
+"""
 import datetime
 import json
 import uuid
