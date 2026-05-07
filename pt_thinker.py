@@ -26,7 +26,7 @@ ALGORITHM (per coin, per timeframe)
 COMMUNICATION LINKS
 --------------------
 Reads (inputs):
-  gui_settings.json              — coin list, LTH coins, main_neural_dir
+  pt_config.json              — coin list, LTH coins, main_neural_dir
   state/coins/<SYM>/
     memories_<tf>.json           — memory bank (written by pt_trainer.py)
     weights_<tf>.json            — per-memory weights (written by pt_trainer.py)
@@ -112,87 +112,44 @@ minute = 0
 last_minute = 0
 
 # -----------------------------
-# GUI SETTINGS (coins list)
+# Config (via PTEnv)
 # -----------------------------
-_GUI_SETTINGS_PATH = os.environ.get("POWERTRADER_GUI_SETTINGS") or os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "gui_settings.json"
-)
+from pt_env import PTEnv as _PTEnv
 
-_gui_settings_cache = {
-    "mtime": None,
-    "coins": ["BTC", "ETH", "XRP", "BNB", "DOGE"],  # fallback defaults
-}
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_env = _PTEnv(BASE_DIR)
 
 
 def _load_gui_coins() -> list:
-    """
-    Reads gui_settings.json and returns settings["coins"] as an uppercased list.
-    Caches by mtime so it is cheap to call frequently.
-    """
-    try:
-        if not os.path.isfile(_GUI_SETTINGS_PATH):
-            return list(_gui_settings_cache["coins"])
+    """Return active coin list from config (mtime-cached via PTEnv)."""
+    return [str(c).strip().upper() for c in _env.get_config()["coins"] if str(c).strip()]
 
-        mtime = os.path.getmtime(_GUI_SETTINGS_PATH)
-        if _gui_settings_cache["mtime"] == mtime:
-            return list(_gui_settings_cache["coins"])
 
-        with open(_GUI_SETTINGS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f) or {}
-
-        coins = data.get("coins", None)
-        if not isinstance(coins, list) or not coins:
-            coins = list(_gui_settings_cache["coins"])
-
-        coins = [str(c).strip().upper() for c in coins if str(c).strip()]
-        if not coins:
-            coins = list(_gui_settings_cache["coins"])
-
-        _gui_settings_cache["mtime"] = mtime
-        _gui_settings_cache["coins"] = coins
-        return list(coins)
-    except Exception:
-        return list(_gui_settings_cache["coins"])
+def _load_long_term_symbols_from_settings() -> list:
+    """Return LTH symbols from config."""
+    lth = _env.get_config()["long_term_holdings"]
+    if isinstance(lth, str):
+        lth = [x.strip() for x in lth.replace("\n", ",").split(",")]
+    out, seen = [], set()
+    for v in lth:
+        s = str(v).upper().strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
 
 
 # Initial coin list (will be kept live via _sync_coins_from_settings())
 COIN_SYMBOLS = _load_gui_coins()
 CURRENT_COINS = list(COIN_SYMBOLS)
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 HUB_DATA_DIR = os.environ.get(
-    "POWERTRADER_HUB_DIR", os.path.join(BASE_DIR, "state", "hub_data")
+    "POWERTRADER_HUB_DIR", str(_env.hub_data_dir)
 )
 os.makedirs(HUB_DATA_DIR, exist_ok=True)
 LTH_EMA200_PATH = os.path.join(HUB_DATA_DIR, "lth_daily_ema200.json")
 
 _last_lth_ema_write_ts = 0.0
-
-
-def _load_long_term_symbols_from_settings() -> list:
-    """Read long_term_holdings (symbols only) from gui_settings.json."""
-    try:
-        if not os.path.isfile(_GUI_SETTINGS_PATH):
-            return []
-        with open(_GUI_SETTINGS_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f) or {}
-    except Exception:
-        data = {}
-    lth = data.get("long_term_holdings", []) or []
-    if isinstance(lth, str):
-        lth = [x.strip() for x in lth.replace("\n", ",").split(",")]
-    if not isinstance(lth, (list, tuple)):
-        lth = []
-    out = []
-    seen = set()
-    for v in lth:
-        s = str(v).upper().strip()
-        if not s or s in seen:
-            continue
-        seen.add(s)
-        out.append(s)
-    return out
 
 
 def _ema(values: list, period: int):
@@ -277,42 +234,21 @@ def _write_lth_ema200_snapshot() -> None:
         pass
 
 
-def _resolve_main_neural_dir() -> str:
-    try:
-        if os.path.isfile(_GUI_SETTINGS_PATH):
-            with open(_GUI_SETTINGS_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f) or {}
-            d = str(data.get("main_neural_dir") or "state").strip()
-            if d and not os.path.isabs(d):
-                d = os.path.join(BASE_DIR, d)
-            if os.path.isdir(d):
-                return d
-    except Exception:
-        pass
-    return os.path.join(BASE_DIR, "state")
-
-
 def coin_folder(sym: str) -> str:
-    sym = sym.upper()
-    return os.path.join(_resolve_main_neural_dir(), "coins", sym)
+    return str(_env.coin_dir(sym.upper()))
 
 
-# --- training freshness gate (mirrors pt_hub.py) ---
-_TRAINING_STALE_SECONDS = 14 * 24 * 60 * 60  # 14 days
+def _strip_noise(s: str) -> str:
+    """Strip list-serialisation artefacts from a memory token."""
+    return s.replace("'", "").replace(",", "").replace('"', "").replace("]", "").replace("[", "")
+
+
+def _mem_field_pct(line: str, idx: int) -> float:
+    """Extract field `idx` from a `{}`-delimited memory line as a fraction (÷100)."""
+    return float(_strip_noise(line.split("{}")[idx]).replace(" ", "")) / 100
 
 
 def _coin_is_trained(sym: str) -> bool:
-    """
-    Training freshness gate:
-
-    pt_trainer.py writes `trainer_last_training_time.txt` in the coin folder
-    when training starts. If that file is missing OR older than 14 days, we treat
-    the coin as NOT TRAINED.
-
-    This is intentionally the same logic as pt_hub.py so runner behavior matches
-    what the GUI shows.
-    """
-
     try:
         folder = coin_folder(sym)
         stamp_path = os.path.join(folder, "trainer_last_training_time.txt")
@@ -323,21 +259,15 @@ def _coin_is_trained(sym: str) -> bool:
         ts = float(raw) if raw else 0.0
         if ts <= 0:
             return False
-        return (time.time() - ts) <= _TRAINING_STALE_SECONDS
+        stale_secs = _env.get_config()["training_staleness_days"] * 86400
+        return (time.time() - ts) <= stale_secs
     except Exception:
         return False
 
 
 # --- GUI HUB "runner ready" gate file (read by gui_hub.py Start All toggle) ---
 
-HUB_DIR = os.environ.get("POWERTRADER_HUB_DIR") or os.path.join(
-    BASE_DIR, "state", "hub_data"
-)
-try:
-    os.makedirs(HUB_DIR, exist_ok=True)
-except Exception:
-    pass
-
+HUB_DIR = HUB_DATA_DIR
 RUNNER_READY_PATH = os.path.join(HUB_DIR, "runner_ready.json")
 
 
@@ -422,7 +352,7 @@ def _is_printing_real_predictions(messages) -> bool:
 
 def _sync_coins_from_settings():
     """
-    Hot-reload coins from gui_settings.json while runner is running.
+    Hot-reload coins from pt_config.json while runner is running.
 
     - Adds new coins: creates folder + init_coin() + starts stepping them
     - Removes coins: stops stepping them (leaves state on disk untouched)
@@ -714,53 +644,15 @@ def step_coin(sym: str):
         # If we can read/parse training files, this timeframe is NOT a training-file issue.
         training_issues[tf_choice_index] = 0
 
-        file = open("memories_" + tf_choices[tf_choice_index] + ".txt", "r")
-        memory_list = (
-            file.read()
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split("~")
-        )
-        file.close()
-
-        file = open("memory_weights_" + tf_choices[tf_choice_index] + ".txt", "r")
-        weight_list = (
-            file.read()
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split(" ")
-        )
-        file.close()
-
-        file = open("memory_weights_high_" + tf_choices[tf_choice_index] + ".txt", "r")
-        high_weight_list = (
-            file.read()
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split(" ")
-        )
-        file.close()
-
-        file = open("memory_weights_low_" + tf_choices[tf_choice_index] + ".txt", "r")
-        low_weight_list = (
-            file.read()
-            .replace("'", "")
-            .replace(",", "")
-            .replace('"', "")
-            .replace("]", "")
-            .replace("[", "")
-            .split(" ")
-        )
-        file.close()
+        tf = tf_choices[tf_choice_index]
+        with open("memories_" + tf + ".txt", "r") as f:
+            memory_list = _strip_noise(f.read()).split("~")
+        with open("memory_weights_" + tf + ".txt", "r") as f:
+            weight_list = _strip_noise(f.read()).split(" ")
+        with open("memory_weights_high_" + tf + ".txt", "r") as f:
+            high_weight_list = _strip_noise(f.read()).split(" ")
+        with open("memory_weights_low_" + tf + ".txt", "r") as f:
+            low_weight_list = _strip_noise(f.read()).split(" ")
 
         mem_ind = 0
         diffs_list = []
@@ -776,16 +668,7 @@ def step_coin(sym: str):
         low_moves = []
 
         while True:
-            memory_pattern = (
-                memory_list[mem_ind]
-                .split("{}")[0]
-                .replace("'", "")
-                .replace(",", "")
-                .replace('"', "")
-                .replace("]", "")
-                .replace("[", "")
-                .split(" ")
-            )
+            memory_pattern = _strip_noise(memory_list[mem_ind].split("{}")[0]).split(" ")
             check_dex = 0
             memory_candle = float(memory_pattern[check_dex])
 
@@ -807,32 +690,8 @@ def step_coin(sym: str):
 
             if diff_avg <= perfect_threshold:
                 any_perfect = "yes"
-                high_diff = (
-                    float(
-                        memory_list[mem_ind]
-                        .split("{}")[1]
-                        .replace("'", "")
-                        .replace(",", "")
-                        .replace('"', "")
-                        .replace("]", "")
-                        .replace("[", "")
-                        .replace(" ", "")
-                    )
-                    / 100
-                )
-                low_diff = (
-                    float(
-                        memory_list[mem_ind]
-                        .split("{}")[2]
-                        .replace("'", "")
-                        .replace(",", "")
-                        .replace('"', "")
-                        .replace("]", "")
-                        .replace("[", "")
-                        .replace(" ", "")
-                    )
-                    / 100
-                )
+                high_diff = _mem_field_pct(memory_list[mem_ind], 1)
+                low_diff = _mem_field_pct(memory_list[mem_ind], 2)
 
                 unweighted.append(float(memory_pattern[len(memory_pattern) - 1]))
                 move_weights.append(float(weight_list[mem_ind]))

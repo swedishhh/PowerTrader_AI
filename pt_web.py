@@ -302,16 +302,35 @@ async def api_comparison():
     return {"coins": coins_out, "totals": totals, "exchanges": env.exchanges}
 
 
+@app.get("/api/config")
+async def api_config():
+    return env.get_config()
+
+
+@app.get("/api/config/schema")
+async def api_config_schema():
+    from pt_env import CONFIG_SCHEMA
+    return CONFIG_SCHEMA
+
+
+@app.put("/api/config")
+async def api_save_config(data: dict):
+    try:
+        env.set_config(data)
+        return {"ok": True}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+
+# Legacy aliases so any cached browser tabs still work
 @app.get("/api/settings")
-async def api_settings():
-    env.reload()
-    return env.settings
+async def api_settings_compat():
+    return await api_config()
 
 
 @app.put("/api/settings")
-async def api_save_settings(data: dict):
-    ok = ctrl.save_settings(data)
-    return {"ok": ok}
+async def api_save_settings_compat(data: dict):
+    return await api_save_config(data)
 
 
 @app.post("/api/start-all")
@@ -749,7 +768,7 @@ async def api_candles(coin: str, timeframe: str = "1hour", limit: int = 250,
     """Fetch candle data for charting. Source: kraken or kucoin (auto from settings)."""
     coin = coin.upper()
     env.reload()
-    price_source = source or env.settings.get("live_price_source", "kraken")
+    price_source = source or env.get_config()["live_price_source"]
 
     if price_source == "kraken":
         return _candles_kraken(coin, timeframe, limit)
@@ -957,7 +976,7 @@ def _init_exchange_balances():
 
     ctrl_state = env.hub_data_dir / "control_exchange_state.json"
     if not ctrl_state.exists():
-        starting = float(env.settings.get("control_starting_usd", 0))
+        starting = float(env.get_config()["control_starting_usd"])
         if starting <= 0:
             kr = _get_adapter("kraken")
             starting = (kr.get_buying_power() or 0) if kr else 0

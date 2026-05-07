@@ -281,7 +281,7 @@ class ProcessController:
             coin_dir.mkdir(parents=True, exist_ok=True)
 
             trainer_name = os.path.basename(
-                self.env.settings.get("script_neural_trainer", "pt_trainer.py")
+                self.env.get_config()["script_neural_trainer"]
             )
             trainer_path = self.env.project_dir / trainer_name
             if not trainer_path.is_file():
@@ -425,18 +425,6 @@ class ProcessController:
             except Exception:
                 pass
         return []
-
-    # -- Settings --
-
-    def save_settings(self, data: dict) -> bool:
-        try:
-            path = self.env.settings_path
-            with open(path, "w") as f:
-                json.dump(data, f, indent=2)
-            self.env.reload()
-            return True
-        except Exception:
-            return False
 
     # -- Status summary --
 
