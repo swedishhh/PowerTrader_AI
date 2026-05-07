@@ -683,11 +683,7 @@ async function loadChart(coin, tf) {
     clearInterval(state.chartRefreshTimer);
     state.chartRefreshTimer = null;
   }
-  if (state._diffChart) {
-    state._diffChart.remove();
-    state._diffChart = null;
-    state._diffSeries = null;
-  }
+  state._diffSeries = null;
   if (state.chart) {
     state.chart.remove();
     state.chart = null;
@@ -793,11 +789,7 @@ async function loadAccountChart(hours) {
     state.acctSeries = {};
     state.priceLines = [];
   }
-  if (state._diffChart) {
-    state._diffChart.remove();
-    state._diffChart = null;
-    state._diffSeries = null;
-  }
+  state._diffSeries = null;
 
   const isPct = state.acctDisplayMode === 'pct';
   const hasMulti = state.exchangeList.length >= 2;
@@ -812,9 +804,18 @@ async function loadAccountChart(hours) {
   };
   const _priceFmt = isPct ? _fmtPct : _fmtUsd;
 
-  const _acctChartOpts = (c) => ({
-    width: c.clientWidth,
-    height: c.clientHeight,
+  const _fmtDiff = v => {
+    const s = (v >= 0 ? '+$' : '-$') + Math.abs(v).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    return s.padStart(10);
+  };
+  const _fmtDiffPct = v => {
+    const s = (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    return s.padStart(8);
+  };
+
+  state.chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: container.clientHeight,
     layout: {
       background: {type: 'solid', color: CHART_COLORS.bg},
       textColor: CHART_COLORS.text,
@@ -835,6 +836,11 @@ async function loadAccountChart(hours) {
       timeVisible: true,
       secondsVisible: false,
     },
+    leftPriceScale: {
+      visible: hasMulti,
+      borderColor: CHART_COLORS.border,
+      scaleMargins: {top: 0.15, bottom: 0.05},
+    },
     rightPriceScale: {
       borderColor: CHART_COLORS.border,
     },
@@ -843,16 +849,13 @@ async function loadAccountChart(hours) {
     },
   });
 
-  const mainOpts = _acctChartOpts(container);
-  if (hasMulti) mainOpts.timeScale.visible = false;
-  state.chart = LightweightCharts.createChart(container, mainOpts);
-
   state._acctHidden = state._acctHidden || {};
   state.exchangeList.forEach(xk => {
     state.acctSeries[xk] = state.chart.addLineSeries({
       color: XK_COLORS[xk] || '#8888A8',
       lineWidth: 2,
       title: '',
+      priceScaleId: 'right',
       priceFormat: {type: 'price', precision: 2, minMove: 0.01},
       visible: !state._acctHidden[xk],
     });
@@ -864,39 +867,24 @@ async function loadAccountChart(hours) {
     lastValueVisible: false,
     priceLineVisible: false,
     crosshairMarkerVisible: false,
+    priceScaleId: 'right',
   });
 
-  // Diff pane (kraken − control)
+  // Diff series on left axis (kraken − control)
   if (hasMulti) {
-    diffContainer.classList.remove('hidden');
-    state._diffChart = LightweightCharts.createChart(diffContainer, _acctChartOpts(diffContainer));
-    state._diffSeries = state._diffChart.addLineSeries({
+    diffContainer.classList.add('hidden');
+    state._diffSeries = state.chart.addLineSeries({
       color: '#555570',
       lineWidth: 1,
       title: '',
-      priceFormat: {type: 'price', precision: 2, minMove: 0.01},
+      priceScaleId: 'left',
+      priceFormat: {type: 'custom', formatter: isPct ? _fmtDiffPct : _fmtDiff, minMove: 0.01},
       lastValueVisible: true,
       priceLineVisible: false,
     });
-    // zero line
     state._diffSeries.createPriceLine({
       price: 0, color: '#2A2A48', lineWidth: 1, lineStyle: 0,
       axisLabelVisible: false,
-    });
-
-    // Sync time scales
-    let syncing = false;
-    state.chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (syncing || !range) return;
-      syncing = true;
-      state._diffChart.timeScale().setVisibleLogicalRange(range);
-      syncing = false;
-    });
-    state._diffChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
-      if (syncing || !range) return;
-      syncing = true;
-      state.chart.timeScale().setVisibleLogicalRange(range);
-      syncing = false;
     });
   } else {
     diffContainer.classList.add('hidden');
@@ -905,7 +893,6 @@ async function loadAccountChart(hours) {
   await _applyAccountData(hours);
 
   state.chart.timeScale().fitContent();
-  if (state._diffChart) state._diffChart.timeScale().fitContent();
 
   // Build controls: range buttons + $/%  toggle
   const tfContainer = $('#tf-selector');
@@ -946,12 +933,8 @@ async function loadAccountChart(hours) {
     if (state.chart) {
       state.chart.applyOptions({width: container.clientWidth, height: container.clientHeight});
     }
-    if (state._diffChart) {
-      state._diffChart.applyOptions({width: diffContainer.clientWidth, height: diffContainer.clientHeight});
-    }
   });
   resizeObserver.observe(container);
-  if (hasMulti) resizeObserver.observe(diffContainer);
 }
 
 function _buildAccountLegend() {
