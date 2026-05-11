@@ -210,7 +210,7 @@ async def api_positions():
     lth = {}
     for xk in env.exchanges:
         acct = AccountModel(env, xk)
-        out[xk] = acct.positions()
+        out[xk] = acct.all_positions()
         dca[xk] = acct.dca_24h_by_coin()
         lth[xk] = acct.lth_holdings()
     return {"positions": out, "dca_24h": dca, "lth": lth}

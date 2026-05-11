@@ -27,7 +27,8 @@
     "NEAR",
     "POL",
     "ATOM",
-    "ALGO"
+    "ALGO",
+    "HBAR"
   ],
   "exchanges": [
     "control",
@@ -52,8 +53,8 @@
     -50
   ],
   "max_dca_buys_per_24h": 1,
-  "pm_start_pct_no_dca": 4,
-  "pm_start_pct_with_dca": 4,
+  "pm_start_pct_no_dca": 3,
+  "pm_start_pct_with_dca": 3,
   "trailing_gap_pct": 0.5,
   "lth_profit_alloc_pct": 50,
   "live_price_source": "kucoin",
@@ -80,7 +81,7 @@
   "ui_refresh_seconds": 1,
   "chart_refresh_seconds": 4,
   "candles_limit": 250,
-  "ui_font_size": 16,
+  "ui_font_size": 20,
   "control_starting_usd": 0,
   "control_slippage_factor": 0,
   "demo_starting_usd": 10000,
