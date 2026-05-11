@@ -1,11 +1,16 @@
 """
-Control exchange adapter.
+Control/Demo exchange adapter.
 
-Simulates zero-friction trading as a baseline for comparing against real exchanges.
-Uses the same price source as the live exchange (Kraken by default) but with zero
-fees and zero bid/ask spread — trades execute at mid-price.
+Simulates zero-friction trading as a baseline: zero fees, zero bid/ask spread,
+trades execute at mid-price using the configured live price source.
+
+Used in both modes:
+  - Demo mode   : this IS the user's account, labelled "Demo"
+  - Trading mode: runs alongside real exchanges as a frictionless comparison baseline
 
 Balances and fills are tracked in memory and persisted to a state file.
+All configuration (price_source, starting_usd, state_path) is passed in by the
+caller (pt_web.py) — this module has no dependency on any specific exchange.
 """
 
 from __future__ import annotations
@@ -17,54 +22,19 @@ import uuid
 from typing import Dict, List, Optional, Tuple
 
 from exchange_api import ExchangeAdapter, OrderResult
+from price_source import get_mid_price
 
-_DEFAULT_STARTING_USD = 10000.0
-
-
-def _load_settings() -> dict:
-    settings_path = os.environ.get("POWERTRADER_GUI_SETTINGS") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "gui_settings.json"
-    )
-    try:
-        if os.path.isfile(settings_path):
-            with open(settings_path, "r", encoding="utf-8") as f:
-                return json.load(f) or {}
-    except Exception:
-        pass
-    return {}
-
-
-def _kraken_mid_price(base: str) -> Optional[float]:
-    try:
-        import ccxt
-        _kraken = ccxt.kraken({"enableRateLimit": True})
-        ticker = _kraken.fetch_ticker(f"{base}/USDT")
-        bid = float(ticker.get("bid", 0) or 0)
-        ask = float(ticker.get("ask", 0) or 0)
-        if bid > 0 and ask > 0:
-            return (bid + ask) / 2.0
-    except Exception:
-        pass
-    return None
-
-
-def _kucoin_mid_price(base: str) -> Optional[float]:
-    try:
-        from kucoin.client import Market
-        market = Market(url="https://api.kucoin.com")
-        data = market.get_kline(f"{base}-USDT", "1min")
-        if data and len(data) > 0 and len(data[0]) >= 3:
-            return float(data[0][2])
-    except Exception:
-        pass
-    return None
+_DEFAULT_STARTING_USD = 10_000.0
 
 
 class ControlAdapter(ExchangeAdapter):
 
-    def __init__(self, starting_usd: float = _DEFAULT_STARTING_USD,
-                 price_source: str = "kraken",
-                 state_path: Optional[str] = None):
+    def __init__(
+        self,
+        starting_usd: float = _DEFAULT_STARTING_USD,
+        price_source: str = "kucoin",
+        state_path: Optional[str] = None,
+    ):
         self._price_source = price_source
         self._state_path = state_path
 
@@ -104,9 +74,7 @@ class ControlAdapter(ExchangeAdapter):
             pass
 
     def _get_price(self, base: str) -> Optional[float]:
-        if self._price_source == "kucoin":
-            return _kucoin_mid_price(base)
-        return _kraken_mid_price(base) or _kucoin_mid_price(base)
+        return get_mid_price(base, self._price_source)
 
     def to_exchange_symbol(self, canonical: str) -> str:
         return canonical
@@ -221,30 +189,12 @@ class ControlAdapter(ExchangeAdapter):
         return {"results": list(self._orders.get(symbol, []))}
 
 
-def create_adapter() -> ControlAdapter:
-    hub_data = os.environ.get(
-        "POWERTRADER_HUB_DIR",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "state", "hub_data"),
-    )
-    state_path = os.path.join(hub_data, "control_exchange_state.json")
-
-    settings = _load_settings()
-    price_source = settings.get("live_price_source", "kraken")
-    starting_usd = float(settings.get("control_starting_usd", 0))
-
-    if starting_usd <= 0 and not os.path.isfile(state_path):
-        try:
-            from exchange_kraken import create_adapter as create_kraken
-            kraken = create_kraken()
-            starting_usd = kraken.get_account_value() or _DEFAULT_STARTING_USD
-            print(f"[Control] Starting balance synced from Kraken: ${starting_usd:,.2f}")
-        except Exception:
-            starting_usd = _DEFAULT_STARTING_USD
-            print(f"[Control] Kraken unavailable, using default: ${starting_usd:,.2f}")
-
-    if starting_usd <= 0:
-        starting_usd = _DEFAULT_STARTING_USD
-
+def create_adapter(
+    starting_usd: float = _DEFAULT_STARTING_USD,
+    price_source: str = "kucoin",
+    state_path: Optional[str] = None,
+) -> ControlAdapter:
+    """Factory used by pt_web.py. All config is passed in — no side-effects here."""
     return ControlAdapter(
         starting_usd=starting_usd,
         price_source=price_source,

@@ -36,7 +36,9 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "coins": ["BTC", "ETH", "BNB", "PAXG", "SOL", "XRP", "DOGE", "TRX", "HYPE",
               "ADA", "XMR", "XLM", "LINK", "ZEC", "AVAX", "DOT", "CRO", "BCH",
               "LTC", "SUI", "SHIB", "TAO", "MNT", "UNI", "NEAR", "POL", "ATOM", "ALGO"],
-    "exchanges": ["control", "kraken"],
+    "trading_mode": "demo",
+    "exchanges": [],
+    "control_sync_exchange": "",
     "exchange": "control",
     "excluded_coins": [],
     "long_term_holdings": ["BTC", "ETH", "SOL"],
@@ -77,13 +79,8 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "candles_limit": 300,
     "ui_font_size": 16,
 
-    # Control exchange
+    # Control / Demo exchange
     "control_starting_usd": 0,
-    "control_slippage_factor": 0,
-
-    # Demo exchange
-    "demo_starting_usd": 10000,
-    "demo_slippage_factor": 0.001,
 
     # Startup
     "auto_start_scripts": False,
@@ -115,10 +112,17 @@ CONFIG_SCHEMA: dict[str, dict] = {
         "hint": "Comma-separated symbols to trade (e.g. BTC, ETH, SOL)",
         "group": "General",
     },
+    "trading_mode": {
+        "type": "enum", "options": ["demo", "trading"],
+        "ui_widget": "radio",
+        "label": "Mode",
+        "hint": "Demo: frictionless simulated account. Trading: live exchange(s) with control baseline.",
+        "group": "General",
+    },
     "exchanges": {
-        "type": "list_str", "min_len": 1,
-        "label": "Exchanges",
-        "hint": "Comma-separated exchange names (e.g. control, kraken)",
+        "type": "list_str",
+        "label": "Real Exchanges",
+        "hint": "Exchanges to trade on in Trading mode (e.g. kraken, robinhood). Greyed out in Demo mode.",
         "group": "General",
     },
     "excluded_coins": {
@@ -199,11 +203,17 @@ CONFIG_SCHEMA: dict[str, dict] = {
         "group": "Long-Term Holdings",
     },
 
-    # ── Control Exchange ──────────────────────────────────────────────────
+    # ── Control / Demo Exchange ───────────────────────────────────────────
     "control_starting_usd": {
         "type": "float", "min": 0,
-        "label": "Control Starting USD",
-        "hint": "Starting USD for the control mirror (0 = auto-sync from Kraken balance on first run)",
+        "label": "Starting USD",
+        "hint": "Starting balance for the Demo/Control account (0 = auto-sync from control_sync_exchange on first run)",
+        "group": "Control Exchange",
+    },
+    "control_sync_exchange": {
+        "type": "str",
+        "label": "Sync Source Exchange",
+        "hint": "Real exchange to sync the starting balance from (leave blank to use first in the exchanges list)",
         "group": "Control Exchange",
     },
 
@@ -268,9 +278,6 @@ CONFIG_SCHEMA: dict[str, dict] = {
     "script_neural_trainer": {"type": "str",       "group": None},
     "script_trader":         {"type": "str",       "group": None},
     "timeframes":            {"type": "list_str",  "group": None},
-    "control_slippage_factor": {"type": "float", "min": 0, "group": None},
-    "demo_starting_usd":     {"type": "float", "min": 0, "group": None},
-    "demo_slippage_factor":  {"type": "float", "min": 0, "group": None},
 }
 
 
@@ -470,11 +477,16 @@ class PTEnv:
         return (self.get_config().get("exchange") or "control").strip().lower()
 
     @property
+    def trading_mode(self) -> str:
+        return (self.get_config().get("trading_mode") or "demo").strip().lower()
+
+    @property
     def exchanges(self) -> list[str]:
+        """Real (non-synthetic) exchanges selected by the user."""
         raw = self.get_config().get("exchanges")
-        if isinstance(raw, list) and raw:
-            return [x.strip().lower() for x in raw]
-        return [self.exchange]
+        if isinstance(raw, list):
+            return [x.strip().lower() for x in raw if x.strip().lower() not in ("control", "api", "")]
+        return []
 
     @property
     def coins(self) -> list[str]:
@@ -526,6 +538,15 @@ class PTEnv:
 
     # ── Hub-level state files ─────────────────────────────────────────────
 
+    def hub_data_xk_dir(self, xk: str) -> Path:
+        """Return (and create) the per-exchange subdirectory under hub_data/exchanges/."""
+        d = self._hub_dir / "exchanges" / xk
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def exchange_state_path(self, xk: str) -> Path:
+        return self.hub_data_xk_dir(xk) / "exchange_state.json"
+
     def runner_ready_path(self) -> Path:
         return self._hub_dir / "runner_ready.json"
 
@@ -537,23 +558,23 @@ class PTEnv:
 
     def trader_status_path(self, exchange: str | None = None) -> Path:
         xk = exchange or self.exchange
-        return self._hub_dir / f"trader_status_{xk}.json"
+        return self.hub_data_xk_dir(xk) / "trader_status.json"
 
     def trade_history_path(self, exchange: str | None = None) -> Path:
         xk = exchange or self.exchange
-        return self._hub_dir / f"trade_history_{xk}.jsonl"
+        return self.hub_data_xk_dir(xk) / "trade_history.jsonl"
 
     def pnl_ledger_path(self, exchange: str | None = None) -> Path:
         xk = exchange or self.exchange
-        return self._hub_dir / f"pnl_ledger_{xk}.json"
+        return self.hub_data_xk_dir(xk) / "pnl_ledger.json"
 
     def account_history_path(self, exchange: str | None = None) -> Path:
         xk = exchange or self.exchange
-        return self._hub_dir / f"account_value_history_{xk}.jsonl"
+        return self.hub_data_xk_dir(xk) / "account_value_history.jsonl"
 
     def bot_order_ids_path(self, exchange: str | None = None) -> Path:
         xk = exchange or self.exchange
-        return self._hub_dir / f"bot_order_ids_{xk}.json"
+        return self.hub_data_xk_dir(xk) / "bot_order_ids.json"
 
     # ── Script paths ──────────────────────────────────────────────────────
 

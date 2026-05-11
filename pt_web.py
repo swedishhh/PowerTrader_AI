@@ -7,7 +7,11 @@ Run:
     conda activate powertrader && cd ~/dev/code/git/PowerTrader_AI && python pt_web.py --port 8088
 
 Provides REST API + WebSocket for real-time updates, serving the web/ frontend.
-Supports multiple exchanges running simultaneously (e.g. control + kraken).
+
+Modes
+-----
+Demo    : only the control (frictionless) adapter runs; shown as "Demo" in the UI.
+Trading : control adapter runs alongside the real exchanges in env.exchanges.
 """
 
 import asyncio
@@ -47,16 +51,56 @@ _adapters: dict = {}
 def _get_adapter(xk: str):
     if xk not in _adapters:
         try:
-            if xk == "kraken":
-                from exchange_kraken import create_adapter
-                _adapters[xk] = create_adapter()
-            elif xk == "control":
-                from exchange_control import create_adapter
-                _adapters[xk] = create_adapter()
+            if xk in ("control", "demo"):
+                # Both use ControlAdapter; state files are namespaced by key (demo vs control)
+                from exchange_control import create_adapter as _make_ctrl
+                state_path = str(env.exchange_state_path(xk))
+                cfg = env.get_config()
+                price_source = cfg.get("live_price_source", "kucoin")
+                starting_usd = float(cfg.get("control_starting_usd") or 0)
+                _adapters[xk] = _make_ctrl(
+                    starting_usd=starting_usd,
+                    price_source=price_source,
+                    state_path=state_path,
+                )
+            else:
+                import importlib
+                mod = importlib.import_module(f"exchange_{xk}")
+                _adapters[xk] = mod.create_adapter()
         except Exception as e:
             print(f"[Adapter] failed to create {xk}: {e}")
             return None
     return _adapters.get(xk)
+
+
+def _is_demo_mode() -> bool:
+    return env.trading_mode == "demo"
+
+
+def _active_exchanges() -> list[str]:
+    """All exchanges active for the current mode.
+
+    Demo mode  : ["demo"]   — state files under hub_data/demo/
+    Trading mode: ["control"] + real exchanges — state files under hub_data/{xk}/
+    """
+    if _is_demo_mode():
+        return ["demo"]
+    return ["control"] + env.exchanges
+
+
+def _ctrl_xk() -> str:
+    """Key for the synthetic frictionless adapter in the current mode: 'demo' or 'control'."""
+    return "demo" if _is_demo_mode() else "control"
+
+
+def _control_sync_exchange() -> str:
+    """The real exchange to sync the control starting balance from."""
+    cfg = env.get_config()
+    xk = (cfg.get("control_sync_exchange") or "").strip().lower()
+    if not xk:
+        real = env.exchanges
+        xk = real[0] if real else ""
+    return xk
 
 
 # ── Static files ──
@@ -130,8 +174,9 @@ async def api_status():
     ctrl_status = ctrl.status_summary()
     rr = sm.runner_ready()
 
+    active = _active_exchanges()
     exchanges_data = {}
-    for xk in env.exchanges:
+    for xk in active:
         exchanges_data[xk] = _account_for_exchange(xk)
 
     return {
@@ -144,7 +189,8 @@ async def api_status():
             "any_training_running": ctrl_status["any_training_running"],
         },
         "exchanges": exchanges_data,
-        "exchange_list": env.exchanges,
+        "exchange_list": active,
+        "trading_mode": env.trading_mode,
         "coins": env.coins,
     }
 
@@ -155,8 +201,9 @@ async def api_coins():
     coins = []
     ctrl_status = ctrl.status_summary()
 
+    active = _active_exchanges()
     positions_by_xk = {}
-    for xk in env.exchanges:
+    for xk in active:
         acct = AccountModel(env, xk)
         positions_by_xk[xk] = acct.all_positions()
 
@@ -166,7 +213,7 @@ async def api_coins():
 
         snap["positions"] = {}
         mid_prices = []
-        for xk in env.exchanges:
+        for xk in active:
             pos = positions_by_xk[xk].get(coin, {})
             snap["positions"][xk] = pos if pos.get("quantity", 0) > 0 else None
             buy = pos.get("current_buy_price", 0)
@@ -190,7 +237,7 @@ async def api_coin_detail(coin: str):
     cm = CoinModel(env, coin)
 
     result = {**cm.snapshot(), "positions": {}, "trades": {}}
-    for xk in env.exchanges:
+    for xk in _active_exchanges():
         acct = AccountModel(env, xk)
         positions = acct.all_positions()
         pos = positions.get(coin, {})
@@ -208,7 +255,7 @@ async def api_positions():
     out = {}
     dca = {}
     lth = {}
-    for xk in env.exchanges:
+    for xk in _active_exchanges():
         acct = AccountModel(env, xk)
         out[xk] = acct.all_positions()
         dca[xk] = acct.dca_24h_by_coin()
@@ -219,7 +266,7 @@ async def api_positions():
 @app.get("/api/trades")
 async def api_trades(limit: int = 250, exchange: str = ""):
     result = {}
-    targets = [exchange] if exchange else env.exchanges
+    targets = [exchange] if exchange else _active_exchanges()
     for xk in targets:
         acct = AccountModel(env, xk)
         result[xk] = acct.trade_history(limit=limit)
@@ -239,7 +286,7 @@ async def api_account_history(hours: float = 0):
     else:
         interval = 14400      # 4 hours
 
-    for xk in env.exchanges:
+    for xk in _active_exchanges():
         acct = AccountModel(env, xk)
         raw = acct.account_value_history(limit=0)
         if hours > 0:
@@ -256,10 +303,11 @@ async def api_account_history(hours: float = 0):
 async def api_comparison():
     """Per-coin comparison across exchanges."""
     env.reload()
+    active = _active_exchanges()
     coins_out = []
     for coin in env.coins:
         row = {"coin": coin}
-        for xk in env.exchanges:
+        for xk in active:
             acct = AccountModel(env, xk)
             positions = acct.all_positions()
             pos = positions.get(coin, {})
@@ -277,7 +325,7 @@ async def api_comparison():
         coins_out.append(row)
 
     usdt_row = {"coin": "USDT"}
-    for xk in env.exchanges:
+    for xk in active:
         acct = AccountModel(env, xk)
         summary = acct.account_summary()
         usdt_row[xk] = {
@@ -291,7 +339,7 @@ async def api_comparison():
     coins_out.sort(key=lambda r: r["coin"])
 
     totals = {}
-    for xk in env.exchanges:
+    for xk in active:
         acct = AccountModel(env, xk)
         pnl = acct.pnl()
         totals[xk] = {
@@ -299,7 +347,13 @@ async def api_comparison():
             "total_fees": sum(c[xk]["total_fees"] for c in coins_out),
         }
 
-    return {"coins": coins_out, "totals": totals, "exchanges": env.exchanges}
+    return {"coins": coins_out, "totals": totals, "exchanges": active}
+
+
+@app.get("/api/discovered-exchanges")
+async def api_discovered_exchanges():
+    from exchange_api import discover_exchanges
+    return {"exchanges": discover_exchanges()}
 
 
 @app.get("/api/config")
@@ -448,7 +502,7 @@ def _refresh_exchange_balance(xk: str, write_history: bool = True):
 @app.post("/api/clear-account-history")
 async def api_clear_account_history():
     """Delete account value history files for all exchanges."""
-    for xk in env.exchanges:
+    for xk in _active_exchanges():
         path = env.account_history_path(xk)
         try:
             if path.exists():
@@ -460,22 +514,24 @@ async def api_clear_account_history():
 
 @app.post("/api/reset-all")
 async def api_reset_all():
-    """Stop everything, close all positions, wipe all state, reset to Kraken USD balance."""
+    """Stop everything, close all positions, wipe all state, reset to sync-source USD balance."""
     ctrl.stop_all()
+    active = _active_exchanges()
 
-    for xk in env.exchanges:
+    for xk in active:
         adapter = _get_adapter(xk)
-        if adapter:
+        if adapter and xk not in ("control", "demo"):
             for coin, qty in adapter.get_holdings().items():
                 try:
                     adapter.place_sell(f"{coin}_USD", qty)
                 except Exception:
                     pass
 
-    adapter_kr = _get_adapter("kraken")
-    balance = adapter_kr.get_buying_power() if adapter_kr else 0
+    sync_xk = _control_sync_exchange()
+    adapter_sync = _get_adapter(sync_xk) if sync_xk else None
+    balance = adapter_sync.get_buying_power() if adapter_sync else 0
 
-    for xk in env.exchanges:
+    for xk in active:
         for path in [env.trade_history_path(xk), env.account_history_path(xk)]:
             try:
                 path.write_text("")
@@ -489,9 +545,8 @@ async def api_reset_all():
             }, indent=2))
         except Exception:
             pass
-        bot_ids = env.hub_data_dir / f"bot_order_ids_{xk}.json"
         try:
-            bot_ids.write_text("{}")
+            env.bot_order_ids_path(xk).write_text("{}")
         except Exception:
             pass
         try:
@@ -501,7 +556,7 @@ async def api_reset_all():
         except Exception:
             pass
 
-    ctrl_state = env.hub_data_dir / "control_exchange_state.json"
+    ctrl_state = env.exchange_state_path(_ctrl_xk())
     try:
         ctrl_state.write_text(json.dumps({
             "usd_balance": balance or 0,
@@ -511,9 +566,9 @@ async def api_reset_all():
     except Exception:
         pass
 
-    _adapters.pop("control", None)
+    _adapters.pop(_ctrl_xk(), None)
     _get_mirror().reload()
-    for xk in env.exchanges:
+    for xk in _active_exchanges():
         _refresh_exchange_balance(xk)
 
     return {"ok": True, "balance": balance}
@@ -521,12 +576,10 @@ async def api_reset_all():
 
 @app.post("/api/close-all")
 async def api_close_all():
-    """Sell all positions on all exchanges, return to USDT."""
+    """Sell all positions on all real exchanges, return to USDT."""
     ctrl.stop_trader()
     results = {}
-    for xk in env.exchanges:
-        if xk == "control":
-            continue
+    for xk in env.exchanges:  # real exchanges only
         adapter = _get_adapter(xk)
         if not adapter:
             results[xk] = {"ok": False, "error": "no adapter"}
@@ -544,7 +597,7 @@ async def api_close_all():
         _refresh_exchange_balance(xk)
         _clear_trader_positions(xk)
         results[xk] = {"ok": True, "trades": trades}
-    _clear_trader_positions("control")
+    _clear_trader_positions(_ctrl_xk())
     return {"ok": True, "results": results}
 
 
@@ -554,8 +607,8 @@ async def api_close_coin(coin: str, exchange: str):
     coin = coin.upper()
     xk = exchange.lower()
 
-    if xk == "control":
-        return {"ok": False, "error": "Control positions close automatically when Kraken closes"}
+    if xk in ("control", "demo"):
+        return {"ok": False, "error": "Control/demo positions close automatically when the real exchange closes"}
 
     if xk not in env.exchanges:
         return {"ok": False, "error": f"Unknown exchange: {xk}"}
@@ -573,8 +626,7 @@ async def api_close_coin(coin: str, exchange: str):
         if not result:
             return {"ok": False, "error": "Sell failed"}
         _record_close_trade(xk, coin, symbol, qty, result, tag="CLOSE")
-        if xk == "kraken":
-            _get_mirror().mirror_sell(coin, tag="CLOSE")
+        _get_mirror().mirror_sell(coin, tag="CLOSE")
     else:
         ledger = {}
         try:
@@ -604,12 +656,10 @@ async def api_close_coin(coin: str, exchange: str):
                 env.pnl_ledger_path(xk).write_text(json.dumps(ledger, indent=2))
             except Exception:
                 pass
-        if xk == "kraken":
-            _get_mirror().mirror_sell(coin, tag="CLOSE")
+        _get_mirror().mirror_sell(coin, tag="CLOSE")
 
     _clear_coin_position(xk, coin)
-    if xk == "kraken":
-        _clear_coin_position("control", coin)
+    _clear_coin_position(_ctrl_xk(), coin)
     _refresh_exchange_balance(xk)
 
     return {"ok": True, "coin": coin, "exchange": xk, "qty": qty}
@@ -725,7 +775,7 @@ def _record_close_trade(xk: str, coin: str, symbol: str, qty: float, result,
 
 @app.post("/api/sync-control")
 async def api_sync_control():
-    """Reset control balance to match kraken USDT. Requires traders stopped, no positions."""
+    """Reset control/demo balance to match the configured sync-source exchange. Requires traders stopped, no positions."""
     if ctrl.trader_running:
         return {"ok": False, "error": "Traders must be stopped"}
 
@@ -742,23 +792,24 @@ async def api_sync_control():
             if has_real:
                 return {"ok": False, "error": f"{xk} has open positions"}
 
-    adapter_kr = _get_adapter("kraken")
-    if not adapter_kr:
-        return {"ok": False, "error": "Cannot connect to Kraken"}
+    sync_xk = _control_sync_exchange()
+    adapter_sync = _get_adapter(sync_xk) if sync_xk else None
+    if not adapter_sync:
+        return {"ok": False, "error": f"Cannot connect to sync exchange ({sync_xk or 'none configured'})"}
 
-    buying_power = adapter_kr.get_buying_power()
+    buying_power = adapter_sync.get_buying_power()
     if not buying_power or buying_power <= 0:
-        return {"ok": False, "error": "Kraken has no USD balance"}
+        return {"ok": False, "error": f"{sync_xk} has no USD balance"}
 
-    state_path = env.hub_data_dir / "control_exchange_state.json"
-    state_path.parent.mkdir(parents=True, exist_ok=True)
+    ck = _ctrl_xk()
+    state_path = env.exchange_state_path(ck)
     with open(state_path, "w") as f:
         json.dump({"usd_balance": buying_power, "holdings": {}, "orders": {}}, f, indent=2)
 
-    _adapters.pop("control", None)
+    _adapters.pop(ck, None)
     _get_mirror().reload()
-    _refresh_exchange_balance("control")
-    print(f"[Sync] Control balance set to ${buying_power:,.2f} from Kraken")
+    _refresh_exchange_balance(ck)
+    print(f"[Sync] {ck} balance set to ${buying_power:,.2f} from {sync_xk}")
     return {"ok": True, "balance": buying_power}
 
 
@@ -891,7 +942,7 @@ async def _file_watcher():
         try:
             env.reload()
 
-            for xk in env.exchanges:
+            for xk in _active_exchanges():
                 if _check(env.trader_status_path(xk), f"trader_status_{xk}"):
                     acct = AccountModel(env, xk)
                     ts = acct.trader_status()
@@ -943,7 +994,7 @@ async def _file_watcher():
                     ctrl.poll_ready_and_start_trader()
 
             traders_status = {}
-            for xk in env.exchanges:
+            for xk in _active_exchanges():
                 traders_status[xk] = {"running": ctrl.trader_running_for(xk)}
             sys_status = {
                 "neural_running": ctrl.neural_running,
@@ -956,13 +1007,13 @@ async def _file_watcher():
             balance_tick += 1
             if balance_tick >= 20:
                 balance_tick = 0
-                if not ctrl.trader_running_for("kraken"):
-                    try:
-                        _get_mirror().write_status()
-                    except Exception:
-                        pass
-                    _refresh_exchange_balance("control", write_history=False)
-                    _refresh_exchange_balance("kraken", write_history=False)
+                try:
+                    _get_mirror().write_status()
+                except Exception:
+                    pass
+                for xk in _active_exchanges():
+                    if not ctrl.trader_running_for(xk):
+                        _refresh_exchange_balance(xk, write_history=False)
 
         except Exception:
             pass
@@ -974,20 +1025,22 @@ def _init_exchange_balances():
     """Seed initial control state if needed, then refresh all balances."""
     env.reload()
 
-    ctrl_state = env.hub_data_dir / "control_exchange_state.json"
+    ck = _ctrl_xk()
+    ctrl_state = env.exchange_state_path(ck)
     if not ctrl_state.exists():
-        starting = float(env.get_config()["control_starting_usd"])
+        starting = float(env.get_config().get("control_starting_usd") or 0)
         if starting <= 0:
-            kr = _get_adapter("kraken")
-            starting = (kr.get_buying_power() or 0) if kr else 0
-            print(f"[Init] control starting balance from kraken: ${starting:,.2f}")
+            sync_xk = _control_sync_exchange()
+            if sync_xk:
+                adapter_sync = _get_adapter(sync_xk)
+                starting = (adapter_sync.get_buying_power() or 0) if adapter_sync else 0
+                print(f"[Init] {ck} starting balance from {sync_xk}: ${starting:,.2f}")
         if starting > 0:
-            ctrl_state.parent.mkdir(parents=True, exist_ok=True)
             with open(ctrl_state, "w") as f:
                 json.dump({"usd_balance": starting, "holdings": {}, "orders": {}}, f)
             print(f"[Init] wrote {ctrl_state}")
 
-    for xk in env.exchanges:
+    for xk in _active_exchanges():
         _refresh_exchange_balance(xk)
         status_path = env.trader_status_path(xk)
         if status_path.exists():
@@ -1000,10 +1053,45 @@ def _init_exchange_balances():
                 pass
 
 
+def _migrate_hub_data_flat_to_subdirs():
+    """One-time migration: move flat hub_data/{name}_{xk}.ext into hub_data/exchanges/{xk}/{name}.ext."""
+    import re
+    hub = env.hub_data_dir
+    if not hub.exists():
+        return
+    patterns = [
+        (re.compile(r'^trader_status_(.+)\.json$'),            "trader_status.json"),
+        (re.compile(r'^trade_history_(.+)\.jsonl$'),           "trade_history.jsonl"),
+        (re.compile(r'^pnl_ledger_(.+)\.json$'),               "pnl_ledger.json"),
+        (re.compile(r'^account_value_history_(.+)\.jsonl$'),   "account_value_history.jsonl"),
+        (re.compile(r'^bot_order_ids_(.+)\.json$'),            "bot_order_ids.json"),
+        (re.compile(r'^(.+)_exchange_state\.json$'),           "exchange_state.json"),
+    ]
+    moved = 0
+    for f in sorted(hub.iterdir()):
+        if not f.is_file():
+            continue
+        for pattern, new_name in patterns:
+            m = pattern.match(f.name)
+            if m:
+                xk = m.group(1)
+                dest_dir = hub / "exchanges" / xk
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                dest = dest_dir / new_name
+                if not dest.exists():
+                    f.rename(dest)
+                    print(f"[Migrate] {f.name} → exchanges/{xk}/{new_name}")
+                    moved += 1
+                break
+    if moved:
+        print(f"[Migrate] Moved {moved} state files into subdirectories")
+
+
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app):
+    _migrate_hub_data_flat_to_subdirs()
     _init_exchange_balances()
     asyncio.create_task(_file_watcher())
     yield

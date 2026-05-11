@@ -28,6 +28,9 @@
         <span class="pill-dot"></span>
         <span class="pill-label">Trader</span>
       </div>
+      <div class="vital-pill mode-demo" id="pill-mode">
+        <span class="pill-label">Demo</span>
+      </div>
     </div>
     <div id="topbar-account"></div>
     <div class="topbar-actions">
@@ -163,6 +166,18 @@
   <button class="mnav-btn" data-view="trades"><span class="mnav-icon">⬡</span>Trades</button>
   <button class="mnav-btn" data-view="settings"><span class="mnav-icon">⬢</span>More</button>
 </nav>
+
+<!-- ── Mode Switch Confirmation ── -->
+<dialog id="mode-switch-dialog" class="mode-switch-dialog">
+  <div class="msd-inner">
+    <h2 class="msd-title">Switch Mode?</h2>
+    <div class="msd-body"></div>
+    <div class="msd-actions">
+      <button class="btn msd-cancel">Cancel</button>
+      <button class="btn btn-primary msd-confirm">Switch</button>
+    </div>
+  </div>
+</dialog>
 
 <script src="/static/app.js"></script>
 </body>

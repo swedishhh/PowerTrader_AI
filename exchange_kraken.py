@@ -430,21 +430,13 @@ class KrakenAdapter(ExchangeAdapter):
 
 
 def create_adapter() -> KrakenAdapter:
-    import json
     import os
+    from exchange_api import load_api_keys
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    keys_path = os.path.join(base_dir, "kraken_api_keys.json")
-    api_key = ""
-    api_secret = ""
-    try:
-        if os.path.isfile(keys_path):
-            with open(keys_path, "r", encoding="utf-8") as f:
-                data = json.load(f) or {}
-            api_key = str(data.get("api_key", "")).strip()
-            api_secret = str(data.get("api_secret", "")).strip()
-    except Exception:
-        pass
+    keys = load_api_keys("kraken")
+    api_key = keys["api_key"]
+    api_secret = keys["api_secret"]
 
     hub_data = os.environ.get(
         "POWERTRADER_HUB_DIR", os.path.join(base_dir, "state", "hub_data"),

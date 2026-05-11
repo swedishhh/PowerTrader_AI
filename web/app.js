@@ -1,21 +1,38 @@
 /* ═══════════════════════════════════════════════════════════
    PowerTrader · Obsidian Command · Frontend
-   Multi-exchange: control (zero-friction baseline) vs kraken (real)
    ═══════════════════════════════════════════════════════════ */
 
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
 const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
 
-const XK_COLORS = { control: '#00D4FF', kraken: '#F0B429' };
-const XK_LABELS = { control: 'C', kraken: 'K' };
+// Control color is always #00D4FF. Real exchange colors fall back to a generic palette.
+const XK_PALETTE = ['#F0B429', '#A78BFA', '#34D399', '#F87171', '#60A5FA'];
+function xkColor(xk) {
+  if (xk === 'control' || xk === 'demo') return '#00D4FF';
+  const real = (state.exchangeList || []).filter(k => k !== 'control' && k !== 'demo');
+  const idx = real.indexOf(xk);
+  return XK_PALETTE[idx >= 0 ? idx : 0] || '#888';
+}
+function xkDisplayName(xk) {
+  if (xk === 'demo') return 'Demo';
+  if (xk === 'control') return 'Control';
+  return xk.charAt(0).toUpperCase() + xk.slice(1);
+}
+function xkShortLabel(xk) {
+  if (xk === 'demo') return 'D';
+  if (xk === 'control') return 'C';
+  return xk.charAt(0).toUpperCase();
+}
 
 const state = {
   coins: [],
   exchangeList: [],
-  exchangeData: {},  // { control: {account, pnl}, kraken: {account, pnl} }
-  positions: {},     // { control: {...}, kraken: {...} }
-  dca24h: {},        // { control: {...}, kraken: {...} }
-  lth: {},           // { control: {BTC: {qty, cost_usd, trades}}, kraken: {...} }
+  exchangeData: {},
+  positions: {},
+  dca24h: {},
+  lth: {},
+  tradingMode: 'demo',
+  discoveredExchanges: [],
   tradeStartLevel: 1,
   selectedCoin: null,
   selectedTf: '1hour',
@@ -23,7 +40,7 @@ const state = {
   traderRunning: false,
   chart: null,
   candleSeries: null,
-  acctSeries: {},    // { control: LineSeries, kraken: LineSeries }
+  acctSeries: {},
   priceLines: [],
   chartRefreshTimer: null,
   chartMode: 'candle',
@@ -225,13 +242,15 @@ function _applyUiPrefs(cfg) {
 
 async function refreshAll() {
   try {
-    const [statusData, coinsData, posData, cfgData] = await Promise.all([
-      api('status'), api('coins'), api('positions'), api('config'),
+    const [statusData, coinsData, posData, cfgData, discData] = await Promise.all([
+      api('status'), api('coins'), api('positions'), api('config'), api('discovered-exchanges'),
     ]);
 
     state.cfg = cfgData;
     state.tradeStartLevel = cfgData.trade_start_level || 1;
     state.exchangeList = statusData.exchange_list || ['control'];
+    state.tradingMode = statusData.trading_mode || 'demo';
+    state.discoveredExchanges = discData.exchanges || [];
 
     _applyUiPrefs(cfgData);
 
@@ -275,9 +294,16 @@ function updateSystemStatus(sys) {
 
   const pillNeural = $('#pill-neural');
   const pillTrader = $('#pill-trader');
+  const pillMode = $('#pill-mode');
 
   pillNeural.className = 'vital-pill ' + (sys.neural_running ? 'running' : 'stopped');
   pillTrader.className = 'vital-pill ' + (sys.trader_running ? 'running' : 'stopped');
+  if (pillMode) {
+    const isDemo = state.tradingMode === 'demo';
+    pillMode.className = 'vital-pill ' + (isDemo ? 'mode-demo' : 'mode-trading');
+    const label = pillMode.querySelector('.pill-label');
+    if (label) label.textContent = isDemo ? 'Demo' : 'Trading';
+  }
 
   const running = sys.neural_running || sys.trader_running;
   const btnStart = $('#btn-start-all');
@@ -321,10 +347,10 @@ function renderTopbarAccounts() {
     const unrealized = pnl.unrealized_profit_usd || 0;
     const rClass = realized >= 0 ? 'positive' : 'negative';
     const uClass = unrealized >= 0 ? 'positive' : 'negative';
-    const color = XK_COLORS[xk] || '#888';
+    const color = xkColor(xk);
 
     html += `<tr>
-      <td class="xk-table-name"><span class="xk-dot" style="background:${color}"></span>${xk}</td>
+      <td class="xk-table-name"><span class="xk-dot" style="background:${color}"></span>${xkDisplayName(xk)}</td>
       <td class="xk-table-val" data-xk-total="${xk}">${fmtUSD(total)}</td>
       <td class="xk-table-val" data-xk-bp="${xk}">${fmtUSD(bp)}</td>
       <td class="xk-table-val" data-xk-hold="${xk}">${fmtUSD(holdings)}</td>
@@ -501,8 +527,8 @@ function _updateCard(card, c, modeOverride) {
         if (!pos || pos.quantity <= 0) return;
         const pnl = pos.gain_loss_pct_buy;
         const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-        const color = XK_COLORS[xk] || '#888';
-        html += `<span class="cc-xk-group"><span class="cc-xk-tag" style="color:${color}">${XK_LABELS[xk] || xk[0].toUpperCase()}</span><span class="cc-notional">${fmtUSD(pos.value_usd)}</span><span class="cc-pnl ${pnlClass}">${fmtPct(pnl)}</span></span>`;
+        const color = xkColor(xk);
+        html += `<span class="cc-xk-group"><span class="cc-xk-tag" style="color:${color}">${xkShortLabel(xk)}</span><span class="cc-notional">${fmtUSD(pos.value_usd)}</span><span class="cc-pnl ${pnlClass}">${fmtPct(pnl)}</span></span>`;
       });
       container.innerHTML = html;
     } else {
@@ -523,14 +549,14 @@ function _updateCard(card, c, modeOverride) {
       if (!pos || pos.quantity <= 0) return;
       const pnl = pos.gain_loss_pct_buy;
       const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-      const color = XK_COLORS[xk] || '#888';
+      const color = xkColor(xk);
       const maxDca = state.cfg.max_dca_buys_per_24h || 1;
       const dca24 = (state.dca24h[xk] || {})[c.coin] || 0;
       const sellPrice = pos.trail_line > 0 ? fmtPrice(pos.trail_line) : '—';
       const totalDcaLevels = (state.cfg.dca_levels || []).length;
       const dcaChip = pos.dca_triggered_stages > 0 ? `<span class="pos-dca-chip">stg ${pos.dca_triggered_stages}/${totalDcaLevels}</span>` : '—';
       const nextDca = pos.next_dca_display ? `${pos.dca_line_price ? fmtPrice(pos.dca_line_price) + ' ' : ''}(${pos.next_dca_display})` : '—';
-      const krakenFields = xk !== 'control' ? `
+      const realExchangeFields = xk !== 'control' ? `
             <div class="cc-pf"><span class="cc-pf-l">Sell Level</span><span class="cc-pf-v">${sellPrice}</span></div>
             <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${dcaChip} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>
             <div class="cc-pf"><span class="cc-pf-l">Next DCA</span><span class="cc-pf-v">${nextDca}</span></div>` : '';
@@ -545,7 +571,7 @@ function _updateCard(card, c, modeOverride) {
           <div class="cc-pos-grid">
             <div class="cc-pf"><span class="cc-pf-l">Qty</span><span class="cc-pf-v">${fmtQty(pos.quantity, c.coin)}</span></div>
             <div class="cc-pf"><span class="cc-pf-l">Avg Cost</span><span class="cc-pf-v">${fmtPrice(pos.avg_cost_basis)}</span></div>
-            <div class="cc-pf"><span class="cc-pf-l">Bid / Ask</span><span class="cc-pf-v">${fmtPrice(pos.current_sell_price)} / ${fmtPrice(pos.current_buy_price)}</span></div>${krakenFields}
+            <div class="cc-pf"><span class="cc-pf-l">Bid / Ask</span><span class="cc-pf-v">${fmtPrice(pos.current_sell_price)} / ${fmtPrice(pos.current_buy_price)}</span></div>${realExchangeFields}
           </div>
         </div>`;
     });
@@ -880,7 +906,7 @@ async function loadAccountChart(hours) {
   state._acctHidden = state._acctHidden || {};
   state.exchangeList.forEach(xk => {
     state.acctSeries[xk] = state.chart.addLineSeries({
-      color: XK_COLORS[xk] || '#8888A8',
+      color: xkColor(xk),
       lineWidth: 2,
       title: '',
       priceScaleId: 'right',
@@ -898,7 +924,7 @@ async function loadAccountChart(hours) {
     priceScaleId: 'right',
   });
 
-  // Diff series on left axis (kraken − control)
+  // Diff series on left axis (real exchange − control)
   if (hasMulti) {
     diffContainer.classList.add('hidden');
     state._diffSeries = state.chart.addLineSeries({
@@ -970,7 +996,7 @@ function _buildAccountLegend() {
   legend.classList.remove('hidden');
   legend.innerHTML = '';
   state.exchangeList.forEach(xk => {
-    const color = XK_COLORS[xk] || '#888';
+    const color = xkColor(xk);
     const hidden = !!state._acctHidden[xk];
     const item = document.createElement('button');
     item.className = 'legend-item' + (hidden ? ' legend-hidden' : '');
@@ -986,7 +1012,10 @@ function _buildAccountLegend() {
   if (state._diffSeries) {
     const item = document.createElement('span');
     item.className = 'legend-item legend-static';
-    item.innerHTML = `<span class="legend-dot" style="background:#555570"></span><span class="legend-label">Δ kraken − control</span>`;
+    const realXk = state.exchangeList.find(xk => xk !== 'control');
+    const ctrlLabel = xkDisplayName('control');
+    const realLabel = realXk ? xkDisplayName(realXk) : 'real';
+    item.innerHTML = `<span class="legend-dot" style="background:#555570"></span><span class="legend-label">Δ ${realLabel} − ${ctrlLabel}</span>`;
     legend.appendChild(item);
   }
 }
@@ -1017,14 +1046,15 @@ async function _applyAccountData(hours) {
       pointsByXk[xk] = points;
     });
 
-    // Diff series: kraken − control
+    // Diff series: real exchange − control
     if (state._diffSeries && state.exchangeList.length >= 2) {
-      const ctrlPts = pointsByXk[state.exchangeList[0]] || [];
-      const krakenPts = pointsByXk[state.exchangeList[1]] || [];
-      if (ctrlPts.length > 0 && krakenPts.length > 0) {
+      const ctrlPts = pointsByXk['control'] || [];
+      const realXk2 = state.exchangeList.find(xk => xk !== 'control');
+      const realPts = realXk2 ? (pointsByXk[realXk2] || []) : [];
+      if (ctrlPts.length > 0 && realPts.length > 0) {
         const ctrlMap = new Map(ctrlPts.map(p => [p.time, p.value]));
         const diffPts = [];
-        krakenPts.forEach(p => {
+        realPts.forEach(p => {
           const cv = ctrlMap.get(p.time);
           if (cv !== undefined) diffPts.push({time: p.time, value: p.value - cv});
         });
@@ -1032,19 +1062,19 @@ async function _applyAccountData(hours) {
       }
     }
 
-    // Trade markers on kraken line only (skip control trades)
-    const krakenTrades = [];
+    // Trade markers on real exchange lines only (skip control trades)
+    const realTrades = [];
     const tradesByXk = tradeData.trades || {};
     state.exchangeList.forEach(xk => {
       if (xk === 'control') return;
-      (tradesByXk[xk] || []).forEach(t => krakenTrades.push({...t, _xk: xk}));
+      (tradesByXk[xk] || []).forEach(t => realTrades.push({...t, _xk: xk}));
     });
 
-    const krakenXk = state.exchangeList.find(xk => xk !== 'control');
-    if (state._acctMarkerSeries && krakenTrades.length > 0 && krakenXk) {
-      const refSeries = state.acctSeries[krakenXk];
+    const realXk = state.exchangeList.find(xk => xk !== 'control');
+    if (state._acctMarkerSeries && realTrades.length > 0 && realXk) {
+      const refSeries = state.acctSeries[realXk];
       if (refSeries) {
-        const markers = krakenTrades
+        const markers = realTrades
           .filter(t => t.side === 'buy' || t.side === 'sell')
           .map(t => {
             const side = t.side.toLowerCase();
@@ -1066,7 +1096,7 @@ async function _applyAccountData(hours) {
           })
           .sort((a, b) => a.time - b.time);
 
-        const refRaw = histByXk[krakenXk] || [];
+        const refRaw = histByXk[realXk] || [];
         const baseVal = refRaw.length > 0 ? refRaw[0].total_account_value : 0;
         const overlayPoints = refRaw.map(h => ({
           time: Math.floor(h.ts),
@@ -1163,8 +1193,8 @@ function updateChartPriceLines() {
   state.exchangeList.forEach(xk => {
     const pos = (state.positions[xk] || {})[state.selectedCoin];
     if (!pos || pos.quantity <= 0) return;
-    const color = XK_COLORS[xk] || '#888';
-    const label = XK_LABELS[xk] || xk[0].toUpperCase();
+    const color = xkColor(xk);
+    const label = xkShortLabel(xk);
 
     if (pos.avg_cost_basis) {
       const pl = state.candleSeries.createPriceLine({
@@ -1245,7 +1275,7 @@ function updateCoinPosition(coin) {
     if (!pos || pos.quantity <= 0) return;
     const pnl = pos.gain_loss_pct_buy;
     const pnlClass = pnl >= 0 ? 'positive' : 'negative';
-    const color = XK_COLORS[xk] || '#888';
+    const color = xkColor(xk);
     html += `
       <div class="pos-stat-group">
         <span class="pos-stat-xk" style="color:${color}">${xk}</span>
@@ -1289,8 +1319,8 @@ async function loadTradeHistory() {
     const isSell = t.side === 'sell';
     const hasPnl = isSell && t.pnl_pct != null;
     const pnlClass = hasPnl ? (t.pnl_pct >= 0 ? 'positive' : 'negative') : '';
-    const xkColor = XK_COLORS[t._xk] || '#888';
-    const xkBadge = `<span class="hist-xk" style="color:${xkColor}">${XK_LABELS[t._xk] || t._xk[0].toUpperCase()}</span>`;
+    const xkC = xkColor(t._xk);
+    const xkBadge = `<span class="hist-xk" style="color:${xkC}">${xkShortLabel(t._xk)}</span>`;
 
     if (t.side === 'skip') {
       return `
@@ -1355,8 +1385,8 @@ async function loadCompare() {
 
     const xks = data.exchanges || state.exchangeList;
     const multi = xks.length >= 2;
-    const c0 = XK_COLORS[xks[0]] || '#888';
-    const c1 = multi ? (XK_COLORS[xks[1]] || '#888') : c0;
+    const c0 = xkColor(xks[0]);
+    const c1 = multi ? xkColor(xks[1]) : c0;
 
     let html = '<table class="compare-table"><thead>';
     html += '<tr class="compare-hdr-top"><th rowspan="2">Coin</th>';
@@ -1646,7 +1676,14 @@ const _CFG_GROUP_ORDER = [
   'Control Exchange', 'UI Preferences', 'Training', 'Startup',
 ];
 
-function _cfgParseField(el, rule) {
+function _cfgParseField(el, rule, key) {
+  if (key === 'exchanges') {
+    return $$('input[name="exchanges"]:checked', el).map(cb => cb.value);
+  }
+  if (key === 'trading_mode') {
+    const checked = $('input[name="trading_mode"]:checked', el);
+    return checked ? checked.value : rule.options[0];
+  }
   if (rule.type === 'bool') return el.checked;
   if (rule.type === 'int') return parseInt(el.value, 10);
   if (rule.type === 'float') return parseFloat(el.value);
@@ -1687,7 +1724,7 @@ function _cfgReadForm() {
     if (!rule.group) continue;
     const el = $(`#cfg-field-${key}`);
     if (!el) continue;
-    patch[key] = _cfgParseField(el, rule);
+    patch[key] = _cfgParseField(el, rule, key);
   }
   return patch;
 }
@@ -1705,7 +1742,7 @@ function _cfgCheckDirty(original) {
     const el = $(`#cfg-field-${key}`);
     if (!el) continue;
 
-    const val = _cfgParseField(el, rule);
+    const val = _cfgParseField(el, rule, key);
     const err = _cfgValidateField(key, val, rule);
 
     const fieldEl = el.closest('.settings-field');
@@ -1733,6 +1770,57 @@ function _cfgCheckDirty(original) {
 
 function _cfgBuildInput(key, rule, value) {
   const id = `cfg-field-${key}`;
+
+  // Special: exchanges — render as checkboxes from discovered list
+  if (key === 'exchanges') {
+    const selected = Array.isArray(value) ? value : [];
+    const isDemo = state.tradingMode === 'demo';
+    const discovered = state.discoveredExchanges;
+    const boxes = discovered.length
+      ? discovered.map(xk => `
+          <label class="cfg-exchange-check${isDemo ? ' cfg-exchange-disabled' : ''}">
+            <input type="checkbox" name="exchanges" value="${xk}" ${selected.includes(xk) ? 'checked' : ''} ${isDemo ? 'disabled' : ''}>
+            ${xk.charAt(0).toUpperCase() + xk.slice(1)}
+          </label>`).join('')
+      : '<span class="settings-field-hint">No real exchanges found (add exchange_*.py files)</span>';
+    return `<div class="settings-field" id="cfg-field-exchanges-wrap"${isDemo ? ' style="opacity:0.4;pointer-events:none"' : ''}>
+      <label>${rule.label}</label>
+      <div class="cfg-exchange-checks" id="${id}">${boxes}</div>
+      ${rule.hint ? `<div class="settings-field-hint">${rule.hint}</div>` : ''}
+      <div class="settings-field-error"></div>
+    </div>`;
+  }
+
+  // Special: control_sync_exchange — render as dropdown of discovered exchanges
+  if (key === 'control_sync_exchange') {
+    const discovered = state.discoveredExchanges;
+    const opts = ['', ...discovered].map(xk =>
+      `<option value="${xk}" ${value === xk ? 'selected' : ''}>${xk || '(first in list)'}</option>`
+    ).join('');
+    return `<div class="settings-field">
+      <label for="${id}">${rule.label}</label>
+      <select id="${id}">${opts}</select>
+      ${rule.hint ? `<div class="settings-field-hint">${rule.hint}</div>` : ''}
+      <div class="settings-field-error"></div>
+    </div>`;
+  }
+
+  if (rule.ui_widget === 'radio') {
+    const locked = state.traderRunning;
+    const opts = (rule.options || []).map(o =>
+      `<label class="cfg-radio-opt${locked ? ' cfg-radio-locked' : ''}">
+        <input type="radio" name="${key}" value="${o}" ${value === o ? 'checked' : ''} ${locked ? 'disabled' : ''}>
+        <span>${o.charAt(0).toUpperCase() + o.slice(1)}</span>
+      </label>`
+    ).join('');
+    return `<div class="settings-field">
+      <label>${rule.label}</label>
+      <div class="cfg-radio-group" id="${id}">${opts}</div>
+      ${locked ? `<div class="settings-field-hint cfg-mode-locked">Stop all traders to change mode.</div>` : ''}
+      ${rule.hint ? `<div class="settings-field-hint">${rule.hint}</div>` : ''}
+      <div class="settings-field-error"></div>
+    </div>`;
+  }
   if (rule.type === 'bool') {
     return `<div class="settings-field settings-field-toggle">
       <input type="checkbox" id="${id}" ${value ? 'checked' : ''}>
@@ -1803,7 +1891,22 @@ function renderConfig(cfg) {
 
   const original = {...cfg};
   form.addEventListener('input', () => _cfgCheckDirty(original));
-  form.addEventListener('change', () => _cfgCheckDirty(original));
+  form.addEventListener('change', () => {
+    _cfgCheckDirty(original);
+    // When trading_mode changes, toggle exchanges disabled state
+    const modeEl = $('#cfg-field-trading_mode');
+    const wrap = $('#cfg-field-exchanges-wrap');
+    if (modeEl && wrap) {
+      const checkedMode = $('input[name="trading_mode"]:checked', modeEl);
+      const isDemo = checkedMode ? checkedMode.value === 'demo' : true;
+      wrap.style.opacity = isDemo ? '0.4' : '';
+      wrap.style.pointerEvents = isDemo ? 'none' : '';
+      $$('input[name="exchanges"]', wrap).forEach(cb => { cb.disabled = isDemo; });
+      $$('label', wrap).forEach(lbl => {
+        lbl.classList.toggle('cfg-exchange-disabled', isDemo);
+      });
+    }
+  });
 
   $('#btn-save-cfg').addEventListener('click', () => saveConfig(original));
 }
@@ -1818,21 +1921,70 @@ async function loadAndRenderConfig() {
   }
 }
 
+function _confirmModeSwitch(fromMode, toMode) {
+  return new Promise(resolve => {
+    const dialog = $('#mode-switch-dialog');
+    const title = dialog.querySelector('.msd-title');
+    const body = dialog.querySelector('.msd-body');
+    const confirmBtn = dialog.querySelector('.msd-confirm');
+    const cancelBtn = dialog.querySelector('.msd-cancel');
+
+    const toLabel = toMode.charAt(0).toUpperCase() + toMode.slice(1);
+    title.textContent = `Switch to ${toLabel} Mode?`;
+    confirmBtn.textContent = `Switch to ${toLabel}`;
+
+    if (toMode === 'trading') {
+      body.innerHTML = `
+        <p>Activating <strong>Trading mode</strong> connects your real exchange accounts. <strong>Real capital will be at risk.</strong></p>
+        <p>Your live trade ledger, account balance, and order history become active immediately.</p>
+        <p class="msd-note">Your Demo account and history remain safely stored and untouched.</p>`;
+    } else {
+      body.innerHTML = `
+        <p>Switching to <strong>Demo mode</strong> activates a paper trading account with simulated capital.</p>
+        <p>No real orders will be placed. Your live exchange accounts are paused — existing positions remain open on the exchange but the bot will not trade them.</p>
+        <p class="msd-note">Your Trading account and history remain safely stored and untouched.</p>`;
+    }
+
+    function onConfirm() { cleanup(); dialog.close(); resolve(true); }
+    function onCancel()  { cleanup(); dialog.close(); resolve(false); }
+    function cleanup() {
+      confirmBtn.removeEventListener('click', onConfirm);
+      cancelBtn.removeEventListener('click', onCancel);
+    }
+    confirmBtn.addEventListener('click', onConfirm);
+    cancelBtn.addEventListener('click', onCancel);
+    dialog.showModal();
+  });
+}
+
 async function saveConfig(original) {
   const patch = _cfgReadForm();
   const btn = $('#btn-save-cfg');
   btn.disabled = true;
 
+  const modeChanged = patch.trading_mode && patch.trading_mode !== original.trading_mode;
+  if (modeChanged) {
+    const confirmed = await _confirmModeSwitch(original.trading_mode, patch.trading_mode);
+    if (!confirmed) {
+      _cfgCheckDirty(original);
+      return;
+    }
+  }
+
   const result = await apiPut('config', patch);
   if (result.ok) {
     state.cfg = {...state.cfg, ...patch};
     _applyUiPrefs(state.cfg);
-    btn.textContent = 'Saved!';
-    setTimeout(() => {
-      btn.textContent = 'Save Config';
-      // Re-render with new original so dirty-tracking resets
-      renderConfig(state.cfg);
-    }, 1500);
+    if (modeChanged) {
+      state.tradingMode = patch.trading_mode;
+      await refreshAll();
+    } else {
+      btn.textContent = 'Saved!';
+      setTimeout(() => {
+        btn.textContent = 'Save Config';
+        renderConfig(state.cfg);
+      }, 1500);
+    }
   } else {
     btn.disabled = false;
     btn.textContent = 'Error — retry?';
