@@ -152,6 +152,140 @@ body {
   50% { opacity: 0.5; }
 }
 
+/* Mode chip: Demo (control color) / Trading (green) */
+.vital-pill.mode-demo {
+  border-color: #00D4FF55;
+  color: #00D4FF;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.vital-pill.mode-trading {
+  border-color: var(--green-dim);
+  color: var(--green);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+/* Exchange checkboxes in config */
+.cfg-exchange-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.cfg-exchange-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.cfg-exchange-check input[type="checkbox"] {
+  accent-color: #00D4FF;
+  width: 14px;
+  height: 14px;
+}
+
+.cfg-exchange-disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+/* ── Mode radio group ── */
+.cfg-radio-group {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.cfg-radio-opt {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  padding: 7px 16px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  transition: border-color 0.15s, background 0.15s;
+  user-select: none;
+}
+.cfg-radio-opt input[type="radio"] {
+  accent-color: #00D4FF;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+.cfg-radio-opt:has(input:checked) {
+  border-color: #00D4FF88;
+  background: #00D4FF0F;
+  color: var(--text);
+}
+.cfg-radio-locked {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.cfg-mode-locked {
+  color: #F5A623;
+  margin-top: 4px;
+}
+
+/* ── Mode switch dialog ── */
+.mode-switch-dialog {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 0;
+  max-width: 480px;
+  width: 90vw;
+  color: var(--text);
+  box-shadow: 0 24px 64px #00000088;
+}
+.mode-switch-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(6px);
+}
+.msd-inner {
+  padding: 32px 36px 28px;
+}
+.msd-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0 0 18px;
+  color: var(--text);
+}
+.msd-body {
+  line-height: 1.65;
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+}
+.msd-body p { margin: 0 0 10px; }
+.msd-body p:last-child { margin-bottom: 0; }
+.msd-body strong { color: var(--text); }
+.msd-note {
+  font-size: 0.85em;
+  color: var(--text-muted);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-top: 12px;
+}
+.msd-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+.msd-confirm {
+  background: #00D4FF;
+  color: #0a0a0f;
+  font-weight: 600;
+}
+.msd-confirm:hover { background: #00e8ff; }
+
 .topbar-actions {
   display: flex;
   gap: 8px;

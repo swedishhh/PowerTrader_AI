@@ -52,20 +52,6 @@ class BinanceAdapter(ExchangeAdapter):
 
 
 def create_adapter() -> BinanceAdapter:
-    import json
-    import os
-
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    keys_path = os.path.join(base_dir, "binance_api_keys.json")
-    api_key = ""
-    api_secret = ""
-    try:
-        if os.path.isfile(keys_path):
-            with open(keys_path, "r", encoding="utf-8") as f:
-                data = json.load(f) or {}
-            api_key = str(data.get("api_key", "")).strip()
-            api_secret = str(data.get("api_secret", "")).strip()
-    except Exception:
-        pass
-
-    return BinanceAdapter(api_key=api_key, api_secret=api_secret)
+    from exchange_api import load_api_keys
+    keys = load_api_keys("binance")
+    return BinanceAdapter(api_key=keys["api_key"], api_secret=keys["api_secret"])

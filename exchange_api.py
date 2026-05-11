@@ -125,18 +125,47 @@ class ExchangeAdapter(ABC):
 # Auto-discovery: scan for exchange_*.py to find available exchanges
 # ------------------------------------------------------------------
 
+_SYNTHETIC_EXCHANGES = {"api", "control"}
+
+
 def discover_exchanges(search_dir: Optional[str] = None) -> List[str]:
-    """Return sorted list of exchange keys found as exchange_<key>.py files."""
+    """Return sorted list of real exchange keys found as exchange_<key>.py files.
+
+    Excludes synthetic adapters (api, control) — those are managed internally.
+    """
     if search_dir is None:
         search_dir = os.path.dirname(os.path.abspath(__file__))
     keys = []
     for path in glob.glob(os.path.join(search_dir, "exchange_*.py")):
-        name = os.path.basename(path)  # exchange_demo.py
-        key = name[len("exchange_"):-len(".py")]  # demo
-        if key == "api":
+        name = os.path.basename(path)
+        key = name[len("exchange_"):-len(".py")]
+        if key in _SYNTHETIC_EXCHANGES:
             continue
         keys.append(key)
     return sorted(keys)
+
+
+def load_api_keys(exchange_name: str) -> dict:
+    """Load credentials for *exchange_name* from exchange_api_keys.json.
+
+    Returns a dict with at least "api_key" and "api_secret" (may be empty strings).
+    Raises FileNotFoundError if the keys file doesn't exist yet.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    keys_path = os.path.join(base_dir, "exchange_api_keys.json")
+    if not os.path.isfile(keys_path):
+        raise FileNotFoundError(
+            f"exchange_api_keys.json not found. Copy exchange_api_keys.json.template "
+            f"to exchange_api_keys.json and fill in your credentials."
+        )
+    with open(keys_path, "r", encoding="utf-8") as f:
+        import json as _json
+        all_keys = _json.load(f)
+    entry = all_keys.get(exchange_name) or {}
+    return {
+        "api_key": str(entry.get("api_key") or "").strip(),
+        "api_secret": str(entry.get("api_secret") or "").strip(),
+    }
 
 
 def exchange_display_name(key: str) -> str:

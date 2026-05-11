@@ -677,25 +677,15 @@ class RobinhoodAdapter(ExchangeAdapter):
 
 
 def create_adapter() -> RobinhoodAdapter:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    key_path = os.path.join(base_dir, "r_key.txt")
-    secret_path = os.path.join(base_dir, "r_secret.txt")
-
-    api_key = ""
-    private_key = ""
-
-    try:
-        with open(key_path, "r", encoding="utf-8") as f:
-            api_key = (f.read() or "").strip()
-        with open(secret_path, "r", encoding="utf-8") as f:
-            private_key = (f.read() or "").strip()
-    except Exception:
-        pass
+    from exchange_api import load_api_keys
+    keys = load_api_keys("robinhood")
+    api_key = keys["api_key"]
+    private_key = keys["api_secret"]  # base64-encoded nacl signing key
 
     if not api_key or not private_key:
         raise RuntimeError(
             "\n[PowerTrader] Robinhood API credentials not found.\n"
-            "Open the GUI and go to Settings → Robinhood API → Setup / Update.\n"
+            "Fill in exchange_api_keys.json with your Robinhood api_key and api_secret.\n"
         )
 
     hub_data = os.environ.get("POWERTRADER_HUB_DIR", os.path.join(base_dir, "state", "hub_data"))

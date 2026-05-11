@@ -91,9 +91,12 @@ HUB_DATA_DIR = os.environ.get(
 )
 os.makedirs(HUB_DATA_DIR, exist_ok=True)
 
+XK_DIR = os.path.join(HUB_DATA_DIR, EXCHANGE_KEY)
+os.makedirs(XK_DIR, exist_ok=True)
+
 
 def _exchange_path(basename: str, ext: str) -> str:
-    return os.path.join(HUB_DATA_DIR, f"{basename}_{EXCHANGE_KEY}{ext}")
+    return os.path.join(XK_DIR, f"{basename}{ext}")
 
 
 TRADER_STATUS_PATH = _exchange_path("trader_status", ".json")
