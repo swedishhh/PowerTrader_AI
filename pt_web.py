@@ -25,7 +25,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from pt_env import PTEnv
+from pt_env import PTEnv, TRAIN_TF_MINUTES
 from pt_models import CoinModel, AccountModel, SystemModel
 from pt_controller import ProcessController
 from control_mirror import ControlMirror
@@ -412,9 +412,6 @@ async def api_data_manager_stop():
     return {"ok": True}
 
 
-_DM_TF_MINUTES = [60, 120, 240, 480, 720, 1440, 10080]
-
-
 @app.get("/api/data-manager/stats")
 async def api_data_manager_stats():
     """Per-(coin, tf) stats from the local kucoin ArcticDB libraries."""
@@ -433,7 +430,7 @@ async def api_data_manager_stats():
 
         now = pd.Timestamp.now(tz="UTC")
         rows = []
-        for tf in _DM_TF_MINUTES:
+        for tf in TRAIN_TF_MINUTES:
             lib_name = f"kucoin{tf}"
             if lib_name not in known_libs:
                 for coin in env.coins:
@@ -469,8 +466,16 @@ async def api_data_manager_stats():
 
 
 @app.get("/api/data-manager/chart/{coin}/{tf_minutes}")
-async def api_data_manager_chart(coin: str, tf_minutes: int, limit: int = 1000):
-    """Return OHLCV candles for a coin+tf from the local ArcticDB store."""
+async def api_data_manager_chart(coin: str, tf_minutes: int, limit: int = 1500,
+                                  start: int = None, end: int = None):
+    """Return OHLCV candles from the local ArcticDB store.
+
+    If start/end (Unix seconds) are given, the result is sliced to that window —
+    this is used for dynamic resolution on zoom.  The slice is then resampled
+    only if it still exceeds `limit` rows.  `effective_minutes` in the response
+    tells the UI what bar period was actually used.
+    """
+    import math
     try:
         import arcticdb as adb
         store = adb.Arctic(f"lmdb:///{env.historic_data_dir}")
@@ -481,8 +486,24 @@ async def api_data_manager_chart(coin: str, tf_minutes: int, limit: int = 1000):
         sym = f"{coin}_USDT"
         df = lib.read(sym).data
         if df.empty:
-            return {"candles": []}
-        df = df.tail(limit)
+            return {"candles": [], "effective_minutes": tf_minutes, "total_rows": 0}
+
+        if start and end:
+            t0 = pd.Timestamp(start, unit="s", tz="UTC")
+            t1 = pd.Timestamp(end,   unit="s", tz="UTC")
+            df = df.loc[t0:t1]
+
+        total = len(df)
+        effective_minutes = tf_minutes
+        if total > limit:
+            factor = math.ceil(total / limit)
+            effective_minutes = factor * tf_minutes
+            df = (
+                df.resample(f"{effective_minutes}min")
+                .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+                .dropna()
+            )
+
         candles = [
             {
                 "time": int(ts.timestamp()),
@@ -493,7 +514,7 @@ async def api_data_manager_chart(coin: str, tf_minutes: int, limit: int = 1000):
             }
             for ts, row in df.iterrows()
         ]
-        return {"candles": candles}
+        return {"candles": candles, "effective_minutes": effective_minutes, "total_rows": total}
     except Exception as e:
         return {"candles": [], "error": str(e)}
 

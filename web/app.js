@@ -208,6 +208,7 @@ function handleWSMessage(msg) {
 // ── Initialize ──
 
 let _refreshInterval = null;
+let _dataTabInterval = null;
 
 async function init() {
   setupTabs();
@@ -216,6 +217,12 @@ async function init() {
   setupTimeframes();
   setupSash();
   setupViewToggle();
+  setupDataTabDelegation();
+  setupTradesDelegation();
+
+  $('#btn-chart-reset').addEventListener('click', () => {
+    if (state.chart) state.chart.timeScale().fitContent();
+  });
 
   // Load schema once at startup
   try {
@@ -282,8 +289,7 @@ async function refreshAll() {
     populateLogSourceDropdown();
 
     if ($('#tab-compare').classList.contains('active')) loadCompare();
-    if ($('#tab-data').classList.contains('active')) _loadDataTabStats();
-    if (!$('#training-list').querySelector('.train-log-panel')) renderTraining(coinsData.coins);
+    if (!$('#training-list').querySelector('.train-row')) renderTraining(coinsData.coins);
     else updateTrainingBadges(coinsData.coins);
     if (!$('#tab-settings').classList.contains('active')) renderConfig(cfgData);
   } catch (e) {
@@ -308,6 +314,12 @@ function updateDataManagerPill(dmState) {
   pill.className = 'vital-pill ' + cls;
   if (label) label.textContent = text;
   if (dot) dot.className = 'pill-dot' + (['Backfill','Topup'].includes(dmState) ? ' pulsing' : '');
+
+  const badge = $('.dm-state-badge');
+  if (badge) {
+    badge.className = `dm-state-badge dm-state-${dmState.toLowerCase()}`;
+    badge.textContent = dmState;
+  }
 }
 
 function updateSystemStatus(sys) {
@@ -705,6 +717,7 @@ function selectCoin(coin) {
 
   $('#chart-coin-label').textContent = coin;
   $('#tf-selector').style.display = '';
+  _setChartResetVisible(false);
   $('#panel-chart').classList.add('mobile-active');
 
   if (wasAccount) rebuildTimeframeButtons();
@@ -720,7 +733,7 @@ function selectCoin(coin) {
 function _updateHistoryTabLabel() {
   const btn = $('[data-tab="history"]');
   if (!btn) return;
-  btn.textContent = state.historyFilterCoin ? `History: ${state.historyFilterCoin}` : 'History';
+  btn.textContent = state.historyFilterCoin ? `Trades: ${state.historyFilterCoin}` : 'Trades';
 }
 
 function _replaceCard(grid, oldCard, coin, mode) {
@@ -749,16 +762,25 @@ function selectAccountChart(hours) {
 
   $('#chart-coin-label').textContent = 'PORTFOLIO';
   $('#tf-selector').style.display = 'none';
+  _setChartResetVisible(false);
   $('#coin-position').classList.add('hidden');
   $('#panel-chart').classList.add('mobile-active');
 
   loadAccountChart(state.accountRange);
 }
 
+function _setChartResetVisible(v) {
+  const btn = $('#btn-chart-reset');
+  if (btn) btn.style.display = v ? '' : 'none';
+}
+
 async function showHistoricChart(coin, tfMinutes) {
   state.chartMode = 'historic';
   state.selectedCoin = null;
+  _setChartResetVisible(true);
 
+  if (_historicFetchTimer) { clearTimeout(_historicFetchTimer); _historicFetchTimer = null; }
+  if (_historicFetchAbort) { _historicFetchAbort.abort(); _historicFetchAbort = null; }
   if (state.chartRefreshTimer) {
     clearInterval(state.chartRefreshTimer);
     state.chartRefreshTimer = null;
@@ -829,10 +851,62 @@ async function showHistoricChart(coin, tfMinutes) {
       const pp = pricePrecision(last.close);
       state.candleSeries.applyOptions({priceFormat: {type: 'price', ...pp}});
       state.chart.timeScale().fitContent();
+
+      _updateHistoricLabel(coin, tfMinutes, data);
+
+      // Subscribe to visible range changes for adaptive resolution
+      state.chart.timeScale().subscribeVisibleTimeRangeChange(range => {
+        if (!range || state.chartMode !== 'historic') return;
+        clearTimeout(_historicFetchTimer);
+        _historicFetchTimer = setTimeout(() => _fetchHistoricRange(coin, tfMinutes, range), 300);
+      });
     }
   } catch (e) {
     console.error('Failed to load historic candles:', e);
   }
+}
+
+function _updateHistoricLabel(coin, tfMinutes, data) {
+  const base = TF_MINUTES_LABEL[tfMinutes] || `${tfMinutes}m`;
+  const eff = data.effective_minutes;
+  const resampled = eff && eff !== tfMinutes;
+  const suffix = resampled ? ` → ${_fmtMinutes(eff)}` : '';
+  const rows = data.total_rows ? ` · ${data.total_rows.toLocaleString()} rows` : '';
+  $('#chart-coin-label').textContent = `${coin} · ${base}${suffix} (Historic${rows})`;
+}
+
+async function _fetchHistoricRange(coin, tfMinutes, range) {
+  if (_historicFetchAbort) _historicFetchAbort.abort();
+  _historicFetchAbort = new AbortController();
+
+  // Fetch the visible window plus 100% buffer on each side so panning
+  // a short distance doesn't immediately trigger another request.
+  const span = range.to - range.from;
+  const start = Math.floor(range.from - span);
+  const end   = Math.ceil(range.to   + span);
+
+  try {
+    const params = new URLSearchParams({start, end, limit: 1500});
+    const data = await api(`data-manager/chart/${coin}/${tfMinutes}?${params}`,
+                            {signal: _historicFetchAbort.signal});
+    if (!data.candles || !data.candles.length || state.chartMode !== 'historic') return;
+
+    const visibleRange = state.chart.timeScale().getVisibleRange();
+    state.candleSeries.setData(data.candles);
+    if (visibleRange) state.chart.timeScale().setVisibleRange(visibleRange);
+
+    _updateHistoricLabel(coin, tfMinutes, data);
+  } catch (e) {
+    if (e.name !== 'AbortError') console.error('Historic range fetch failed:', e);
+  }
+}
+
+function _fmtMinutes(m) {
+  function fmt(v) { return Number.isInteger(v) ? String(v) : v.toFixed(1); }
+  if (m < 60)    return `${m}m`;
+  if (m < 1440)  return `${fmt(m / 60)}h`;
+  if (m < 10080) return `${fmt(m / 1440)}d`;
+  return `${fmt(m / 10080)}w`;
 }
 
 async function loadChart(coin, tf) {
@@ -840,6 +914,8 @@ async function loadChart(coin, tf) {
   $('#chart-legend').classList.add('hidden');
   $('#chart-diff-container').classList.add('hidden');
 
+  if (_historicFetchTimer) { clearTimeout(_historicFetchTimer); _historicFetchTimer = null; }
+  if (_historicFetchAbort) { _historicFetchAbort.abort(); _historicFetchAbort = null; }
   if (state.chartRefreshTimer) {
     clearInterval(state.chartRefreshTimer);
     state.chartRefreshTimer = null;
@@ -1396,80 +1472,116 @@ function updateCoinPosition(coin) {
 
 // ── Trade History Tab ──
 
+let _tradeSortCol = 'ts';
+let _tradeSortAsc = false;
+
+function setupTradesDelegation() {
+  $('#tab-history').addEventListener('click', e => {
+    const th = e.target.closest('.trades-th[data-col]');
+    if (th) {
+      if (_tradeSortCol === th.dataset.col) _tradeSortAsc = !_tradeSortAsc;
+      else { _tradeSortCol = th.dataset.col; _tradeSortAsc = true; }
+      _renderTradesTable && _renderTradesTable();
+      return;
+    }
+    const row = e.target.closest('.trades-row[data-coin]');
+    if (row) selectCoin(row.dataset.coin);
+  });
+}
+
+let _renderTradesTable = null;
+
 async function loadTradeHistory() {
+  const container = $('#history-list');
   const data = await api('trades?limit=200');
   if (!data.trades) return;
 
-  const container = $('#history-list');
   let allTrades = [];
-  const tradesByXk = data.trades;
   state.exchangeList.forEach(xk => {
-    (tradesByXk[xk] || []).forEach(t => allTrades.push({...t, _xk: xk}));
+    (data.trades[xk] || []).forEach(t => allTrades.push({...t, _xk: xk}));
   });
 
-  allTrades.sort((a, b) => (b.ts || 0) - (a.ts || 0));
   const filter = state.historyFilterCoin;
-  if (filter) {
-    allTrades = allTrades.filter(t => (t.symbol || '').startsWith(filter + '_'));
-  }
+  if (filter) allTrades = allTrades.filter(t => (t.symbol || '').startsWith(filter + '_'));
 
   if (allTrades.length === 0) {
-    container.innerHTML = '<div class="empty-state">No trade history</div>';
+    container.innerHTML = '<div class="empty-state">No trades</div>';
     return;
   }
 
-  container.innerHTML = allTrades.map(t => {
-    const pair = (t.symbol || '').replace('_', '/');
-    const coin = (t.symbol || '').split('_')[0];
-    const tagClass = t.tag || '';
-    const tagHtml = t.tag ? `<span class="hist-tag ${tagClass}">${t.tag}</span>` : '';
+  const cols = [
+    {key: 'ts',             label: 'Time'},
+    {key: '_xk',           label: 'Exch'},
+    {key: 'side',          label: 'Side'},
+    {key: 'symbol',        label: 'Pair'},
+    {key: 'notional_usd',  label: 'Value'},
+    {key: 'pnl_pct',       label: 'PnL%'},
+  ];
+
+  function sortTrades(rows) {
+    return [...rows].sort((a, b) => {
+      let va = a[_tradeSortCol], vb = b[_tradeSortCol];
+      if (va == null) va = _tradeSortAsc ? Infinity : -Infinity;
+      if (vb == null) vb = _tradeSortAsc ? Infinity : -Infinity;
+      if (typeof va === 'string') return _tradeSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+      return _tradeSortAsc ? va - vb : vb - va;
+    });
+  }
+
+  function renderRow(t) {
+    const pair   = (t.symbol || '').replace('_', '/');
+    const coin   = (t.symbol || '').split('_')[0];
     const isSell = t.side === 'sell';
+    const isSkip = t.side === 'skip';
     const hasPnl = isSell && t.pnl_pct != null;
     const pnlClass = hasPnl ? (t.pnl_pct >= 0 ? 'positive' : 'negative') : '';
-    const xkC = xkColor(t._xk);
-    const xkBadge = `<span class="hist-xk" style="color:${xkC}">${xkShortLabel(t._xk)}</span>`;
+    const tagHtml = t.tag ? `<span class="hist-tag ${t.tag}">${t.tag}</span>` : '';
+    const xkC    = xkColor(t._xk);
+    const rowCls = isSkip ? 'trades-row trades-row-skip' : (isSell ? 'trades-row trades-row-sell' : 'trades-row');
 
-    if (t.side === 'skip') {
-      return `
-        <div class="hist-row hist-row-skip" data-coin="${coin}">
-          <span class="hist-time">${fmtDateTime(t.ts)}</span>
-          ${xkBadge}
-          <span class="hist-side skip">skip</span>
-          <span>${pair} ${tagHtml} <span class="hist-reason">${t.reason || ''}</span></span>
-        </div>
-      `;
+    const pnlCell = hasPnl
+      ? `<span class="hist-pnl ${pnlClass}">${fmtPct(t.pnl_pct)}</span>
+         ${t.realized_profit_usd != null ? `<span class="hist-pnl ${pnlClass}">${fmtSignedUSD2(t.realized_profit_usd)}</span>` : ''}`
+      : (isSkip ? `<span class="hist-reason">${t.reason || ''}</span>` : '');
+
+    return `<tr class="${rowCls}" data-coin="${coin}">
+      <td class="trades-td hist-time">${fmtDateTime(t.ts)}</td>
+      <td class="trades-td"><span class="hist-xk" style="color:${xkC}">${xkShortLabel(t._xk)}</span></td>
+      <td class="trades-td"><span class="hist-side ${t.side}">${t.side}</span></td>
+      <td class="trades-td">${pair} ${isSkip ? '' : `${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)}`} ${tagHtml}</td>
+      <td class="trades-td hist-amount">${isSkip ? '' : fmtUSD(t.notional_usd)}</td>
+      <td class="trades-td">${pnlCell}</td>
+    </tr>`;
+  }
+
+  function renderTable() {
+    const sorted = sortTrades(allTrades);
+    const thHtml = cols.map(c => {
+      const active = c.key === _tradeSortCol;
+      const arrow  = active ? (_tradeSortAsc ? ' ▲' : ' ▼') : '';
+      return `<th class="trades-th${active ? ' trades-th-active' : ''}" data-col="${c.key}">${c.label}${arrow}</th>`;
+    }).join('');
+
+    const existing = container.querySelector('table.trades-table');
+    if (existing) {
+      $$('.trades-th[data-col]', container).forEach(th => {
+        const active = th.dataset.col === _tradeSortCol;
+        th.classList.toggle('trades-th-active', active);
+        const col = cols.find(c => c.key === th.dataset.col);
+        th.textContent = col.label + (active ? (_tradeSortAsc ? ' ▲' : ' ▼') : '');
+      });
+      const tbody = existing.querySelector('tbody');
+      if (tbody) tbody.innerHTML = sorted.map(renderRow).join('');
+    } else {
+      container.innerHTML = `<table class="trades-table">
+        <thead><tr>${thHtml}</tr></thead>
+        <tbody>${sorted.map(renderRow).join('')}</tbody>
+      </table>`;
     }
+  }
 
-    if (isSell && hasPnl) {
-      return `
-        <div class="hist-row hist-row-sell" data-coin="${coin}">
-          <span class="hist-time">${fmtDateTime(t.ts)}</span>
-          ${xkBadge}
-          <span class="hist-side sell">sell</span>
-          <span>${pair} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
-          <span class="hist-amount">${fmtUSD(t.notional_usd)}</span>
-          <span class="hist-sell-detail">
-            <span class="hist-pnl ${pnlClass}">${fmtPct(t.pnl_pct)}</span>
-            ${t.realized_profit_usd != null ? `<span class="hist-pnl ${pnlClass}">${fmtUSD(t.realized_profit_usd)}</span>` : ''}
-          </span>
-        </div>
-      `;
-    }
-
-    return `
-      <div class="hist-row" data-coin="${coin}">
-        <span class="hist-time">${fmtDateTime(t.ts)}</span>
-        ${xkBadge}
-        <span class="hist-side ${t.side}">${t.side}</span>
-        <span>${pair} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)} ${tagHtml}</span>
-        <span class="hist-amount">${fmtUSD(t.notional_usd)}</span>
-      </div>
-    `;
-  }).join('');
-
-  $$('.hist-row[data-coin]', container).forEach(row => {
-    row.addEventListener('click', () => selectCoin(row.dataset.coin));
-  });
+  _renderTradesTable = renderTable;
+  renderTable();
 }
 
 // ── Compare Tab ──
@@ -1649,6 +1761,8 @@ function renderTraining(coins) {
     container.innerHTML = '<div class="empty-state">No coins configured</div>';
     return;
   }
+  const locked = state.neuralRunning || state.traderRunning;
+  const trainDisabled = locked ? 'disabled title="Stop trader and neural runner before training"' : '';
 
   const _needsAttention = c => !c.is_trained && (c.training_state === 'FAILED' || c.training_state === 'FINISHED');
   const sorted = [...coins].sort((a, b) => {
@@ -1703,7 +1817,7 @@ function renderTraining(coins) {
         <div class="train-actions">
           <span class="train-status ${tState}">${tState}</span>
           <button class="btn btn-small btn-secondary" onclick="toggleTrainerLog('${c.coin}')">Log</button>
-          <button class="btn btn-small btn-secondary" onclick="trainCoin('${c.coin}')">Train</button>
+          <button class="btn btn-small btn-secondary train-btn" ${trainDisabled} onclick="trainCoin('${c.coin}')">Train</button>
         </div>
       </div>${failHtml}
     `;
@@ -1712,16 +1826,23 @@ function renderTraining(coins) {
 
 function updateTrainingBadges(coins) {
   if (!coins) return;
+  const locked = state.neuralRunning || state.traderRunning;
   for (const c of coins) {
     const row = document.querySelector(`[data-train-coin="${c.coin}"]`);
     if (!row) continue;
     const badge = row.querySelector('.train-status');
-    if (!badge) continue;
-    const rawState = c.training_running ? 'TRAINING' : (c.training_state || 'UNKNOWN');
-    const trained = !c.training_running && c.is_trained;
-    const tState = trained ? 'TRAINED' : (rawState === 'FINISHED' ? 'RETRAIN' : rawState);
-    badge.className = 'train-status ' + tState;
-    badge.textContent = tState;
+    if (badge) {
+      const rawState = c.training_running ? 'TRAINING' : (c.training_state || 'UNKNOWN');
+      const trained = !c.training_running && c.is_trained;
+      const tState = trained ? 'TRAINED' : (rawState === 'FINISHED' ? 'RETRAIN' : rawState);
+      badge.className = 'train-status ' + tState;
+      badge.textContent = tState;
+    }
+    const trainBtn = row.querySelector('.train-btn');
+    if (trainBtn) {
+      trainBtn.disabled = locked;
+      trainBtn.title = locked ? 'Stop trader and neural runner before training' : '';
+    }
   }
 }
 
@@ -2103,8 +2224,13 @@ async function saveConfig(original) {
 
 // ── Data Manager Tab ──
 
+let _historicFetchTimer = null;
+let _historicFetchAbort = null;
+
 let _dataSortCol = 'coin';
 let _dataSortAsc = true;
+let _dataFilter = '';
+let _renderDataTable = null;
 
 function _fmtAge(minutes) {
   if (minutes == null) return '—';
@@ -2132,6 +2258,7 @@ async function loadAndRenderDataTab() {
       <div class="dm-status">
         <span class="dm-state-badge dm-state-${stateLabel.toLowerCase()}">${stateLabel}</span>
       </div>
+      <input class="dm-filter" id="dm-filter" type="text" placeholder="Filter…" value="${_dataFilter}">
       <div class="dm-controls">
         ${running
           ? `<button class="btn btn-danger btn-small" id="btn-dm-stop">Stop Data Manager</button>`
@@ -2147,6 +2274,10 @@ async function loadAndRenderDataTab() {
   $('#btn-dm-stop') && $('#btn-dm-stop').addEventListener('click', async () => {
     await apiPost('data-manager/stop');
     setTimeout(loadAndRenderDataTab, 800);
+  });
+  $('#dm-filter').addEventListener('input', e => {
+    _dataFilter = e.target.value.trim().toUpperCase();
+    if (_renderDataTable) _renderDataTable();
   });
 
   await _loadDataTabStats();
@@ -2180,14 +2311,8 @@ async function _loadDataTabStats() {
     });
   }
 
-  function renderTable() {
-    sortRows();
-    const thHtml = cols.map(c => {
-      const arrow = c === _dataSortCol ? (_dataSortAsc ? ' ▲' : ' ▼') : '';
-      return `<th class="dm-th${c === _dataSortCol ? ' dm-th-active' : ''}" data-col="${c}">${labels[c]}${arrow}</th>`;
-    }).join('') + '<th class="dm-th">Chart</th>';
-
-    const rowsHtml = rows.map(r => {
+  function rowsHtml(visible) {
+    return visible.map(r => {
       const tfLabel = TF_MINUTES_LABEL[r.tf_minutes] || `${r.tf_minutes}m`;
       if (r.error) {
         return `<tr class="dm-row dm-row-error">
@@ -2207,24 +2332,39 @@ async function _loadDataTabStats() {
         <td class="dm-td"><button class="btn btn-small dm-chart-btn" data-coin="${r.coin}" data-tf="${r.tf_minutes}">Chart</button></td>
       </tr>`;
     }).join('');
-
-    wrap.innerHTML = `<table class="dm-table">
-      <thead><tr>${thHtml}</tr></thead>
-      <tbody>${rowsHtml}</tbody>
-    </table>`;
-
-    $$('.dm-th[data-col]', wrap).forEach(th => {
-      th.addEventListener('click', () => {
-        if (_dataSortCol === th.dataset.col) _dataSortAsc = !_dataSortAsc;
-        else { _dataSortCol = th.dataset.col; _dataSortAsc = true; }
-        renderTable();
-      });
-    });
-    $$('.dm-chart-btn', wrap).forEach(btn => {
-      btn.addEventListener('click', () => showHistoricChart(btn.dataset.coin, parseInt(btn.dataset.tf)));
-    });
   }
 
+  function renderTable() {
+    sortRows();
+    const visible = _dataFilter ? rows.filter(r => r.coin.includes(_dataFilter)) : rows;
+    const existingTable = wrap.querySelector('table.dm-table');
+
+    if (existingTable) {
+      // Patch thead sort indicators in-place — no DOM replacement, no flash
+      $$('.dm-th[data-col]', wrap).forEach(th => {
+        const c = th.dataset.col;
+        const active = c === _dataSortCol;
+        th.classList.toggle('dm-th-active', active);
+        th.textContent = labels[c] + (active ? (_dataSortAsc ? ' ▲' : ' ▼') : '');
+      });
+      // Only replace tbody
+      const tbody = existingTable.querySelector('tbody');
+      if (tbody) tbody.innerHTML = rowsHtml(visible);
+    } else {
+      // First render: build full table — delegation is handled by setupDataTabDelegation()
+      const thHtml = cols.map(c => {
+        const arrow = c === _dataSortCol ? (_dataSortAsc ? ' ▲' : ' ▼') : '';
+        return `<th class="dm-th${c === _dataSortCol ? ' dm-th-active' : ''}" data-col="${c}">${labels[c]}${arrow}</th>`;
+      }).join('') + '<th class="dm-th">Chart</th>';
+
+      wrap.innerHTML = `<table class="dm-table">
+        <thead><tr>${thHtml}</tr></thead>
+        <tbody>${rowsHtml(visible)}</tbody>
+      </table>`;
+    }
+  }
+
+  _renderDataTable = renderTable;
   renderTable();
 }
 
@@ -2251,6 +2391,20 @@ async function refreshLogs() {
 
 // ── Tabs ──
 
+function setupDataTabDelegation() {
+  $('#tab-data').addEventListener('click', e => {
+    const th = e.target.closest('.dm-th[data-col]');
+    if (th) {
+      if (_dataSortCol === th.dataset.col) _dataSortAsc = !_dataSortAsc;
+      else { _dataSortCol = th.dataset.col; _dataSortAsc = true; }
+      if (_renderDataTable) _renderDataTable();
+      return;
+    }
+    const btn = e.target.closest('.dm-chart-btn');
+    if (btn) showHistoricChart(btn.dataset.coin, parseInt(btn.dataset.tf));
+  });
+}
+
 function setupTabs() {
   $$('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -2263,7 +2417,13 @@ function setupTabs() {
       if (tab === 'compare') loadCompare();
       if (tab === 'lth') renderLTH();
       if (tab === 'training') loadAndRenderTraining();
-      if (tab === 'data') loadAndRenderDataTab();
+      if (tab === 'data') {
+        loadAndRenderDataTab();
+        if (_dataTabInterval) clearInterval(_dataTabInterval);
+        _dataTabInterval = setInterval(_loadDataTabStats, 30000);
+      } else {
+        if (_dataTabInterval) { clearInterval(_dataTabInterval); _dataTabInterval = null; }
+      }
       if (tab === 'settings') loadAndRenderConfig();
       if (tab === 'logs') {
         refreshLogs();

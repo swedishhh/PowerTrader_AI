@@ -21,18 +21,7 @@ import traceback
 import ccxt
 import pandas as pd
 
-from pt_env import PTEnv
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-TF_MINUTES = [60, 120, 240, 480, 720, 1440, 10080]
-
-CCXT_TF = {
-    60: "1h", 120: "2h", 240: "4h", 480: "8h",
-    720: "12h", 1440: "1d", 10080: "1w",
-}
+from pt_env import PTEnv, TRAIN_TF_MINUTES, TRAIN_TF_CCXT
 
 _env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
 
@@ -114,9 +103,9 @@ def _backfill_coin(client, arctic, coin: str, error_coins: list):
             error_coins.append(coin)
         return
 
-    for tf in TF_MINUTES:
+    for tf in TRAIN_TF_MINUTES:
         lib_name = _lib_name(tf)
-        ccxt_tf = CCXT_TF[tf]
+        ccxt_tf = TRAIN_TF_CCXT[tf]
         tf_ms = tf * 60 * 1000
 
         if lib_name not in arctic.list_libraries():
@@ -179,9 +168,9 @@ def _topup_coin(client, arctic, coin: str, error_coins: list):
             error_coins.append(coin)
         return
 
-    for tf in TF_MINUTES:
+    for tf in TRAIN_TF_MINUTES:
         lib_name = _lib_name(tf)
-        ccxt_tf = CCXT_TF[tf]
+        ccxt_tf = TRAIN_TF_CCXT[tf]
 
         if lib_name not in arctic.list_libraries():
             continue

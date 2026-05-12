@@ -35,21 +35,16 @@ import getpass
 arctic_path = f"/home/{getpass.getuser()}/dev/data/arcticdb"
 arctic = adb.Arctic(f"lmdb:///{arctic_path}")
 
-from pt_env import PTEnv as _PTEnv
+from pt_env import PTEnv as _PTEnv, TRAIN_TF_NAMES, TRAIN_TF_MINUTES, TRAIN_TF_KUCOIN
 _trainer_env = _PTEnv(os.path.dirname(os.path.abspath(__file__)))
+
+TIMEFRAMES = list(TRAIN_TF_NAMES)
+TF_MINUTES = list(TRAIN_TF_MINUTES)
+KUCOIN_TF_MAP = TRAIN_TF_KUCOIN
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-
-TIMEFRAMES = ["1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week"]
-TF_MINUTES = [60, 120, 240, 480, 720, 1440, 10080]
-
-# KuCoin API timeframe strings (for live fallback)
-KUCOIN_TF_MAP = {
-    60: "1hour", 120: "2hour", 240: "4hour", 480: "8hour",
-    720: "12hour", 1440: "1day", 10080: "1week",
-}
 
 PATTERN_LENGTH = 2  # number_of_candles[0] — pattern uses N-1 candles to predict 1
 CANDLES_TO_PREDICT = 1

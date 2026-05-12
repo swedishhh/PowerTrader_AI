@@ -1201,6 +1201,42 @@ body {
 
 .hist-row { cursor: pointer; }
 
+/* ── Trades Table ── */
+.trades-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.trades-th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: var(--bg-base);
+  z-index: 1;
+}
+.trades-th:hover { color: var(--text-secondary); }
+.trades-th-active { color: var(--cyan); }
+.trades-th-active:hover { color: var(--cyan); }
+.trades-row { cursor: pointer; }
+.trades-row:nth-child(odd) { background: var(--bg-surface); }
+.trades-row:hover { background: var(--bg-hover); }
+.trades-row-skip { opacity: 0.7; }
+.trades-td {
+  padding: 5px 8px;
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+.trades-td.hist-amount { text-align: right; }
+
 /* ── Training ── */
 .training-list {
   display: flex;
@@ -1686,6 +1722,23 @@ body {
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+
+.dm-filter {
+  flex: 1;
+  max-width: 140px;
+  padding: 3px 8px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+.dm-filter:focus { border-color: var(--border-bright); }
+.dm-filter::placeholder { color: var(--text-muted); }
 
 .dm-controls {
   display: flex;

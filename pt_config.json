@@ -59,9 +59,10 @@
   "trailing_gap_pct": 0.5,
   "lth_profit_alloc_pct": 50,
   "live_price_source": "kucoin",
-  "training_data_source": "kucoin",
+  "training_data_source": "kucoin_local",
   "main_neural_dir": "state",
   "hub_data_dir": "",
+  "kucoin_local_data_dir": "state/historic_data/kucoin",
   "script_neural_runner2": "pt_thinker.py",
   "script_neural_trainer": "pt_trainer.py",
   "script_trader": "pt_trader.py",
@@ -86,6 +87,12 @@
   "control_starting_usd": 0,
   "auto_start_scripts": false,
   "training_staleness_days": 14,
+  "kucoin_local_topup_hours": [
+    0,
+    6,
+    12,
+    18
+  ],
   "control_slippage_factor": 0,
   "demo_starting_usd": 10000,
   "demo_slippage_factor": 0.001

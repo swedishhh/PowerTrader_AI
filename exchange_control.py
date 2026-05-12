@@ -67,7 +67,7 @@ class ControlAdapter(ExchangeAdapter):
                 json.dump({
                     "usd_balance": self._usd_balance,
                     "holdings": self._holdings,
-                    "orders": {k: v[-200:] for k, v in self._orders.items()},
+                    "orders": dict(self._orders),
                 }, f, indent=2)
             os.replace(tmp, self._state_path)
         except Exception:

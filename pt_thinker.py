@@ -114,7 +114,7 @@ last_minute = 0
 # -----------------------------
 # Config (via PTEnv)
 # -----------------------------
-from pt_env import PTEnv as _PTEnv
+from pt_env import PTEnv as _PTEnv, TRAIN_TF_NAMES as tf_choices
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _env = _PTEnv(BASE_DIR)
@@ -300,7 +300,6 @@ for _sym in CURRENT_COINS:
 
 
 distance = 0.5
-tf_choices = ["1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week"]
 
 
 def new_coin_state():
