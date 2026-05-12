@@ -18,6 +18,7 @@ import asyncio
 import json
 import time
 import argparse
+import pandas as pd
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -183,6 +184,7 @@ async def api_status():
         "system": {
             "neural_running": ctrl_status["neural_running"],
             "trader_running": ctrl_status["trader_running"],
+            "data_manager_running": ctrl_status["data_manager_running"],
             "traders": ctrl_status.get("traders", {}),
             "runner_ready": rr.get("ready", False),
             "runner_stage": rr.get("stage", "unknown"),
@@ -396,6 +398,67 @@ async def api_start_all():
 async def api_stop_all():
     ctrl.stop_all()
     return {"ok": True}
+
+
+@app.post("/api/data-manager/start")
+async def api_data_manager_start():
+    ok = ctrl.start_data_manager()
+    return {"ok": ok}
+
+
+@app.post("/api/data-manager/stop")
+async def api_data_manager_stop():
+    ctrl.stop_data_manager()
+    return {"ok": True}
+
+
+@app.get("/api/data-manager/stats")
+async def api_data_manager_stats():
+    """Per-coin stats from the local kucoin60 ArcticDB library."""
+    try:
+        import arcticdb as adb
+        store = adb.Arctic(f"lmdb:///{env.historic_data_dir}")
+        lib_name = "kucoin60"
+        if lib_name not in store.list_libraries():
+            return {"stats": {}, "error": None}
+        lib = store.get_library(lib_name)
+        symbols = set(lib.list_symbols())
+
+        # Load error coins from status file if present
+        status_path = env.hub_data_dir / "data_manager_status.json"
+        error_coins: list = []
+        if status_path.exists():
+            try:
+                error_coins = json.loads(status_path.read_text()).get("error_coins", [])
+            except Exception:
+                pass
+
+        stats = {}
+        now = pd.Timestamp.now(tz="UTC")
+        for coin in env.coins:
+            a_sym = f"{coin}_USDT"
+            if coin in error_coins:
+                stats[coin] = {"error": "Not available on KuCoin"}
+                continue
+            if a_sym not in symbols:
+                stats[coin] = {"error": "No local data"}
+                continue
+            try:
+                df = lib.read(a_sym, columns=[]).data
+                last_ts = df.index[-1]
+                age_minutes = int((now - last_ts).total_seconds() / 60)
+                stats[coin] = {
+                    "rows": len(df),
+                    "first": str(df.index[0].date()),
+                    "last": str(last_ts),
+                    "age_minutes": age_minutes,
+                    "error": None,
+                }
+            except Exception as e:
+                stats[coin] = {"error": str(e)}
+        return {"stats": stats, "error": None}
+    except Exception as e:
+        return {"stats": {}, "error": str(e)}
 
 
 @app.post("/api/start-neural")
@@ -993,12 +1056,21 @@ async def _file_watcher():
                 if rr.get("ready") and ctrl.neural_running:
                     ctrl.poll_ready_and_start_trader()
 
+            dm_status_path = env.hub_data_dir / "data_manager_status.json"
+            if _check(dm_status_path, "data_manager_status"):
+                try:
+                    dm_data = json.loads(dm_status_path.read_text())
+                except Exception:
+                    dm_data = {}
+                await ws_manager.broadcast({"type": "data_manager_status", "data": dm_data})
+
             traders_status = {}
             for xk in _active_exchanges():
                 traders_status[xk] = {"running": ctrl.trader_running_for(xk)}
             sys_status = {
                 "neural_running": ctrl.neural_running,
                 "trader_running": ctrl.trader_running,
+                "data_manager_running": ctrl.data_manager_running,
                 "traders": traders_status,
                 "any_training_running": ctrl.any_training_running(),
             }

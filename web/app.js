@@ -38,6 +38,7 @@ const state = {
   selectedTf: '1hour',
   neuralRunning: false,
   traderRunning: false,
+  dataManagerState: 'Stopped',
   chart: null,
   candleSeries: null,
   acctSeries: {},
@@ -196,6 +197,10 @@ function handleWSMessage(msg) {
       break;
     case 'runner_ready':
       break;
+    case 'data_manager_status':
+      state.dataManagerState = msg.data.state || 'Stopped';
+      updateDataManagerPill(state.dataManagerState);
+      break;
   }
 }
 
@@ -286,11 +291,31 @@ async function refreshAll() {
 
 // ── System Status ──
 
+function updateDataManagerPill(dmState) {
+  const pill = $('#pill-data');
+  if (!pill) return;
+  const dot = pill.querySelector('.pill-dot');
+  const label = pill.querySelector('.pill-label');
+  const stateMap = {
+    'Backfill': ['pill-dm-backfill', 'Backfill'],
+    'Topup':    ['pill-dm-topup',    'Topup'],
+    'Normal':   ['pill-dm-normal',   'Normal'],
+    'Stopped':  ['pill-dm-stopped',  'Data'],
+  };
+  const [cls, text] = stateMap[dmState] || ['pill-dm-stopped', 'Data'];
+  pill.className = 'vital-pill ' + cls;
+  if (label) label.textContent = text;
+  if (dot) dot.className = 'pill-dot' + (['Backfill','Topup'].includes(dmState) ? ' pulsing' : '');
+}
+
 function updateSystemStatus(sys) {
   if (!sys) return;
   state.neuralRunning = sys.neural_running;
   state.traderRunning = sys.trader_running;
   if (sys.traders) state.tradersStatus = sys.traders;
+  if (!sys.data_manager_running && !state.dataManagerState) {
+    updateDataManagerPill('Stopped');
+  }
 
   const pillNeural = $('#pill-neural');
   const pillTrader = $('#pill-trader');
@@ -1673,7 +1698,7 @@ window.toggleTrainerLog = function(coin) {
 
 const _CFG_GROUP_ORDER = [
   'General', 'Trading', 'Trailing Profit', 'Long-Term Holdings',
-  'Control Exchange', 'UI Preferences', 'Training', 'Startup',
+  'Control Exchange', 'UI Preferences', 'Training', 'Startup', 'Data Manager',
 ];
 
 function _cfgParseField(el, rule, key) {
@@ -1994,11 +2019,131 @@ async function saveConfig(original) {
 
 // ── Logs Tab ──
 
+// ── Data Manager Tab ──
+
+let _dataSortCol = 'coin';
+let _dataSortAsc = true;
+
+function _fmtAge(minutes) {
+  if (minutes == null) return '—';
+  if (minutes < 120) return `${minutes}m`;
+  if (minutes < 1440) return `${Math.round(minutes / 60)}h`;
+  return `${Math.round(minutes / 1440)}d`;
+}
+
+function _ageClass(minutes) {
+  if (minutes == null) return 'dm-age-error';
+  if (minutes < 120) return 'dm-age-ok';
+  if (minutes < 1440) return 'dm-age-warn';
+  return 'dm-age-stale';
+}
+
+async function loadAndRenderDataTab() {
+  const el = $('#data-manager-content');
+  if (!el) return;
+
+  const running = state.dataManagerState && state.dataManagerState !== 'Stopped';
+  const stateLabel = state.dataManagerState || 'Stopped';
+
+  let statsHtml = '<div class="dm-loading">Loading stats…</div>';
+  el.innerHTML = `
+    <div class="dm-header">
+      <div class="dm-status">
+        <span class="dm-state-badge dm-state-${stateLabel.toLowerCase()}">${stateLabel}</span>
+      </div>
+      <div class="dm-controls">
+        ${running
+          ? `<button class="btn btn-danger btn-small" id="btn-dm-stop">Stop Data Manager</button>`
+          : `<button class="btn btn-primary btn-small" id="btn-dm-start">Start Data Manager</button>`}
+      </div>
+    </div>
+    <div id="dm-table-wrap">${statsHtml}</div>`;
+
+  $('#btn-dm-start') && $('#btn-dm-start').addEventListener('click', async () => {
+    await apiPost('data-manager/start');
+    setTimeout(loadAndRenderDataTab, 800);
+  });
+  $('#btn-dm-stop') && $('#btn-dm-stop').addEventListener('click', async () => {
+    await apiPost('data-manager/stop');
+    setTimeout(loadAndRenderDataTab, 800);
+  });
+
+  // Load stats
+  const data = await api('data-manager/stats');
+  const wrap = $('#dm-table-wrap');
+  if (!wrap) return;
+
+  if (data.error) {
+    wrap.innerHTML = `<div class="dm-error">Error: ${data.error}</div>`;
+    return;
+  }
+
+  const stats = data.stats || {};
+  let rows = Object.entries(stats).map(([coin, s]) => ({ coin, ...s }));
+
+  function sortRows() {
+    rows.sort((a, b) => {
+      let va = a[_dataSortCol], vb = b[_dataSortCol];
+      if (va == null) va = _dataSortAsc ? Infinity : -Infinity;
+      if (vb == null) vb = _dataSortAsc ? Infinity : -Infinity;
+      if (typeof va === 'string') return _dataSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+      return _dataSortAsc ? va - vb : vb - va;
+    });
+  }
+
+  function renderTable() {
+    sortRows();
+    const cols = ['coin', 'rows', 'first', 'last', 'age_minutes'];
+    const labels = { coin: 'Coin', rows: 'Rows', first: 'From', last: 'Latest', age_minutes: 'Age' };
+    const thHtml = cols.map(c => {
+      const arrow = c === _dataSortCol ? (_dataSortAsc ? ' ▲' : ' ▼') : '';
+      return `<th class="dm-th${c === _dataSortCol ? ' dm-th-active' : ''}" data-col="${c}">${labels[c]}${arrow}</th>`;
+    }).join('') + '<th class="dm-th">Chart</th>';
+
+    const rowsHtml = rows.map(r => {
+      if (r.error) {
+        return `<tr class="dm-row dm-row-error">
+          <td class="dm-td dm-coin">${r.coin}</td>
+          <td class="dm-td dm-error-cell" colspan="4">${r.error}</td>
+          <td class="dm-td"></td>
+        </tr>`;
+      }
+      return `<tr class="dm-row">
+        <td class="dm-td dm-coin">${r.coin}</td>
+        <td class="dm-td">${(r.rows || 0).toLocaleString()}</td>
+        <td class="dm-td dm-date">${r.first || '—'}</td>
+        <td class="dm-td dm-date">${r.last ? r.last.slice(0, 16).replace('T', ' ') : '—'}</td>
+        <td class="dm-td ${_ageClass(r.age_minutes)}">${_fmtAge(r.age_minutes)}</td>
+        <td class="dm-td"><button class="btn btn-small dm-chart-btn" data-coin="${r.coin}">Chart</button></td>
+      </tr>`;
+    }).join('');
+
+    wrap.innerHTML = `<table class="dm-table">
+      <thead><tr>${thHtml}</tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>`;
+
+    $$('.dm-th[data-col]', wrap).forEach(th => {
+      th.addEventListener('click', () => {
+        if (_dataSortCol === th.dataset.col) _dataSortAsc = !_dataSortAsc;
+        else { _dataSortCol = th.dataset.col; _dataSortAsc = true; }
+        renderTable();
+      });
+    });
+    $$('.dm-chart-btn', wrap).forEach(btn => {
+      btn.addEventListener('click', () => selectCoin(btn.dataset.coin));
+    });
+  }
+
+  renderTable();
+}
+
 function populateLogSourceDropdown() {
   const select = $('#log-source');
   if (!select) return;
   const currentVal = select.value;
   select.innerHTML = '<option value="neural">Neural Runner</option>';
+  select.innerHTML += '<option value="data-manager">Data Manager</option>';
   state.exchangeList.forEach(xk => {
     select.innerHTML += `<option value="trader-${xk}">Trader: ${xk}</option>`;
   });
@@ -2028,6 +2173,7 @@ function setupTabs() {
       if (tab === 'compare') loadCompare();
       if (tab === 'lth') renderLTH();
       if (tab === 'training') loadAndRenderTraining();
+      if (tab === 'data') loadAndRenderDataTab();
       if (tab === 'settings') loadAndRenderConfig();
       if (tab === 'logs') {
         refreshLogs();

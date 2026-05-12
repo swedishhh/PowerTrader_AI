@@ -23,7 +23,7 @@ DISPLAY_TIMEFRAMES = [
     "1min", "5min", "15min", "30min",
     "1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week",
 ]
-VALID_DATA_SOURCES = ["kucoin", "binance", "kraken", "kucoin_live_api"]
+VALID_DATA_SOURCES = ["kucoin_local", "kucoin", "binance", "kraken", "kucoin_live_api"]
 _VALID_PRICE_SOURCES = ["kraken", "kucoin"]
 
 
@@ -60,11 +60,12 @@ CONFIG_DEFAULTS: dict[str, Any] = {
 
     # Data sources
     "live_price_source": "kucoin",
-    "training_data_source": "kucoin",
+    "training_data_source": "kucoin_local",
 
     # Paths / scripts
     "main_neural_dir": "state",
     "hub_data_dir": "",
+    "kucoin_local_data_dir": "state/historic_data/kucoin",
     "script_neural_runner2": "pt_thinker.py",
     "script_neural_trainer": "pt_trainer.py",
     "script_trader": "pt_trader.py",
@@ -87,6 +88,9 @@ CONFIG_DEFAULTS: dict[str, Any] = {
 
     # Training
     "training_staleness_days": 14,
+
+    # Data manager
+    "kucoin_local_topup_hours": [0, 6, 12, 18],
 }
 
 
@@ -270,10 +274,24 @@ CONFIG_SCHEMA: dict[str, dict] = {
         "group": "Training",
     },
 
+    # ── Data Manager ──────────────────────────────────────────────────────
+    "kucoin_local_data_dir": {
+        "type": "str",
+        "label": "Local Data Directory",
+        "hint": "Path to ArcticDB store for local KuCoin OHLCV data (relative to project dir or absolute)",
+        "group": "Data Manager",
+    },
+    "kucoin_local_topup_hours": {
+        "type": "list_float", "each_min": 0, "each_max": 23, "min_len": 1,
+        "label": "Topup Hours (UTC)",
+        "hint": "Hours of day (UTC, 0–23) when the data manager runs a topup (e.g. 0, 6, 12, 18)",
+        "group": "Data Manager",
+    },
+
     # ── Internal (no UI group) ────────────────────────────────────────────
-    "exchange":              {"type": "str",       "group": None},
-    "main_neural_dir":       {"type": "str",       "group": None},
-    "hub_data_dir":          {"type": "str",       "group": None},
+    "exchange":                {"type": "str",       "group": None},
+    "main_neural_dir":         {"type": "str",       "group": None},
+    "hub_data_dir":            {"type": "str",       "group": None},
     "script_neural_runner2": {"type": "str",       "group": None},
     "script_neural_trainer": {"type": "str",       "group": None},
     "script_trader":         {"type": "str",       "group": None},
@@ -310,6 +328,9 @@ def _validate_field(key: str, value: Any, rule: dict) -> str | None:
             min_len = rule.get("min_len", 0)
             if len(parsed) < min_len:
                 return f"Need at least {min_len} value(s)"
+            each_min = rule.get("each_min")
+            if each_min is not None and any(x < each_min for x in parsed):
+                return f"All values must be ≥ {each_min}"
             each_max = rule.get("each_max")
             if each_max is not None and any(x > each_max for x in parsed):
                 return f"All values must be ≤ {each_max}"
@@ -502,6 +523,12 @@ class PTEnv:
     def hub_data_dir(self) -> Path:
         self.get_config()
         return self._hub_dir
+
+    @property
+    def historic_data_dir(self) -> Path:
+        raw = str(self.get_config().get("kucoin_local_data_dir") or "state/historic_data/kucoin").strip()
+        p = Path(raw)
+        return p if p.is_absolute() else (self.project_dir / p).resolve()
 
     @property
     def coins_dir(self) -> Path:
