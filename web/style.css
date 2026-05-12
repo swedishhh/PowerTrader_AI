@@ -1668,6 +1668,190 @@ body {
 .compare-table .negative { color: var(--red); }
 
 /* ═══════════════════════════════════════════════════════════
+   Data Manager Tab
+   ═══════════════════════════════════════════════════════════ */
+
+.data-manager-content {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.dm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.dm-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.dm-state-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 3px 10px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  background: var(--bg-surface);
+  text-transform: uppercase;
+}
+
+.dm-state-backfill {
+  border-color: rgba(168,85,247,0.4);
+  color: var(--purple);
+  background: rgba(168,85,247,0.08);
+}
+
+.dm-state-topup {
+  border-color: var(--cyan-dim);
+  color: var(--cyan);
+  background: rgba(0,212,255,0.06);
+}
+
+.dm-state-normal {
+  border-color: var(--green-dim);
+  color: var(--green);
+  background: rgba(0,204,102,0.06);
+}
+
+.dm-state-stopped {
+  border-color: var(--border);
+  color: var(--text-muted);
+  background: var(--bg-surface);
+}
+
+#dm-table-wrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0;
+}
+
+.dm-loading {
+  padding: 24px 16px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: center;
+}
+
+.dm-error {
+  padding: 16px;
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.dm-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.dm-th {
+  padding: 7px 10px;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--bg-base);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.dm-th:hover { color: var(--text-secondary); }
+
+.dm-th-active {
+  color: var(--cyan);
+}
+
+.dm-row {
+  border-bottom: 1px solid rgba(42,42,72,0.5);
+  transition: background var(--transition);
+}
+
+.dm-row:hover { background: var(--bg-hover); }
+
+.dm-row-error { background: rgba(255,68,102,0.04); }
+.dm-row-error:hover { background: rgba(255,68,102,0.08); }
+
+.dm-td {
+  padding: 7px 10px;
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+
+.dm-coin {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-primary);
+}
+
+.dm-date {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.dm-error-cell {
+  color: var(--red);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* Age colour coding */
+.dm-age-ok   { color: var(--green); }
+.dm-age-warn { color: var(--gold); }
+.dm-age-stale { color: var(--red); }
+.dm-age-error { color: var(--text-muted); font-style: italic; }
+
+/* Topbar data pill states */
+.vital-pill.pill-dm-stopped {
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+
+.vital-pill.pill-dm-backfill {
+  border-color: rgba(168,85,247,0.4);
+  color: var(--purple);
+}
+
+.vital-pill.pill-dm-topup {
+  border-color: var(--cyan-dim);
+  color: var(--cyan);
+}
+
+.vital-pill.pill-dm-normal {
+  border-color: var(--green-dim);
+  color: var(--green);
+}
+
+.pill-dot.pulsing {
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* ═══════════════════════════════════════════════════════════
    Responsive
    ═══════════════════════════════════════════════════════════ */
 

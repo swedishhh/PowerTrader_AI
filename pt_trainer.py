@@ -35,6 +35,9 @@ import getpass
 arctic_path = f"/home/{getpass.getuser()}/dev/data/arcticdb"
 arctic = adb.Arctic(f"lmdb:///{arctic_path}")
 
+from pt_env import PTEnv as _PTEnv
+_trainer_env = _PTEnv(os.path.dirname(os.path.abspath(__file__)))
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -125,7 +128,8 @@ def fetch_candles(coin: str, tf_name: str, tf_minutes: int, source: str) -> pd.D
     """Fetch OHLCV data, returning a DataFrame with columns [open, high, low, close].
 
     Source determines where data comes from:
-      kucoin/binance/kraken — ArcticDB, falls back to live KuCoin API
+      kucoin_local          — local ArcticDB store (state/historic_data/kucoin)
+      kucoin/binance/kraken — shared ArcticDB store, falls back to live KuCoin API
       kucoin_live_api       — KuCoin REST API directly (skips ArcticDB)
     Returns oldest-first ordering.
     """
@@ -146,17 +150,20 @@ def fetch_candles(coin: str, tf_name: str, tf_minutes: int, source: str) -> pd.D
 
 def _fetch_from_arctic(coin: str, tf_minutes: int, source: str) -> Optional[pd.DataFrame]:
     """Read candles from ArcticDB library."""
-    lib_name = f"{source}{tf_minutes}"
-    if lib_name not in arctic.list_libraries():
+    if source == "kucoin_local":
+        # Local store: kucoin{tf} libs, USDT symbols, configurable path
+        _arctic = adb.Arctic(f"lmdb:///{_trainer_env.historic_data_dir}")
+        lib_name = f"kucoin{tf_minutes}"
+        symbol = f"{coin}_USDT"
+    else:
+        _arctic = arctic
+        lib_name = f"{source}{tf_minutes}"
+        symbol = f"{coin}_USD" if source == "kraken" else f"{coin}_USDT"
+
+    if lib_name not in _arctic.list_libraries():
         return None
 
-    # Symbol format varies by exchange
-    if source == "kraken":
-        symbol = f"{coin}_USD"
-    else:
-        symbol = f"{coin}_USDT"
-
-    lib = arctic.get_library(lib_name)
+    lib = _arctic.get_library(lib_name)
     if symbol not in lib.list_symbols():
         # Try alternative denominator
         alt = f"{coin}_USDT" if source == "kraken" else f"{coin}_USD"

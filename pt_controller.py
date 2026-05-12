@@ -101,6 +101,7 @@ class ProcessController:
     def __init__(self, env: PTEnv):
         self.env = env
         self._neural = ProcHandle(name="neural")
+        self._data_manager = ProcHandle(name="data-manager")
         self._traders: dict[str, ProcHandle] = {}
         self._trainers: dict[str, ProcHandle] = {}
         self._lock = threading.Lock()
@@ -151,6 +152,26 @@ class ProcessController:
                 handle.proc.terminate()
             except Exception:
                 pass
+
+    # -- Data Manager --
+
+    def start_data_manager(self) -> bool:
+        script = self.env.project_dir / "pt_data_manager.py"
+        if not script.is_file():
+            return False
+        return self._launch(
+            self._data_manager,
+            str(script),
+            prefix="[DATA] ",
+            log_name="data-manager",
+        )
+
+    def stop_data_manager(self):
+        self._stop(self._data_manager)
+
+    @property
+    def data_manager_running(self) -> bool:
+        return self._data_manager.alive
 
     # -- Neural (thinker) --
 
@@ -247,7 +268,8 @@ class ProcessController:
     # -- Start/stop all --
 
     def start_all(self) -> dict:
-        """Start neural, wait for ready, then start all traders. Returns status."""
+        """Start data manager, neural, then traders when ready."""
+        self.start_data_manager()
         ok_neural = self.start_neural()
         if not ok_neural:
             return {"ok": False, "error": "Failed to start neural"}
@@ -269,6 +291,7 @@ class ProcessController:
     def stop_all(self):
         self.stop_trader()
         self.stop_neural()
+        self.stop_data_manager()
 
     # -- Training --
 
@@ -379,6 +402,8 @@ class ProcessController:
     def _resolve_handle(self, script: str) -> ProcHandle | None:
         if script == "neural":
             return self._neural
+        if script == "data-manager":
+            return self._data_manager
         if script.startswith("trader"):
             parts = script.split("-", 1)
             xk = parts[1] if len(parts) > 1 else (self.env.exchanges[0] if self.env.exchanges else "control")
@@ -446,6 +471,7 @@ class ProcessController:
         return {
             "neural_running": self.neural_running,
             "trader_running": self.trader_running,
+            "data_manager_running": self.data_manager_running,
             "traders": traders,
             "any_training_running": self.any_training_running(),
             "training": training,
