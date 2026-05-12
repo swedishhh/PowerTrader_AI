@@ -35,12 +35,11 @@ import getpass
 arctic_path = f"/home/{getpass.getuser()}/dev/data/arcticdb"
 arctic = adb.Arctic(f"lmdb:///{arctic_path}")
 
-from pt_env import PTEnv as _PTEnv, TRAIN_TF_NAMES, TRAIN_TF_MINUTES, TRAIN_TF_KUCOIN
+from pt_env import PTEnv as _PTEnv, TRAIN_TF_NAMES, TRAIN_TF_MINUTES, TF_MINUTE_TO_NAME_MAP
 _trainer_env = _PTEnv(os.path.dirname(os.path.abspath(__file__)))
 
 TIMEFRAMES = list(TRAIN_TF_NAMES)
 TF_MINUTES = list(TRAIN_TF_MINUTES)
-KUCOIN_TF_MAP = TRAIN_TF_KUCOIN
 
 # ---------------------------------------------------------------------------
 # Configuration

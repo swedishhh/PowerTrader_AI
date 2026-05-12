@@ -327,7 +327,11 @@ function updateSystemStatus(sys) {
   state.neuralRunning = sys.neural_running;
   state.traderRunning = sys.trader_running;
   if (sys.traders) state.tradersStatus = sys.traders;
-  if (!sys.data_manager_running && !state.dataManagerState) {
+  if (sys.data_manager_state) {
+    state.dataManagerState = sys.data_manager_state;
+    updateDataManagerPill(state.dataManagerState);
+  } else if (!sys.data_manager_running) {
+    state.dataManagerState = 'Stopped';
     updateDataManagerPill('Stopped');
   }
 
@@ -356,6 +360,12 @@ function updateSystemStatus(sys) {
 
   const btnClose = $('#btn-close-all');
   if (btnClose) btnClose.disabled = !hasPositions;
+
+  const btnTrainAll = $('#btn-train-all');
+  if (btnTrainAll) {
+    btnTrainAll.disabled = running;
+    btnTrainAll.title = running ? 'Stop trader and neural runner before training' : '';
+  }
 
   const btnSync = $('#btn-sync-control');
   if (btnSync) {
@@ -1422,20 +1432,6 @@ function updateMidPriceLine() {
     axisLabelVisible: true,
     title: 'MID',
   });
-
-  const tfSec = TF_SECONDS[state.selectedTf] || 3600;
-  const now = Math.floor(Date.now() / 1000);
-  const barTime = Math.floor(now / tfSec) * tfSec;
-
-  const cur = state._currentBar;
-  if (cur && cur.time === barTime) {
-    cur.close = mid;
-    cur.high = Math.max(cur.high, mid);
-    cur.low = Math.min(cur.low, mid);
-  } else {
-    state._currentBar = { time: barTime, open: mid, high: mid, low: mid, close: mid };
-  }
-  state.candleSeries.update(state._currentBar);
 }
 
 function updateCoinPosition(coin) {
@@ -2325,7 +2321,7 @@ async function _loadDataTabStats() {
       return `<tr class="dm-row">
         <td class="dm-td dm-coin">${r.coin}</td>
         <td class="dm-td dm-tf">${tfLabel}</td>
-        <td class="dm-td">${(r.rows || 0).toLocaleString()}</td>
+        <td class="dm-td dm-td-num">${(r.rows || 0).toLocaleString()}</td>
         <td class="dm-td dm-date">${r.first || '—'}</td>
         <td class="dm-td dm-date">${r.last ? r.last.slice(0, 16).replace('T', ' ') : '—'}</td>
         <td class="dm-td ${_ageClass(r.age_minutes)}">${_fmtAge(r.age_minutes)}</td>
@@ -2345,6 +2341,7 @@ async function _loadDataTabStats() {
         const c = th.dataset.col;
         const active = c === _dataSortCol;
         th.classList.toggle('dm-th-active', active);
+        th.classList.toggle('dm-td-num', c === 'rows');
         th.textContent = labels[c] + (active ? (_dataSortAsc ? ' ▲' : ' ▼') : '');
       });
       // Only replace tbody
@@ -2354,7 +2351,8 @@ async function _loadDataTabStats() {
       // First render: build full table — delegation is handled by setupDataTabDelegation()
       const thHtml = cols.map(c => {
         const arrow = c === _dataSortCol ? (_dataSortAsc ? ' ▲' : ' ▼') : '';
-        return `<th class="dm-th${c === _dataSortCol ? ' dm-th-active' : ''}" data-col="${c}">${labels[c]}${arrow}</th>`;
+        const extra = c === 'rows' ? ' dm-td-num' : '';
+        return `<th class="dm-th${c === _dataSortCol ? ' dm-th-active' : ''}${extra}" data-col="${c}">${labels[c]}${arrow}</th>`;
       }).join('') + '<th class="dm-th">Chart</th>';
 
       wrap.innerHTML = `<table class="dm-table">

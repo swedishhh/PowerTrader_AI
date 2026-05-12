@@ -1850,6 +1850,7 @@ body {
   color: var(--text-secondary);
   vertical-align: middle;
 }
+.dm-td-num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .dm-coin {
   font-family: var(--font-display);

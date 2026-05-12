@@ -180,11 +180,20 @@ async def api_status():
     for xk in active:
         exchanges_data[xk] = _account_for_exchange(xk)
 
+    dm_state = "Stopped"
+    dm_status_path = env.hub_data_dir / "data_manager_status.json"
+    if ctrl_status["data_manager_running"] and dm_status_path.exists():
+        try:
+            dm_state = json.loads(dm_status_path.read_text()).get("state", "Running") or "Running"
+        except Exception:
+            dm_state = "Running"
+
     return {
         "system": {
             "neural_running": ctrl_status["neural_running"],
             "trader_running": ctrl_status["trader_running"],
             "data_manager_running": ctrl_status["data_manager_running"],
+            "data_manager_state": dm_state,
             "traders": ctrl_status.get("traders", {}),
             "runner_ready": rr.get("ready", False),
             "runner_stage": rr.get("stage", "unknown"),
@@ -204,10 +213,15 @@ async def api_coins():
     ctrl_status = ctrl.status_summary()
 
     active = _active_exchanges()
+    _now = time.time()
+    _PRICE_STALE_SEC = 300  # ignore prices from status files older than 5 minutes
+    status_by_xk = {}
     positions_by_xk = {}
     for xk in active:
         acct = AccountModel(env, xk)
-        positions_by_xk[xk] = acct.all_positions()
+        ts = acct.trader_status() or {}
+        status_by_xk[xk] = ts
+        positions_by_xk[xk] = ts.get("positions", {})
 
     for coin in env.coins:
         cm = CoinModel(env, coin)
@@ -216,8 +230,12 @@ async def api_coins():
         snap["positions"] = {}
         mid_prices = []
         for xk in active:
+            ts = status_by_xk[xk]
             pos = positions_by_xk[xk].get(coin, {})
             snap["positions"][xk] = pos if pos.get("quantity", 0) > 0 else None
+            age = _now - float(ts.get("timestamp", 0) or 0)
+            if age > _PRICE_STALE_SEC:
+                continue
             buy = pos.get("current_buy_price", 0)
             sell = pos.get("current_sell_price", 0)
             mid = (buy + sell) / 2 if (buy and sell) else buy or sell

@@ -22,7 +22,7 @@ TRAIN_TF_NAMES   = ["1hour", "2hour", "4hour", "8hour", "12hour", "1day", "1week
 TRAIN_TF_MINUTES = [60, 120, 240, 480, 720, 1440, 10080]
 TRAIN_TF_CCXT    = {60: "1h",    120: "2h",   240: "4h",   480: "8h",
                     720: "12h",  1440: "1d",  10080: "1w"}
-TRAIN_TF_KUCOIN  = dict(zip(TRAIN_TF_MINUTES, TRAIN_TF_NAMES))
+TF_MINUTE_TO_NAME_MAP  = dict(zip(TRAIN_TF_MINUTES, TRAIN_TF_NAMES))
 
 DISPLAY_TIMEFRAMES = [
     "1min", "5min", "15min", "30min",
