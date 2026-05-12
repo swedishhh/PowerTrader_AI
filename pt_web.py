@@ -412,19 +412,17 @@ async def api_data_manager_stop():
     return {"ok": True}
 
 
+_DM_TF_MINUTES = [60, 120, 240, 480, 720, 1440, 10080]
+
+
 @app.get("/api/data-manager/stats")
 async def api_data_manager_stats():
-    """Per-coin stats from the local kucoin60 ArcticDB library."""
+    """Per-(coin, tf) stats from the local kucoin ArcticDB libraries."""
     try:
         import arcticdb as adb
         store = adb.Arctic(f"lmdb:///{env.historic_data_dir}")
-        lib_name = "kucoin60"
-        if lib_name not in store.list_libraries():
-            return {"stats": {}, "error": None}
-        lib = store.get_library(lib_name)
-        symbols = set(lib.list_symbols())
+        known_libs = set(store.list_libraries())
 
-        # Load error coins from status file if present
         status_path = env.hub_data_dir / "data_manager_status.json"
         error_coins: list = []
         if status_path.exists():
@@ -433,32 +431,71 @@ async def api_data_manager_stats():
             except Exception:
                 pass
 
-        stats = {}
         now = pd.Timestamp.now(tz="UTC")
-        for coin in env.coins:
-            a_sym = f"{coin}_USDT"
-            if coin in error_coins:
-                stats[coin] = {"error": "Not available on KuCoin"}
+        rows = []
+        for tf in _DM_TF_MINUTES:
+            lib_name = f"kucoin{tf}"
+            if lib_name not in known_libs:
+                for coin in env.coins:
+                    rows.append({"coin": coin, "tf_minutes": tf, "error": "No library"})
                 continue
-            if a_sym not in symbols:
-                stats[coin] = {"error": "No local data"}
-                continue
-            try:
-                df = lib.read(a_sym, columns=[]).data
-                last_ts = df.index[-1]
-                age_minutes = int((now - last_ts).total_seconds() / 60)
-                stats[coin] = {
-                    "rows": len(df),
-                    "first": str(df.index[0].date()),
-                    "last": str(last_ts),
-                    "age_minutes": age_minutes,
-                    "error": None,
-                }
-            except Exception as e:
-                stats[coin] = {"error": str(e)}
-        return {"stats": stats, "error": None}
+            lib = store.get_library(lib_name)
+            symbols = set(lib.list_symbols())
+            for coin in env.coins:
+                sym = f"{coin}_USDT"
+                if coin in error_coins:
+                    rows.append({"coin": coin, "tf_minutes": tf, "error": "Not available on KuCoin"})
+                    continue
+                if sym not in symbols:
+                    rows.append({"coin": coin, "tf_minutes": tf, "error": "No data"})
+                    continue
+                try:
+                    df = lib.read(sym, columns=[]).data
+                    last_ts = df.index[-1]
+                    age_minutes = int((now - last_ts).total_seconds() / 60)
+                    rows.append({
+                        "coin": coin, "tf_minutes": tf,
+                        "rows": len(df),
+                        "first": str(df.index[0].date()),
+                        "last": str(last_ts),
+                        "age_minutes": age_minutes,
+                        "error": None,
+                    })
+                except Exception as e:
+                    rows.append({"coin": coin, "tf_minutes": tf, "error": str(e)})
+        return {"rows": rows, "error": None}
     except Exception as e:
-        return {"stats": {}, "error": str(e)}
+        return {"rows": [], "error": str(e)}
+
+
+@app.get("/api/data-manager/chart/{coin}/{tf_minutes}")
+async def api_data_manager_chart(coin: str, tf_minutes: int, limit: int = 1000):
+    """Return OHLCV candles for a coin+tf from the local ArcticDB store."""
+    try:
+        import arcticdb as adb
+        store = adb.Arctic(f"lmdb:///{env.historic_data_dir}")
+        lib_name = f"kucoin{tf_minutes}"
+        if lib_name not in store.list_libraries():
+            return {"candles": [], "error": "Library not found"}
+        lib = store.get_library(lib_name)
+        sym = f"{coin}_USDT"
+        df = lib.read(sym).data
+        if df.empty:
+            return {"candles": []}
+        df = df.tail(limit)
+        candles = [
+            {
+                "time": int(ts.timestamp()),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+            }
+            for ts, row in df.iterrows()
+        ]
+        return {"candles": candles}
+    except Exception as e:
+        return {"candles": [], "error": str(e)}
 
 
 @app.post("/api/start-neural")

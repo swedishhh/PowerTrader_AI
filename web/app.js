@@ -54,6 +54,7 @@ const state = {
 };
 
 const TF_LIST = ['1min','5min','15min','30min','1hour','2hour','4hour','8hour','12hour','1day','1week'];
+const TF_MINUTES_LABEL = {60:'1h', 120:'2h', 240:'4h', 480:'8h', 720:'12h', 1440:'1d', 10080:'1w'};
 const TF_REFRESH_MS = {
   '1min': 5_000, '5min': 15_000, '15min': 30_000, '30min': 45_000,
   '1hour': 60_000, '2hour': 90_000, '4hour': 120_000,
@@ -281,6 +282,7 @@ async function refreshAll() {
     populateLogSourceDropdown();
 
     if ($('#tab-compare').classList.contains('active')) loadCompare();
+    if ($('#tab-data').classList.contains('active')) _loadDataTabStats();
     if (!$('#training-list').querySelector('.train-log-panel')) renderTraining(coinsData.coins);
     else updateTrainingBadges(coinsData.coins);
     if (!$('#tab-settings').classList.contains('active')) renderConfig(cfgData);
@@ -751,6 +753,86 @@ function selectAccountChart(hours) {
   $('#panel-chart').classList.add('mobile-active');
 
   loadAccountChart(state.accountRange);
+}
+
+async function showHistoricChart(coin, tfMinutes) {
+  state.chartMode = 'historic';
+  state.selectedCoin = null;
+
+  if (state.chartRefreshTimer) {
+    clearInterval(state.chartRefreshTimer);
+    state.chartRefreshTimer = null;
+  }
+  state._diffSeries = null;
+  if (state.chart) {
+    state.chart.remove();
+    state.chart = null;
+    state.candleSeries = null;
+    state.priceLines = [];
+    state._midPriceLine = null;
+    state._currentBar = null;
+  }
+
+  $$('.coin-card').forEach(c => c.classList.remove('active'));
+  const pb = $('#acct-block-portfolio');
+  if (pb) pb.classList.remove('active');
+
+  const tfLabel = TF_MINUTES_LABEL[tfMinutes] || `${tfMinutes}m`;
+  $('#chart-coin-label').textContent = `${coin} · ${tfLabel} (Historic)`;
+  $('#tf-selector').style.display = 'none';
+  $('#chart-diff-container').classList.add('hidden');
+  $('#chart-legend').classList.add('hidden');
+  $('#coin-position').classList.add('hidden');
+  $('#panel-chart').classList.add('mobile-active');
+
+  const container = $('#chart-container');
+  state.chart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: container.clientHeight,
+    layout: {
+      background: {type: 'solid', color: CHART_COLORS.bg},
+      textColor: CHART_COLORS.text,
+      fontFamily: "'Azeret Mono', monospace",
+      fontSize: 10,
+    },
+    grid: {
+      vertLines: {color: CHART_COLORS.grid},
+      horzLines: {color: CHART_COLORS.grid},
+    },
+    crosshair: {
+      mode: LightweightCharts.CrosshairMode.Normal,
+      vertLine: {color: '#3A3A60', style: 2, width: 1},
+      horzLine: {color: '#3A3A60', style: 2, width: 1},
+    },
+    timeScale: {
+      borderColor: CHART_COLORS.border,
+      timeVisible: true,
+      secondsVisible: false,
+    },
+    rightPriceScale: {borderColor: CHART_COLORS.border},
+  });
+
+  state.candleSeries = state.chart.addCandlestickSeries({
+    upColor: CHART_COLORS.up,
+    downColor: CHART_COLORS.down,
+    borderUpColor: CHART_COLORS.up,
+    borderDownColor: CHART_COLORS.down,
+    wickUpColor: CHART_COLORS.up,
+    wickDownColor: CHART_COLORS.down,
+  });
+
+  try {
+    const data = await api(`data-manager/chart/${coin}/${tfMinutes}`);
+    if (data.candles && data.candles.length > 0) {
+      state.candleSeries.setData(data.candles);
+      const last = data.candles[data.candles.length - 1];
+      const pp = pricePrecision(last.close);
+      state.candleSeries.applyOptions({priceFormat: {type: 'price', ...pp}});
+      state.chart.timeScale().fitContent();
+    }
+  } catch (e) {
+    console.error('Failed to load historic candles:', e);
+  }
 }
 
 async function loadChart(coin, tf) {
@@ -2045,7 +2127,6 @@ async function loadAndRenderDataTab() {
   const running = state.dataManagerState && state.dataManagerState !== 'Stopped';
   const stateLabel = state.dataManagerState || 'Stopped';
 
-  let statsHtml = '<div class="dm-loading">Loading stats…</div>';
   el.innerHTML = `
     <div class="dm-header">
       <div class="dm-status">
@@ -2057,7 +2138,7 @@ async function loadAndRenderDataTab() {
           : `<button class="btn btn-primary btn-small" id="btn-dm-start">Start Data Manager</button>`}
       </div>
     </div>
-    <div id="dm-table-wrap">${statsHtml}</div>`;
+    <div id="dm-table-wrap"><div class="dm-loading">Loading stats…</div></div>`;
 
   $('#btn-dm-start') && $('#btn-dm-start').addEventListener('click', async () => {
     await apiPost('data-manager/start');
@@ -2068,53 +2149,62 @@ async function loadAndRenderDataTab() {
     setTimeout(loadAndRenderDataTab, 800);
   });
 
-  // Load stats
-  const data = await api('data-manager/stats');
+  await _loadDataTabStats();
+}
+
+async function _loadDataTabStats() {
   const wrap = $('#dm-table-wrap');
   if (!wrap) return;
+
+  const data = await api('data-manager/stats');
 
   if (data.error) {
     wrap.innerHTML = `<div class="dm-error">Error: ${data.error}</div>`;
     return;
   }
 
-  const stats = data.stats || {};
-  let rows = Object.entries(stats).map(([coin, s]) => ({ coin, ...s }));
+  let rows = data.rows || [];
+
+  const cols = ['coin', 'tf_minutes', 'rows', 'first', 'last', 'age_minutes'];
+  const labels = {coin: 'Coin', tf_minutes: 'TF', rows: 'Rows', first: 'From', last: 'Latest', age_minutes: 'Age'};
 
   function sortRows() {
     rows.sort((a, b) => {
       let va = a[_dataSortCol], vb = b[_dataSortCol];
       if (va == null) va = _dataSortAsc ? Infinity : -Infinity;
       if (vb == null) vb = _dataSortAsc ? Infinity : -Infinity;
-      if (typeof va === 'string') return _dataSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
-      return _dataSortAsc ? va - vb : vb - va;
+      const cmp = typeof va === 'string'
+        ? (_dataSortAsc ? va.localeCompare(vb) : vb.localeCompare(va))
+        : (_dataSortAsc ? va - vb : vb - va);
+      return cmp !== 0 ? cmp : a.tf_minutes - b.tf_minutes;
     });
   }
 
   function renderTable() {
     sortRows();
-    const cols = ['coin', 'rows', 'first', 'last', 'age_minutes'];
-    const labels = { coin: 'Coin', rows: 'Rows', first: 'From', last: 'Latest', age_minutes: 'Age' };
     const thHtml = cols.map(c => {
       const arrow = c === _dataSortCol ? (_dataSortAsc ? ' ▲' : ' ▼') : '';
       return `<th class="dm-th${c === _dataSortCol ? ' dm-th-active' : ''}" data-col="${c}">${labels[c]}${arrow}</th>`;
     }).join('') + '<th class="dm-th">Chart</th>';
 
     const rowsHtml = rows.map(r => {
+      const tfLabel = TF_MINUTES_LABEL[r.tf_minutes] || `${r.tf_minutes}m`;
       if (r.error) {
         return `<tr class="dm-row dm-row-error">
           <td class="dm-td dm-coin">${r.coin}</td>
+          <td class="dm-td dm-tf">${tfLabel}</td>
           <td class="dm-td dm-error-cell" colspan="4">${r.error}</td>
           <td class="dm-td"></td>
         </tr>`;
       }
       return `<tr class="dm-row">
         <td class="dm-td dm-coin">${r.coin}</td>
+        <td class="dm-td dm-tf">${tfLabel}</td>
         <td class="dm-td">${(r.rows || 0).toLocaleString()}</td>
         <td class="dm-td dm-date">${r.first || '—'}</td>
         <td class="dm-td dm-date">${r.last ? r.last.slice(0, 16).replace('T', ' ') : '—'}</td>
         <td class="dm-td ${_ageClass(r.age_minutes)}">${_fmtAge(r.age_minutes)}</td>
-        <td class="dm-td"><button class="btn btn-small dm-chart-btn" data-coin="${r.coin}">Chart</button></td>
+        <td class="dm-td"><button class="btn btn-small dm-chart-btn" data-coin="${r.coin}" data-tf="${r.tf_minutes}">Chart</button></td>
       </tr>`;
     }).join('');
 
@@ -2131,7 +2221,7 @@ async function loadAndRenderDataTab() {
       });
     });
     $$('.dm-chart-btn', wrap).forEach(btn => {
-      btn.addEventListener('click', () => selectCoin(btn.dataset.coin));
+      btn.addEventListener('click', () => showHistoricChart(btn.dataset.coin, parseInt(btn.dataset.tf)));
     });
   }
 
