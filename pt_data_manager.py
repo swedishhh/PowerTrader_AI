@@ -63,7 +63,7 @@ def _write_status(state: str, coin: str = "", tf: int = 0,
         "error_coins": error_coins or [],
         "ts": time.time(),
     }
-    path = _env.hub_data_dir / "data_manager_status.json"
+    path = _env.data_manager_status_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")

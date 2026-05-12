@@ -432,15 +432,10 @@ class KrakenAdapter(ExchangeAdapter):
 def create_adapter() -> KrakenAdapter:
     import os
     from exchange_api import load_api_keys
+    from pt_env import PTEnv
 
-    base_dir = os.path.dirname(os.path.abspath(__file__))
     keys = load_api_keys("kraken")
-    api_key = keys["api_key"]
-    api_secret = keys["api_secret"]
+    env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
+    debug_dir = str(env.debug_trade_dumps_dir())
 
-    hub_data = os.environ.get(
-        "POWERTRADER_HUB_DIR", os.path.join(base_dir, "state", "hub_data"),
-    )
-    debug_dir = os.path.join(hub_data, "debug_trade_dumps")
-
-    return KrakenAdapter(api_key=api_key, api_secret=api_secret, debug_dir=debug_dir)
+    return KrakenAdapter(api_key=keys["api_key"], api_secret=keys["api_secret"], debug_dir=debug_dir)

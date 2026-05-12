@@ -678,6 +678,8 @@ class RobinhoodAdapter(ExchangeAdapter):
 
 def create_adapter() -> RobinhoodAdapter:
     from exchange_api import load_api_keys
+    from pt_env import PTEnv
+
     keys = load_api_keys("robinhood")
     api_key = keys["api_key"]
     private_key = keys["api_secret"]  # base64-encoded nacl signing key
@@ -688,8 +690,8 @@ def create_adapter() -> RobinhoodAdapter:
             "Fill in exchange_api_keys.json with your Robinhood api_key and api_secret.\n"
         )
 
-    hub_data = os.environ.get("POWERTRADER_HUB_DIR", os.path.join(base_dir, "state", "hub_data"))
-    debug_dir = os.path.join(hub_data, "debug_trade_dumps")
+    env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
+    debug_dir = str(env.debug_trade_dumps_dir())
 
     return RobinhoodAdapter(
         api_key=api_key,

@@ -582,6 +582,15 @@ class PTEnv:
     def runner_ready_path(self) -> Path:
         return self._hub_dir / "runner_ready.json"
 
+    def data_manager_status_path(self) -> Path:
+        return self._hub_dir / "data_manager_status.json"
+
+    def debug_trade_dumps_dir(self) -> Path:
+        return self._hub_dir / "debug_trade_dumps"
+
+    def logs_dir(self) -> Path:
+        return self._hub_dir / "logs"
+
     def neural_autorestart_path(self) -> Path:
         return self._hub_dir / "neural_autorestart_state.json"
 

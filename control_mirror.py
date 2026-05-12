@@ -33,15 +33,15 @@ def _kucoin_mid_price(base: str) -> Optional[float]:
 
 class ControlMirror:
 
-    def __init__(self, hub_data_dir: str):
-        self._hub = Path(hub_data_dir)
+    def __init__(self, xk_dir: str):
+        self._hub = Path(xk_dir)
         self._hub.mkdir(parents=True, exist_ok=True)
 
-        self._state_path = self._hub / "control_exchange_state.json"
-        self._ledger_path = self._hub / "pnl_ledger_control.json"
-        self._history_path = self._hub / "trade_history_control.jsonl"
-        self._acct_history_path = self._hub / "account_value_history_control.jsonl"
-        self._status_path = self._hub / "trader_status_control.json"
+        self._state_path = self._hub / "exchange_state.json"
+        self._ledger_path = self._hub / "pnl_ledger.json"
+        self._history_path = self._hub / "trade_history.jsonl"
+        self._acct_history_path = self._hub / "account_value_history.jsonl"
+        self._status_path = self._hub / "trader_status.json"
 
         self._state = self._load_json(self._state_path) or {
             "usd_balance": 0.0,
@@ -234,7 +234,7 @@ class ControlMirror:
         self._append_account_value(total)
 
     def write_status(self) -> None:
-        """Write a trader_status_control.json from current control state."""
+        """Write trader_status.json from current control state."""
         ts = time.time()
         total = self._get_account_value()
 

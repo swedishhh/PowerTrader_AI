@@ -106,19 +106,15 @@ class ProcessController:
         self._trainers: dict[str, ProcHandle] = {}
         self._lock = threading.Lock()
 
-    def _make_env(self, exchange: str | None = None) -> dict:
-        e = os.environ.copy()
-        e["POWERTRADER_HUB_DIR"] = str(self.env.hub_data_dir)
-        e["POWERTRADER_EXCHANGE"] = exchange or self.env.exchange
-        return e
+    def _make_env(self) -> dict:
+        return os.environ.copy()
 
     def _log_dir(self) -> Path:
-        return self.env.hub_data_dir / "logs"
+        return self.env.logs_dir()
 
     def _launch(self, handle: ProcHandle, script_path: str, args: list[str] | None = None,
                 cwd: str | None = None, prefix: str = "",
-                exchange: str | None = None, on_exit: callable = None,
-                log_name: str | None = None) -> bool:
+                on_exit: callable = None, log_name: str | None = None) -> bool:
         if handle.alive:
             return True
         if not os.path.isfile(script_path):
@@ -130,7 +126,7 @@ class ProcessController:
             handle.proc = subprocess.Popen(
                 cmd,
                 cwd=cwd or str(self.env.project_dir),
-                env=self._make_env(exchange),
+                env=self._make_env(),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -203,6 +199,7 @@ class ProcessController:
             log_name="neural",
         )
 
+
     def stop_neural(self):
         self._stop(self._neural)
         ar_path = self.env.neural_autorestart_path()
@@ -241,8 +238,8 @@ class ProcessController:
             result = self._launch(
                 h,
                 str(self.env.script_path("trader")),
+                args=["--exchange", xk],
                 prefix=f"[TRADER:{xk.upper()}] ",
-                exchange=xk,
                 log_name=f"trader-{xk}",
             )
             ok = ok and result

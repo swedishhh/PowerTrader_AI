@@ -143,11 +143,7 @@ def _load_long_term_symbols_from_settings() -> list:
 COIN_SYMBOLS = _load_gui_coins()
 CURRENT_COINS = list(COIN_SYMBOLS)
 
-HUB_DATA_DIR = os.environ.get(
-    "POWERTRADER_HUB_DIR", str(_env.hub_data_dir)
-)
-os.makedirs(HUB_DATA_DIR, exist_ok=True)
-LTH_EMA200_PATH = os.path.join(HUB_DATA_DIR, "lth_daily_ema200.json")
+LTH_EMA200_PATH = str(_env.ema200_path())
 
 _last_lth_ema_write_ts = 0.0
 
@@ -267,8 +263,7 @@ def _coin_is_trained(sym: str) -> bool:
 
 # --- GUI HUB "runner ready" gate file (read by gui_hub.py Start All toggle) ---
 
-HUB_DIR = HUB_DATA_DIR
-RUNNER_READY_PATH = os.path.join(HUB_DIR, "runner_ready.json")
+RUNNER_READY_PATH = str(_env.runner_ready_path())
 
 
 def _atomic_write_json(path: str, data: dict) -> None:

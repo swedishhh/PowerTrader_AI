@@ -39,7 +39,8 @@ app = FastAPI(title="PowerTrader Web")
 
 
 def _get_mirror() -> ControlMirror:
-    return ControlMirror(str(env.hub_data_dir))
+    xk = "demo" if env.trading_mode == "demo" else "control"
+    return ControlMirror(str(env.hub_data_xk_dir(xk)))
 
 try:
     _get_mirror().write_status()
@@ -181,7 +182,7 @@ async def api_status():
         exchanges_data[xk] = _account_for_exchange(xk)
 
     dm_state = "Stopped"
-    dm_status_path = env.hub_data_dir / "data_manager_status.json"
+    dm_status_path = env.data_manager_status_path()
     if ctrl_status["data_manager_running"] and dm_status_path.exists():
         try:
             dm_state = json.loads(dm_status_path.read_text()).get("state", "Running") or "Running"
@@ -438,7 +439,7 @@ async def api_data_manager_stats():
         store = adb.Arctic(f"lmdb:///{env.historic_data_dir}")
         known_libs = set(store.list_libraries())
 
-        status_path = env.hub_data_dir / "data_manager_status.json"
+        status_path = env.data_manager_status_path()
         error_coins: list = []
         if status_path.exists():
             try:
@@ -1132,7 +1133,7 @@ async def _file_watcher():
                 if rr.get("ready") and ctrl.neural_running:
                     ctrl.poll_ready_and_start_trader()
 
-            dm_status_path = env.hub_data_dir / "data_manager_status.json"
+            dm_status_path = env.data_manager_status_path()
             if _check(dm_status_path, "data_manager_status"):
                 try:
                     dm_data = json.loads(dm_status_path.read_text())

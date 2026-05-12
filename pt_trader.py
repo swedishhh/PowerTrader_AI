@@ -57,6 +57,7 @@ Exchange adapter:
   balance queries go through ExchangeAdapter so the trading logic is exchange-
   agnostic.
 """
+import argparse
 import datetime
 import json
 import uuid
@@ -84,27 +85,16 @@ colorama.init(autoreset=True)
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 _pt_env = _PTEnv(_PROJECT_DIR)
 
-EXCHANGE_KEY = os.environ.get("POWERTRADER_EXCHANGE", "demo")
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--exchange", default="demo")
+EXCHANGE_KEY = _parser.parse_known_args()[0].exchange
 
-HUB_DATA_DIR = os.environ.get(
-    "POWERTRADER_HUB_DIR", str(_pt_env.hub_data_dir)
-)
-os.makedirs(HUB_DATA_DIR, exist_ok=True)
-
-XK_DIR = os.path.join(HUB_DATA_DIR, EXCHANGE_KEY)
-os.makedirs(XK_DIR, exist_ok=True)
-
-
-def _exchange_path(basename: str, ext: str) -> str:
-    return os.path.join(XK_DIR, f"{basename}{ext}")
-
-
-TRADER_STATUS_PATH = _exchange_path("trader_status", ".json")
-TRADE_HISTORY_PATH = _exchange_path("trade_history", ".jsonl")
-PNL_LEDGER_PATH = _exchange_path("pnl_ledger", ".json")
-ACCOUNT_VALUE_HISTORY_PATH = _exchange_path("account_value_history", ".jsonl")
-BOT_ORDER_IDS_PATH = _exchange_path("bot_order_ids", ".json")
-LTH_EMA200_PATH = os.path.join(HUB_DATA_DIR, "lth_daily_ema200.json")
+TRADER_STATUS_PATH        = str(_pt_env.trader_status_path(EXCHANGE_KEY))
+TRADE_HISTORY_PATH        = str(_pt_env.trade_history_path(EXCHANGE_KEY))
+PNL_LEDGER_PATH           = str(_pt_env.pnl_ledger_path(EXCHANGE_KEY))
+ACCOUNT_VALUE_HISTORY_PATH = str(_pt_env.account_history_path(EXCHANGE_KEY))
+BOT_ORDER_IDS_PATH        = str(_pt_env.bot_order_ids_path(EXCHANGE_KEY))
+LTH_EMA200_PATH           = str(_pt_env.ema200_path())
 
 
 def _refresh_paths_and_symbols():
@@ -140,7 +130,7 @@ class CryptoAPITrading:
         self.mirror = None
         if EXCHANGE_KEY == "kraken":
             from control_mirror import ControlMirror
-            self.mirror = ControlMirror(HUB_DATA_DIR)
+            self.mirror = ControlMirror(str(_pt_env.hub_data_xk_dir("control")))
 
         self._skipped_coins: set = set()
         self.dca_levels_triggered = {}  # Track DCA levels for each crypto
