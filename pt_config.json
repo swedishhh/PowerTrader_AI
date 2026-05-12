@@ -30,10 +30,11 @@
     "ALGO",
     "HBAR"
   ],
+  "trading_mode": "trading",
   "exchanges": [
-    "control",
     "kraken"
   ],
+  "control_sync_exchange": "kraken",
   "exchange": "control",
   "excluded_coins": [],
   "long_term_holdings": [
@@ -80,12 +81,12 @@
   "default_timeframe": "1hour",
   "ui_refresh_seconds": 1,
   "chart_refresh_seconds": 4,
-  "candles_limit": 250,
+  "candles_limit": 500,
   "ui_font_size": 20,
   "control_starting_usd": 0,
+  "auto_start_scripts": false,
+  "training_staleness_days": 14,
   "control_slippage_factor": 0,
   "demo_starting_usd": 10000,
-  "demo_slippage_factor": 0.001,
-  "auto_start_scripts": false,
-  "training_staleness_days": 14
+  "demo_slippage_factor": 0.001
 }
