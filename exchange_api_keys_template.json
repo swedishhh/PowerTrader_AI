@@ -1,0 +1,14 @@
+{
+  "kraken": {
+    "api_key": "",
+    "api_secret": ""
+  },
+  "binance": {
+    "api_key": "",
+    "api_secret": ""
+  },
+  "robinhood": {
+    "api_key": "",
+    "api_secret": ""
+  }
+}
