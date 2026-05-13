@@ -87,6 +87,7 @@ CONFIG_DEFAULTS: dict[str, Any] = {
 
     # Control / Demo exchange
     "control_starting_usd": 0,
+    "demo_starting_usd": 10000,
 
     # Startup
     "auto_start_scripts": False,
@@ -213,16 +214,22 @@ CONFIG_SCHEMA: dict[str, dict] = {
     },
 
     # ── Control / Demo Exchange ───────────────────────────────────────────
+    "demo_starting_usd": {
+        "type": "float", "min": 0,
+        "label": "Demo Starting USD",
+        "hint": "Starting balance for the frictionless demo account",
+        "group": "Control Exchange",
+    },
     "control_starting_usd": {
         "type": "float", "min": 0,
-        "label": "Starting USD",
-        "hint": "Starting balance for the Demo/Control account (0 = auto-sync from control_sync_exchange on first run)",
+        "label": "Control Starting USD",
+        "hint": "Starting balance for the control account in trading mode (0 = auto-sync from control_sync_exchange on first run)",
         "group": "Control Exchange",
     },
     "control_sync_exchange": {
         "type": "str",
         "label": "Sync Source Exchange",
-        "hint": "Real exchange to sync the starting balance from (leave blank to use first in the exchanges list)",
+        "hint": "Real exchange to sync the control starting balance from (leave blank to use first in the exchanges list)",
         "group": "Control Exchange",
     },
 

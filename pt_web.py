@@ -59,7 +59,8 @@ def _get_adapter(xk: str):
                 state_path = str(env.exchange_state_path(xk))
                 cfg = env.get_config()
                 price_source = cfg.get("live_price_source", "kucoin")
-                starting_usd = float(cfg.get("control_starting_usd") or 0)
+                cfg_key = "demo_starting_usd" if xk == "demo" else "control_starting_usd"
+                starting_usd = float(cfg.get(cfg_key) or 0)
                 _adapters[xk] = _make_ctrl(
                     starting_usd=starting_usd,
                     price_source=price_source,
@@ -1178,7 +1179,8 @@ def _init_exchange_balances():
     ck = _ctrl_xk()
     ctrl_state = env.exchange_state_path(ck)
     if not ctrl_state.exists():
-        starting = float(env.get_config().get("control_starting_usd") or 0)
+        cfg_key = "demo_starting_usd" if ck == "demo" else "control_starting_usd"
+        starting = float(env.get_config().get(cfg_key) or 0)
         if starting <= 0:
             sync_xk = _control_sync_exchange()
             if sync_xk:

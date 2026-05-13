@@ -185,8 +185,9 @@ def load_exchange_adapter(key: str) -> ExchangeAdapter:
         env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
         from exchange_control import create_adapter as _make_ctrl
         cfg = env.get_config()
+        cfg_key = "demo_starting_usd" if key == "demo" else "control_starting_usd"
         return _make_ctrl(
-            starting_usd=float(cfg.get("control_starting_usd") or 0),
+            starting_usd=float(cfg.get(cfg_key) or 0),
             price_source=cfg.get("live_price_source", "kucoin"),
             state_path=str(env.exchange_state_path(key)),
         )
