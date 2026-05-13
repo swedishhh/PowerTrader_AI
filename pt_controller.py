@@ -225,15 +225,17 @@ class ProcessController:
             self._traders[exchange] = ProcHandle(name=f"trader-{exchange}")
         return self._traders[exchange]
 
-    def start_trader(self, exchange: str | None = None) -> bool:
+    def _trader_exchanges(self, exchange: str | None = None) -> list[str]:
+        """Exchanges to run traders for, respecting trading mode."""
         if exchange:
-            exchanges = [exchange]
-        else:
-            exchanges = self.env.exchanges
+            return [exchange]
+        if self.env.trading_mode == "demo":
+            return ["demo"]
+        return [xk for xk in self.env.exchanges if xk not in ("control", "demo")]
+
+    def start_trader(self, exchange: str | None = None) -> bool:
         ok = True
-        for xk in exchanges:
-            if xk == "control":
-                continue
+        for xk in self._trader_exchanges(exchange):
             h = self._get_trader(xk)
             result = self._launch(
                 h,
@@ -278,7 +280,7 @@ class ProcessController:
         rr = sm.runner_ready()
         if rr.get("ready"):
             started = False
-            for xk in self.env.exchanges:
+            for xk in self._trader_exchanges():
                 if not self.trader_running_for(xk):
                     self.start_trader(xk)
                     started = True

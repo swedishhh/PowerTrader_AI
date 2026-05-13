@@ -125,7 +125,7 @@ class ExchangeAdapter(ABC):
 # Auto-discovery: scan for exchange_*.py to find available exchanges
 # ------------------------------------------------------------------
 
-_SYNTHETIC_EXCHANGES = {"api", "control"}
+_SYNTHETIC_EXCHANGES = {"api", "control", "demo"}
 
 
 def discover_exchanges(search_dir: Optional[str] = None) -> List[str]:
@@ -174,7 +174,22 @@ def exchange_display_name(key: str) -> str:
 
 
 def load_exchange_adapter(key: str) -> ExchangeAdapter:
-    """Import exchange_<key> and return its create_adapter() result."""
+    """Import exchange_<key> and return its create_adapter() result.
+
+    'demo' and 'control' both use exchange_control with the appropriate
+    per-exchange state path so each gets an isolated state directory.
+    """
+    if key in ("demo", "control"):
+        from pt_env import PTEnv
+        import os
+        env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
+        from exchange_control import create_adapter as _make_ctrl
+        cfg = env.get_config()
+        return _make_ctrl(
+            starting_usd=float(cfg.get("control_starting_usd") or 0),
+            price_source=cfg.get("live_price_source", "kucoin"),
+            state_path=str(env.exchange_state_path(key)),
+        )
     import importlib
     mod = importlib.import_module(f"exchange_{key}")
     return mod.create_adapter()
