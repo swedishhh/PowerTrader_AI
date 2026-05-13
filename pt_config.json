@@ -87,12 +87,7 @@
   "control_starting_usd": 0,
   "auto_start_scripts": false,
   "training_staleness_days": 14,
-  "kucoin_local_topup_hours": [
-    0,
-    6,
-    12,
-    18
-  ],
+  "kucoin_local_topup_interval_hours": 6,
   "control_slippage_factor": 0,
   "demo_starting_usd": 10000,
   "demo_slippage_factor": 0.001

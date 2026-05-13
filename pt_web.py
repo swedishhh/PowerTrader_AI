@@ -479,9 +479,10 @@ async def api_data_manager_stats():
                     })
                 except Exception as e:
                     rows.append({"coin": coin, "tf_minutes": tf, "error": str(e)})
-        return {"rows": rows, "error": None}
+        interval_h = int(env.get_config().get("kucoin_local_topup_interval_hours") or 6)
+        return {"rows": rows, "topup_interval_minutes": interval_h * 60, "error": None}
     except Exception as e:
-        return {"rows": [], "error": str(e)}
+        return {"rows": [], "topup_interval_minutes": 360, "error": str(e)}
 
 
 @app.get("/api/data-manager/chart/{coin}/{tf_minutes}")

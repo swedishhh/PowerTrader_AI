@@ -4,7 +4,7 @@ PowerTrader local KuCoin data manager.
 Launched as a subprocess by pt_controller. On start:
   - For each coin: backfill if no local data exists, topup if data exists.
   - Enters Normal (idle) state, then topups at a fixed interval derived
-    from kucoin_local_topup_hours config (e.g. [0,6,12,18] → every 6h).
+    from kucoin_local_topup_interval_hours config (e.g. 6 → every 6h).
 
 Writes hub_data/data_manager_status.json at every state transition so the
 web UI can display the current state without polling logs.
@@ -73,19 +73,8 @@ def _write_status(state: str, coin: str = "", tf: int = 0,
         _log(f"[Status] write failed: {e}")
 
 
-def _topup_interval_seconds(hours: list) -> float:
-    """Derive sleep interval from configured hours list.
-
-    Sorts hours, finds minimum gap between consecutive entries (wrapping
-    midnight), returns that gap in seconds.  Falls back to 6h if list is
-    empty or has one entry.
-    """
-    if not hours or len(hours) < 2:
-        return 6 * 3600
-    s = sorted(set(int(h) for h in hours))
-    gaps = [s[i + 1] - s[i] for i in range(len(s) - 1)]
-    gaps.append(24 - s[-1] + s[0])  # wraparound gap
-    return min(gaps) * 3600
+def _topup_interval_seconds(cfg: dict) -> float:
+    return max(1, int(cfg.get("kucoin_local_topup_interval_hours") or 6)) * 3600
 
 
 # ---------------------------------------------------------------------------
@@ -236,8 +225,7 @@ def run():
     # ── Initial pass: backfill missing, topup existing ────────────────────
     cfg = _env.get_config()
     coins: list[str] = [str(c).upper() for c in cfg.get("coins", []) if str(c).strip()]
-    topup_hours = cfg.get("kucoin_local_topup_hours", [0, 6, 12, 18])
-    interval_s = _topup_interval_seconds(topup_hours)
+    interval_s = _topup_interval_seconds(cfg)
 
     _log(f"[DataManager] {len(coins)} coins, topup every {interval_s/3600:.1f}h")
 
@@ -292,8 +280,7 @@ def run():
         # Re-read config each cycle so changes are picked up
         cfg = _env.get_config()
         coins = [str(c).upper() for c in cfg.get("coins", []) if str(c).strip()]
-        topup_hours = cfg.get("kucoin_local_topup_hours", [0, 6, 12, 18])
-        interval_s = _topup_interval_seconds(topup_hours)
+        interval_s = _topup_interval_seconds(cfg)
 
         if time.time() - last_topup < interval_s:
             continue

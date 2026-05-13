@@ -2235,10 +2235,11 @@ function _fmtAge(minutes) {
   return `${Math.round(minutes / 1440)}d`;
 }
 
-function _ageClass(minutes) {
+function _ageClass(minutes, tfMinutes, intervalMinutes) {
   if (minutes == null) return 'dm-age-error';
-  if (minutes < 120) return 'dm-age-ok';
-  if (minutes < 1440) return 'dm-age-warn';
+  const window = (tfMinutes || 60) + (intervalMinutes || 360);
+  if (minutes < window)     return 'dm-age-ok';
+  if (minutes < 2 * window) return 'dm-age-warn';
   return 'dm-age-stale';
 }
 
@@ -2291,6 +2292,7 @@ async function _loadDataTabStats() {
   }
 
   let rows = data.rows || [];
+  const intervalMinutes = data.topup_interval_minutes || 360;
 
   const cols = ['coin', 'tf_minutes', 'rows', 'first', 'last', 'age_minutes'];
   const labels = {coin: 'Coin', tf_minutes: 'TF', rows: 'Rows', first: 'From', last: 'Latest', age_minutes: 'Age'};
@@ -2324,7 +2326,7 @@ async function _loadDataTabStats() {
         <td class="dm-td dm-td-num">${(r.rows || 0).toLocaleString()}</td>
         <td class="dm-td dm-date">${r.first || '—'}</td>
         <td class="dm-td dm-date">${r.last ? r.last.slice(0, 16).replace('T', ' ') : '—'}</td>
-        <td class="dm-td ${_ageClass(r.age_minutes)}">${_fmtAge(r.age_minutes)}</td>
+        <td class="dm-td ${_ageClass(r.age_minutes, r.tf_minutes, intervalMinutes)}">${_fmtAge(r.age_minutes)}</td>
         <td class="dm-td"><button class="btn btn-small dm-chart-btn" data-coin="${r.coin}" data-tf="${r.tf_minutes}">Chart</button></td>
       </tr>`;
     }).join('');

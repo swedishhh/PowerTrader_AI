@@ -95,7 +95,7 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "training_staleness_days": 14,
 
     # Data manager
-    "kucoin_local_topup_hours": [0, 6, 12, 18],
+    "kucoin_local_topup_interval_hours": 6,
 }
 
 
@@ -286,10 +286,10 @@ CONFIG_SCHEMA: dict[str, dict] = {
         "hint": "Path to ArcticDB store for local KuCoin OHLCV data (relative to project dir or absolute)",
         "group": "Data Manager",
     },
-    "kucoin_local_topup_hours": {
-        "type": "list_float", "each_min": 0, "each_max": 23, "min_len": 1,
-        "label": "Topup Hours (UTC)",
-        "hint": "Hours of day (UTC, 0–23) when the data manager runs a topup (e.g. 0, 6, 12, 18)",
+    "kucoin_local_topup_interval_hours": {
+        "type": "int", "min": 1, "max": 24,
+        "label": "Topup Interval (hours)",
+        "hint": "How often the data manager runs a topup (e.g. 6 = every 6 hours)",
         "group": "Data Manager",
     },
 
