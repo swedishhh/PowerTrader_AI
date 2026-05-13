@@ -48,6 +48,7 @@ except Exception:
     pass
 
 _adapters: dict = {}
+_last_mid_price: dict = {}  # coin -> last known good mid price
 
 
 def _get_adapter(xk: str):
@@ -244,7 +245,9 @@ async def api_coins():
             if mid > 0:
                 mid_prices.append(mid)
 
-        snap["mid_price"] = mid_prices[0] if mid_prices else 0
+        if mid_prices:
+            _last_mid_price[coin] = mid_prices[0]
+        snap["mid_price"] = _last_mid_price.get(coin, 0)
         snap["training_running"] = ctrl_status["training"].get(coin, {}).get("running", False)
         fail = cm.training_failure()
         if fail and fail.get("exception_type"):
