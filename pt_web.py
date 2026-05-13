@@ -718,9 +718,27 @@ async def api_reset_all():
 
 @app.post("/api/close-all")
 async def api_close_all():
-    """Sell all positions on all real exchanges, return to USDT."""
+    """Sell all positions on all real exchanges (or demo adapter in demo mode)."""
     ctrl.stop_trader()
     results = {}
+
+    if _is_demo_mode():
+        adapter = _get_adapter("demo")
+        if adapter:
+            holdings = adapter.get_holdings()
+            trades = []
+            for coin, qty in holdings.items():
+                symbol = f"{coin}_USD"
+                result = adapter.place_sell(symbol, qty)
+                sold = result is not None
+                trades.append({"coin": coin, "qty": qty, "sold": sold})
+                if sold:
+                    _record_close_trade("demo", coin, symbol, qty, result, tag="CLOSE_ALL")
+            _refresh_exchange_balance("demo")
+            _clear_trader_positions("demo")
+            results["demo"] = {"ok": True, "trades": trades}
+        return {"ok": True, "results": results}
+
     for xk in env.exchanges:  # real exchanges only
         adapter = _get_adapter(xk)
         if not adapter:
@@ -749,8 +767,25 @@ async def api_close_coin(coin: str, exchange: str):
     coin = coin.upper()
     xk = exchange.lower()
 
-    if xk in ("control", "demo"):
-        return {"ok": False, "error": "Control/demo positions close automatically when the real exchange closes"}
+    if xk == "control":
+        return {"ok": False, "error": "Control positions close automatically when the real exchange closes"}
+
+    if xk == "demo":
+        adapter = _get_adapter("demo")
+        if not adapter:
+            return {"ok": False, "error": "No demo adapter"}
+        holdings = adapter.get_holdings()
+        qty = holdings.get(coin, 0)
+        symbol = f"{coin}_USD"
+        if qty <= 0:
+            return {"ok": False, "error": f"No {coin} position in demo"}
+        result = adapter.place_sell(symbol, qty)
+        if not result:
+            return {"ok": False, "error": "Demo sell failed"}
+        _record_close_trade("demo", coin, symbol, qty, result, tag="CLOSE")
+        _clear_coin_position("demo", coin)
+        _refresh_exchange_balance("demo")
+        return {"ok": True, "coin": coin, "exchange": "demo", "qty": qty}
 
     if xk not in env.exchanges:
         return {"ok": False, "error": f"Unknown exchange: {xk}"}
