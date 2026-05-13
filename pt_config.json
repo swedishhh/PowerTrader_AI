@@ -80,15 +80,15 @@
     "1week"
   ],
   "default_timeframe": "1hour",
-  "ui_refresh_seconds": 1,
-  "chart_refresh_seconds": 4,
+  "ui_refresh_seconds": 5,
+  "chart_refresh_seconds": 60,
   "candles_limit": 500,
   "ui_font_size": 20,
   "control_starting_usd": 0,
+  "demo_starting_usd": 10000,
   "auto_start_scripts": false,
   "training_staleness_days": 14,
   "kucoin_local_topup_interval_hours": 6,
   "control_slippage_factor": 0,
-  "demo_starting_usd": 10000,
   "demo_slippage_factor": 0.001
 }

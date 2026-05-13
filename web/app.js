@@ -44,6 +44,7 @@ const state = {
   acctSeries: {},
   priceLines: [],
   chartRefreshTimer: null,
+  chartMarkersTimer: null,
   chartMode: 'candle',
   accountRange: 0,
   logRefreshTimer: null,
@@ -209,6 +210,7 @@ function handleWSMessage(msg) {
 
 let _refreshInterval = null;
 let _dataTabInterval = null;
+let _lastExchangeListJson = null;
 
 async function init() {
   setupTabs();
@@ -224,11 +226,19 @@ async function init() {
     if (state.chart) state.chart.timeScale().fitContent();
   });
 
-  // Load schema once at startup
+  // Load schema, config, and discovered exchanges once at startup
   try {
-    state.cfgSchema = await api('config/schema');
+    const [schema, cfgData, discData] = await Promise.all([
+      api('config/schema'), api('config'), api('discovered-exchanges'),
+    ]);
+    state.cfgSchema = schema;
+    state.cfg = cfgData;
+    state.tradeStartLevel = cfgData.trade_start_level || 1;
+    state.discoveredExchanges = discData.exchanges || [];
+    _applyUiPrefs(cfgData);
+    renderConfig(cfgData);
   } catch (e) {
-    console.warn('Could not load config schema:', e);
+    console.warn('Could not load startup config:', e);
   }
 
   await refreshAll();
@@ -255,24 +265,24 @@ function _applyUiPrefs(cfg) {
 
 async function refreshAll() {
   try {
-    const [statusData, coinsData, posData, cfgData, discData] = await Promise.all([
-      api('status'), api('coins'), api('positions'), api('config'), api('discovered-exchanges'),
+    const [statusData, coinsData, posData] = await Promise.all([
+      api('status'), api('coins'), api('positions'),
     ]);
 
-    state.cfg = cfgData;
-    state.tradeStartLevel = cfgData.trade_start_level || 1;
     state.exchangeList = statusData.exchange_list || ['control'];
     state.tradingMode = statusData.trading_mode || 'demo';
-    state.discoveredExchanges = discData.exchanges || [];
-
-    _applyUiPrefs(cfgData);
 
     if (statusData.exchanges) {
       state.exchangeData = statusData.exchanges;
     }
 
     updateSystemStatus(statusData.system);
-    renderTopbarAccounts();
+
+    const exchangeListJson = JSON.stringify(state.exchangeList);
+    if (exchangeListJson !== _lastExchangeListJson) {
+      _lastExchangeListJson = exchangeListJson;
+      renderTopbarAccounts();
+    }
 
     if (coinsData.coins) {
       state.coins = coinsData.coins;
@@ -291,7 +301,6 @@ async function refreshAll() {
     if ($('#tab-compare').classList.contains('active')) loadCompare();
     if (!$('#training-list').querySelector('.train-row')) renderTraining(coinsData.coins);
     else updateTrainingBadges(coinsData.coins);
-    if (!$('#tab-settings').classList.contains('active')) renderConfig(cfgData);
   } catch (e) {
     console.error('refreshAll failed:', e);
   }
@@ -581,7 +590,7 @@ function _updateCard(card, c, modeOverride) {
       });
       container.innerHTML = html;
     } else {
-      container.innerHTML = '';
+      if (container.innerHTML !== '') container.innerHTML = '';
     }
   } else {
     const longPct = (c.long_signal / 7) * 100;
@@ -629,7 +638,7 @@ function _updateCard(card, c, modeOverride) {
       posEl.innerHTML = posHtml;
     } else {
       posEl.style.display = 'none';
-      posEl.innerHTML = '';
+      if (posEl.innerHTML !== '') posEl.innerHTML = '';
     }
   }
 }
@@ -795,6 +804,10 @@ async function showHistoricChart(coin, tfMinutes) {
     clearInterval(state.chartRefreshTimer);
     state.chartRefreshTimer = null;
   }
+  if (state.chartMarkersTimer) {
+    clearInterval(state.chartMarkersTimer);
+    state.chartMarkersTimer = null;
+  }
   state._diffSeries = null;
   if (state.chart) {
     state.chart.remove();
@@ -930,6 +943,10 @@ async function loadChart(coin, tf) {
     clearInterval(state.chartRefreshTimer);
     state.chartRefreshTimer = null;
   }
+  if (state.chartMarkersTimer) {
+    clearInterval(state.chartMarkersTimer);
+    state.chartMarkersTimer = null;
+  }
   state._diffSeries = null;
   if (state.chart) {
     state.chart.remove();
@@ -1006,9 +1023,13 @@ async function loadChart(coin, tf) {
         state._currentBar = { ...last };
       }
       updateChartPriceLines();
-      updateChartTradeMarkers(coin);
     } catch {}
   }, refreshMs);
+
+  state.chartMarkersTimer = setInterval(() => {
+    if (!state.candleSeries || state.selectedCoin !== coin || state.selectedTf !== tf) return;
+    updateChartTradeMarkers(coin);
+  }, 60_000);
 
   const resizeObserver = new ResizeObserver(() => {
     if (state.chart) {
@@ -1028,6 +1049,10 @@ async function loadAccountChart(hours) {
   if (state.chartRefreshTimer) {
     clearInterval(state.chartRefreshTimer);
     state.chartRefreshTimer = null;
+  }
+  if (state.chartMarkersTimer) {
+    clearInterval(state.chartMarkersTimer);
+    state.chartMarkersTimer = null;
   }
   if (state.chart) {
     state.chart.remove();
@@ -2202,6 +2227,7 @@ async function saveConfig(original) {
     if (modeChanged) {
       state.tradingMode = patch.trading_mode;
       await refreshAll();
+      renderConfig(state.cfg);
     } else {
       btn.textContent = 'Saved!';
       setTimeout(() => {
