@@ -94,6 +94,7 @@ class ControlAdapter(ExchangeAdapter):
         return self._usd_balance
 
     def get_holdings(self) -> Dict[str, float]:
+        self._load_state()
         return {k: v for k, v in self._holdings.items() if v > 1e-12}
 
     def get_price(self, symbols: List[str]) -> Tuple[Dict[str, float], Dict[str, float], List[str]]:
