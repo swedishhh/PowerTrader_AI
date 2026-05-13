@@ -299,7 +299,7 @@ distance = 0.5
 
 def new_coin_state():
     return {
-        "low_bound_prices": [0.01] * len(tf_choices),
+        "low_bound_prices": [0.0] * len(tf_choices),
         "high_bound_prices": [99999999999999999] * len(tf_choices),
         "tf_times": [],
         "tf_choice_index": 0,
@@ -810,7 +810,7 @@ def step_coin(sym: str):
         n_tfs = len(tf_choices)
 
         # bounds: use your fake numbers when TF inactive / missing
-        low_bound_prices = _pad_to_len(low_bound_prices, n_tfs, 0.01)
+        low_bound_prices = _pad_to_len(low_bound_prices, n_tfs, 0.0)
         high_bound_prices = _pad_to_len(high_bound_prices, n_tfs, 99999999999999999)
 
         # predicted prices: keep equal when missing so it never triggers LONG/SHORT
