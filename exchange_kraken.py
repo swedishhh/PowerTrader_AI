@@ -15,10 +15,19 @@ from typing import Dict, List, Optional, Tuple
 
 import ccxt
 
-from exchange_api import ExchangeAdapter, OrderResult
+from exchange_api import Exchange, OrderResult
 
 
-class KrakenAdapter(ExchangeAdapter):
+class KrakenExchange(Exchange):
+
+    @property
+    def key(self) -> str:
+        return "kraken"
+
+    @property
+    def display_name(self) -> str:
+        return "Kraken"
+
 
     def __init__(self, api_key: str = "", api_secret: str = "",
                  debug_dir: Optional[str] = None):
@@ -429,7 +438,7 @@ class KrakenAdapter(ExchangeAdapter):
             pass
 
 
-def create_adapter() -> KrakenAdapter:
+def create_exchange() -> KrakenExchange:
     import os
     from exchange_api import load_api_keys
     from pt_env import PTEnv
@@ -438,4 +447,4 @@ def create_adapter() -> KrakenAdapter:
     env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
     debug_dir = str(env.debug_trade_dumps_dir())
 
-    return KrakenAdapter(api_key=keys["api_key"], api_secret=keys["api_secret"], debug_dir=debug_dir)
+    return KrakenExchange(api_key=keys["api_key"], api_secret=keys["api_secret"], debug_dir=debug_dir)

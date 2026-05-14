@@ -3,11 +3,10 @@ pt_trader.py — Live trading engine
 
 FUNCTION
 --------
-Executes buy/sell orders on a configured exchange (Kraken, demo, or control)
-based on signals produced by pt_thinker.py.  It manages the full lifecycle of
-each position: initial entry, DCA (dollar-cost-averaging) top-ups, profit-
-margin trailing stops, and long-term-holding (LTH) purchases funded from
-realised profits.
+Executes buy/sell orders on a configured exchange based on signals produced by
+pt_thinker.py.  It manages the full lifecycle of each position: initial entry,
+DCA (dollar-cost-averaging) top-ups, profit-margin trailing stops, and
+long-term-holding (LTH) purchases funded from realised profits.
 
 ALGORITHM
 ---------
@@ -25,7 +24,8 @@ Runs manage_trades() in a continuous loop (≈1–5 s cadence per coin):
         trailing stop.  When the trail is broken → sell entire position.
      e. On realised profit, optionally allocate LTH_PROFIT_ALLOC_PCT % to a
         market buy of the lowest-EMA-discounted LTH coin.
-  3. Persist state after every trade cycle via the hub_data files below.
+  3. Call self.exchange.tick() at the end of each loop iteration for periodic
+     exchange-level maintenance (see Exchange Design below).
 
 COMMUNICATION LINKS
 --------------------
@@ -40,22 +40,99 @@ Reads (inputs from pt_thinker.py):
     lth_daily_ema200.json          — 200-day EMAs for LTH coin selection
 
 Reads (config):
-  gui_settings.json                — coins, DCA params, trailing gap, LTH %
+  pt_config.json                   — coins, DCA params, trailing gap, LTH %
 
 Writes (outputs for pt_web.py / UI):
+  state/hub_data/exchanges/<xk>/
+    trader_status.json             — per-coin position snapshot (read by UI)
+    trade_history.jsonl            — append-only fill ledger
+    pnl_ledger.json                — open positions + realised P&L
+    account_value_history.jsonl    — equity curve
+    bot_order_ids.json             — order IDs owned by this bot
   state/hub_data/
-    trader_status_<exchange>.json        — per-coin position snapshot
-    trade_history_<exchange>.jsonl       — append-only fill ledger
-    pnl_ledger_<exchange>.json           — open positions + realised P&L
-    account_value_history_<exchange>.jsonl — equity curve
-    bot_order_ids_<exchange>.json        — order IDs owned by this bot
-    lth_daily_ema200.json                — (also written here for initial seed)
+    lth_daily_ema200.json          — (also written here for initial seed)
 
-Exchange adapter:
-  exchange_api.py / exchange_kraken.py / exchange_binance.py
-  Loaded via load_exchange_adapter(EXCHANGE_KEY).  All order placement and
-  balance queries go through ExchangeAdapter so the trading logic is exchange-
-  agnostic.
+  In Trading mode a second set of the above files is written under
+  exchanges/shadow/ by ShadowedExchange.tick() (see Exchange Design).
+
+EXCHANGE DESIGN
+---------------
+All exchange interaction is behind the Exchange ABC (exchange_api.py).
+The trading loop is completely exchange-agnostic: it calls place_buy(),
+place_sell(), get_holdings(), get_price() — nothing else.
+
+Three concrete types exist (exchange_paper.py, exchange_<name>.py):
+
+  PaperExchange
+    Frictionless simulated account: zero fees, zero spread, fills at
+    KuCoin mid-price.  Persists state (balance, holdings, position cost
+    basis) to hub_data/exchanges/<key>/exchange_state.json.
+
+    Used in two roles:
+      - Demo mode  : IS the primary account (key='demo').
+      - Shadow role: lives inside ShadowedExchange (key='shadow').
+
+  ShadowedExchange
+    Wraps a real exchange + a PaperExchange shadow.  Every call to
+    place_buy/place_sell is executed on the real exchange first, then
+    automatically mirrored into the shadow at mid-price with zero fees.
+    All trades are mirrored — LTH included — because the whole point of
+    the shadow is an unbroken frictionless baseline.
+
+    The delta between real and shadow quantifies friction (spread + fees)
+    accumulated over time.
+
+    Exposes all_accounts() → [self, self._shadow] so pt_web can display
+    both accounts without knowing about the wrapper.
+
+  KrakenExchange / BinanceExchange / RobinhoodExchange
+    Thin HTTP adapters: auth, wire format, order polling.  No accounting
+    or strategy logic.  Each declares key and display_name so callers
+    never need to special-case exchange identity by string matching.
+
+Exchange instantiation (load_exchange in exchange_api.py):
+  --exchange demo    → PaperExchange(key='demo')
+  --exchange kraken  → ShadowedExchange(KrakenExchange(), PaperExchange(key='shadow'))
+
+  The trader never knows whether it holds a PaperExchange or a
+  ShadowedExchange — the interface is identical.  Shadow mirroring,
+  status writing, and account-value history are all handled inside
+  ShadowedExchange.tick(), called at the end of each manage_trades()
+  loop with a 5-minute internal throttle.
+
+PROCESS ARCHITECTURE
+--------------------
+PowerTrader runs as three independent OS processes communicating solely
+via the filesystem (state/ directory).  No shared memory, no sockets
+between them.
+
+  pt_thinker.py   — Neural signal generator.  Reads OHLCV data, runs
+                    trained models, writes long/short signal files per coin.
+                    Long-lived; can remain running across mode switches.
+
+  pt_trader.py    — This file.  Reads signals, executes trades, writes
+                    hub_data state files.  One process per exchange; in
+                    Trading mode a single process runs with a ShadowedExchange
+                    so both real and shadow state are written in one loop.
+
+  pt_web.py       — FastAPI server.  Reads hub_data state files to serve the
+                    UI; executes manual close/reset via the exchange adapters
+                    directly.  Never writes to the files that pt_trader owns
+                    (trader_status, trade_history, pnl_ledger) except on
+                    explicit user action (close-coin, reset-all).
+
+Rationale for file-based IPC:
+  - Zero coupling between processes: each can be restarted independently.
+  - Trivially inspectable: all state is human-readable JSON/JSONL on disk.
+  - No message queue or broker to operate.
+  - pt_web can read state even when pt_trader is stopped (staleness is
+    visible via the timestamp field in trader_status.json).
+
+One real exchange at a time:
+  The design enforces a single active pt_trader process per run.  Running
+  multiple traders against different real exchanges simultaneously is not
+  supported; there is one shadow account and it must correspond to one
+  real exchange to keep the frictionless comparison meaningful.
 """
 import argparse
 import datetime
@@ -71,7 +148,7 @@ import colorama
 from colorama import Fore, Style
 import traceback
 
-from exchange_api import ExchangeAdapter, OrderResult, load_exchange_adapter
+from exchange_api import Exchange, OrderResult, load_exchange
 from pt_env import PTEnv as _PTEnv
 
 
@@ -124,13 +201,9 @@ _refresh_paths_and_symbols()
 
 
 class CryptoAPITrading:
-    def __init__(self, exchange: ExchangeAdapter):
+    def __init__(self, exchange: Exchange):
         self.exchange = exchange
 
-        self.mirror = None
-        if EXCHANGE_KEY == "kraken":
-            from control_mirror import ControlMirror
-            self.mirror = ControlMirror(str(_pt_env.hub_data_xk_dir("control")))
 
         self._skipped_coins: set = set()
         self.dca_levels_triggered = {}  # Track DCA levels for each crypto
@@ -2111,14 +2184,6 @@ class CryptoAPITrading:
         except Exception:
             pass
 
-        if self.mirror and result and str(tag or "").upper() != "LTH":
-            try:
-                base = self.exchange.base_from_canonical(symbol)
-                notional = result.notional_usd or (result.avg_price * result.filled_qty)
-                self.mirror.mirror_buy(base, notional, tag=tag)
-            except Exception:
-                pass
-
         return result
 
     def place_sell_order(
@@ -2199,13 +2264,6 @@ class CryptoAPITrading:
             self._save_pnl_ledger()
         except Exception:
             pass
-
-        if self.mirror and result and str(tag or "").upper() != "LTH":
-            try:
-                base = self.exchange.base_from_canonical(symbol)
-                self.mirror.mirror_sell(base, tag=tag)
-            except Exception:
-                pass
 
         return result
 
@@ -3195,24 +3253,18 @@ class CryptoAPITrading:
                     ACCOUNT_VALUE_HISTORY_PATH,
                     {"ts": now, "total_account_value": total_account_value},
                 )
-                if self.mirror:
-                    self.mirror.append_account_value(self.mirror.get_account_value())
         except Exception:
             pass
 
-        _mirror_dur = 0.0
-        if self.mirror:
-            try:
-                _t_mirror = time.time()
-                self.mirror.write_status()
-                _mirror_dur = time.time() - _t_mirror
-            except Exception:
-                pass
+        try:
+            self.exchange.tick()
+        except Exception:
+            pass
 
         _mt_total = time.time() - _mt_start
         if _mt_total > 5 or not hasattr(self, '_mt_logged'):
             self._mt_logged = True
-            print(f"[Loop] total={_mt_total:.1f}s prices={_price_dur:.1f}s mirror={_mirror_dur:.1f}s")
+            print(f"[Loop] total={_mt_total:.1f}s prices={_price_dur:.1f}s")
 
     def run(self):
         while True:
@@ -3224,7 +3276,7 @@ class CryptoAPITrading:
 
 
 if __name__ == "__main__":
-    exchange = load_exchange_adapter(EXCHANGE_KEY)
+    exchange = load_exchange(EXCHANGE_KEY)
     print(f"[PowerTrader] Exchange: {EXCHANGE_KEY}")
     t0 = time.time()
     trading_bot = CryptoAPITrading(exchange)

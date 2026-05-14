@@ -10,8 +10,9 @@ Provides REST API + WebSocket for real-time updates, serving the web/ frontend.
 
 Modes
 -----
-Demo    : only the control (frictionless) adapter runs; shown as "Demo" in the UI.
-Trading : control adapter runs alongside the real exchanges in env.exchanges.
+Demo    : PaperExchange runs as the primary account, shown as "Demo" in the UI.
+Trading : ShadowedExchange wraps each real exchange; shadow account tracks
+          frictionless baseline alongside real fills.
 """
 
 import asyncio
@@ -28,83 +29,99 @@ from fastapi.staticfiles import StaticFiles
 from pt_env import PTEnv, TRAIN_TF_MINUTES
 from pt_models import CoinModel, AccountModel, SystemModel
 from pt_controller import ProcessController
-from control_mirror import ControlMirror
 
 PROJECT_DIR = Path(__file__).resolve().parent
 WEB_DIR = PROJECT_DIR / "web"
 
-env = PTEnv(project_dir=PROJECT_DIR)
+_pre = argparse.ArgumentParser(add_help=False)
+_pre.add_argument("--config", default=None)
+_config_path = _pre.parse_known_args()[0].config
+
+env = PTEnv(project_dir=PROJECT_DIR, config_path=_config_path)
 ctrl = ProcessController(env)
 app = FastAPI(title="PowerTrader Web")
 
-
-def _get_mirror() -> ControlMirror:
-    xk = "demo" if env.trading_mode == "demo" else "control"
-    return ControlMirror(str(env.hub_data_xk_dir(xk)))
-
-try:
-    _get_mirror().write_status()
-except Exception:
-    pass
-
-_adapters: dict = {}
+_exchanges: dict = {}  # real-exchange-key → Exchange (PaperExchange or ShadowedExchange)
 _last_mid_price: dict = {}  # coin -> last known good mid price
 
 
-def _get_adapter(xk: str):
-    if xk not in _adapters:
+def _get_exchange(xk: str):
+    """Get or create the top-level Exchange for the given key.
+
+    'demo'         → PaperExchange(key='demo')
+    '<real_xk>'   → ShadowedExchange(RealExchange, PaperExchange(key='shadow'))
+    """
+    if xk not in _exchanges:
         try:
-            if xk in ("control", "demo"):
-                # Both use ControlAdapter; state files are namespaced by key (demo vs control)
-                from exchange_control import create_adapter as _make_ctrl
-                state_path = str(env.exchange_state_path(xk))
-                cfg = env.get_config()
-                price_source = cfg.get("live_price_source", "kucoin")
-                cfg_key = "demo_starting_usd" if xk == "demo" else "control_starting_usd"
-                starting_usd = float(cfg.get(cfg_key) or 0)
-                _adapters[xk] = _make_ctrl(
-                    starting_usd=starting_usd,
-                    price_source=price_source,
-                    state_path=state_path,
+            cfg = env.get_config()
+            if xk == "demo":
+                from exchange_paper import PaperExchange
+                _exchanges[xk] = PaperExchange(
+                    key="demo",
+                    starting_usd=float(cfg.get("demo_starting_usd") or 0),
+                    price_source=cfg.get("live_price_source", "kucoin"),
+                    state_path=str(env.exchange_state_path("demo")),
                 )
             else:
                 import importlib
                 mod = importlib.import_module(f"exchange_{xk}")
-                _adapters[xk] = mod.create_adapter()
+                real = mod.create_exchange()
+                from exchange_paper import PaperExchange, ShadowedExchange
+                shadow_usd = float(
+                    cfg.get("shadow_starting_usd") or cfg.get("control_starting_usd") or 0
+                )
+                shadow = PaperExchange(
+                    key="shadow",
+                    starting_usd=shadow_usd,
+                    price_source=cfg.get("live_price_source", "kucoin"),
+                    state_path=str(env.exchange_state_path("shadow")),
+                )
+                _exchanges[xk] = ShadowedExchange(real, shadow)
         except Exception as e:
-            print(f"[Adapter] failed to create {xk}: {e}")
+            print(f"[Exchange] failed to create {xk}: {e}")
             return None
-    return _adapters.get(xk)
+    return _exchanges.get(xk)
 
 
-def _is_demo_mode() -> bool:
-    return env.trading_mode == "demo"
+def _real_exchange():
+    """Return the single ShadowedExchange in Trading mode, or None."""
+    return _get_exchange(env.exchange) if env.exchange else None
 
 
-def _active_exchanges() -> list[str]:
-    """All exchanges active for the current mode.
+def _get_account(xk: str):
+    """Return the Exchange/PaperExchange account for a given account key."""
+    if xk == "demo":
+        return _get_exchange("demo")
+    if xk == "shadow":
+        ex = _real_exchange()
+        return ex._shadow if ex else None
+    return _real_exchange()  # real exchange key (e.g. "kraken")
 
-    Demo mode  : ["demo"]   — state files under hub_data/demo/
-    Trading mode: ["control"] + real exchanges — state files under hub_data/{xk}/
+
+def _active_accounts() -> list[str]:
+    """All account keys active for the current mode.
+
+    Demo mode    : ["demo"]
+    Trading mode : ["kraken", "shadow"]
     """
-    if _is_demo_mode():
+    if env.trading_mode == "demo":
         return ["demo"]
-    return ["control"] + env.exchanges
+    ex = _real_exchange()
+    return [acc.key for acc in ex.all_accounts()] if ex else []
 
 
-def _ctrl_xk() -> str:
-    """Key for the synthetic frictionless adapter in the current mode: 'demo' or 'control'."""
-    return "demo" if _is_demo_mode() else "control"
-
-
-def _control_sync_exchange() -> str:
-    """The real exchange to sync the control starting balance from."""
+def _shadow_sync_exchange() -> str:
+    """The real exchange to sync the shadow starting balance from."""
     cfg = env.get_config()
-    xk = (cfg.get("control_sync_exchange") or "").strip().lower()
+    xk = (cfg.get("shadow_sync_exchange") or cfg.get("control_sync_exchange") or "").strip().lower()
     if not xk:
-        real = env.exchanges
-        xk = real[0] if real else ""
+        xk = env.exchange or ""
     return xk
+
+
+def _shadow_xk() -> str:
+    """Key for the paper account in the current mode: 'demo' or 'shadow'."""
+    return "demo" if env.trading_mode == "demo" else "shadow"
 
 
 # ── Static files ──
@@ -178,7 +195,7 @@ async def api_status():
     ctrl_status = ctrl.status_summary()
     rr = sm.runner_ready()
 
-    active = _active_exchanges()
+    active = _active_accounts()
     exchanges_data = {}
     for xk in active:
         exchanges_data[xk] = _account_for_exchange(xk)
@@ -215,7 +232,7 @@ async def api_coins():
     coins = []
     ctrl_status = ctrl.status_summary()
 
-    active = _active_exchanges()
+    active = _active_accounts()
     _now = time.time()
     _PRICE_STALE_SEC = 300  # ignore prices from status files older than 5 minutes
     status_by_xk = {}
@@ -262,7 +279,7 @@ async def api_coin_detail(coin: str):
     cm = CoinModel(env, coin)
 
     result = {**cm.snapshot(), "positions": {}, "trades": {}}
-    for xk in _active_exchanges():
+    for xk in _active_accounts():
         acct = AccountModel(env, xk)
         positions = acct.all_positions()
         pos = positions.get(coin, {})
@@ -280,7 +297,7 @@ async def api_positions():
     out = {}
     dca = {}
     lth = {}
-    for xk in _active_exchanges():
+    for xk in _active_accounts():
         acct = AccountModel(env, xk)
         out[xk] = acct.all_positions()
         dca[xk] = acct.dca_24h_by_coin()
@@ -291,7 +308,7 @@ async def api_positions():
 @app.get("/api/trades")
 async def api_trades(limit: int = 250, exchange: str = ""):
     result = {}
-    targets = [exchange] if exchange else _active_exchanges()
+    targets = [exchange] if exchange else _active_accounts()
     for xk in targets:
         acct = AccountModel(env, xk)
         result[xk] = acct.trade_history(limit=limit)
@@ -311,7 +328,7 @@ async def api_account_history(hours: float = 0):
     else:
         interval = 14400      # 4 hours
 
-    for xk in _active_exchanges():
+    for xk in _active_accounts():
         acct = AccountModel(env, xk)
         raw = acct.account_value_history(limit=0)
         if hours > 0:
@@ -328,7 +345,7 @@ async def api_account_history(hours: float = 0):
 async def api_comparison():
     """Per-coin comparison across exchanges."""
     env.reload()
-    active = _active_exchanges()
+    active = _active_accounts()
     coins_out = []
     for coin in env.coins:
         row = {"coin": coin}
@@ -492,13 +509,7 @@ async def api_data_manager_stats():
 @app.get("/api/data-manager/chart/{coin}/{tf_minutes}")
 async def api_data_manager_chart(coin: str, tf_minutes: int, limit: int = 1500,
                                   start: int = None, end: int = None):
-    """Return OHLCV candles from the local ArcticDB store.
-
-    If start/end (Unix seconds) are given, the result is sliced to that window —
-    this is used for dynamic resolution on zoom.  The slice is then resampled
-    only if it still exceeds `limit` rows.  `effective_minutes` in the response
-    tells the UI what bar period was actually used.
-    """
+    """Return OHLCV candles from the local ArcticDB store."""
     import math
     try:
         import arcticdb as adb
@@ -604,13 +615,13 @@ async def api_logs(script: str, limit: int = 200):
 
 
 def _refresh_exchange_balance(xk: str, write_history: bool = True):
-    """Query adapter for current balance and update trader_status file."""
-    adapter = _get_adapter(xk)
-    if not adapter:
+    """Query account for current balance and update trader_status file."""
+    account = _get_account(xk)
+    if not account:
         return
     try:
-        total_value = adapter.get_account_value() or 0
-        buying_power = adapter.get_buying_power() or 0
+        total_value = account.get_account_value() or 0
+        buying_power = account.get_buying_power() or 0
         holdings_value = total_value - buying_power
         pct = (holdings_value / total_value * 100) if total_value > 0 else 0
 
@@ -647,7 +658,7 @@ def _refresh_exchange_balance(xk: str, write_history: bool = True):
 @app.post("/api/clear-account-history")
 async def api_clear_account_history():
     """Delete account value history files for all exchanges."""
-    for xk in _active_exchanges():
+    for xk in _active_accounts():
         path = env.account_history_path(xk)
         try:
             if path.exists():
@@ -661,22 +672,21 @@ async def api_clear_account_history():
 async def api_reset_all():
     """Stop everything, close all positions, wipe all state, reset to sync-source USD balance."""
     ctrl.stop_all()
-    active = _active_exchanges()
 
-    for xk in active:
-        adapter = _get_adapter(xk)
-        if adapter and xk not in ("control", "demo"):
-            for coin, qty in adapter.get_holdings().items():
-                try:
-                    adapter.place_sell(f"{coin}_USD", qty)
-                except Exception:
-                    pass
+    # Close real exchange positions
+    ex = _real_exchange()
+    if ex:
+        for coin, qty in ex.get_holdings().items():
+            try:
+                ex.place_sell(f"{coin}_USD", qty)
+            except Exception:
+                pass
 
-    sync_xk = _control_sync_exchange()
-    adapter_sync = _get_adapter(sync_xk) if sync_xk else None
-    balance = adapter_sync.get_buying_power() if adapter_sync else 0
+    sync_xk = _shadow_sync_exchange()
+    exchange_sync = _get_exchange(sync_xk) if sync_xk else None
+    balance = exchange_sync.get_buying_power() if exchange_sync else 0
 
-    for xk in active:
+    for xk in _active_accounts():
         for path in [env.trade_history_path(xk), env.account_history_path(xk)]:
             try:
                 path.write_text("")
@@ -701,19 +711,20 @@ async def api_reset_all():
         except Exception:
             pass
 
-    ctrl_state = env.exchange_state_path(_ctrl_xk())
+    shadow_key = _shadow_xk()
+    shadow_state = env.exchange_state_path(shadow_key)
     try:
-        ctrl_state.write_text(json.dumps({
+        shadow_state.write_text(json.dumps({
             "usd_balance": balance or 0,
             "holdings": {},
             "orders": {},
+            "position_cost": {},
         }, indent=2))
     except Exception:
         pass
 
-    _adapters.pop(_ctrl_xk(), None)
-    _get_mirror().reload()
-    for xk in _active_exchanges():
+    _exchanges.clear()
+    for xk in _active_accounts():
         _refresh_exchange_balance(xk)
 
     return {"ok": True, "balance": balance}
@@ -721,18 +732,18 @@ async def api_reset_all():
 
 @app.post("/api/close-all")
 async def api_close_all():
-    """Sell all positions on all real exchanges (or demo adapter in demo mode)."""
+    """Sell all positions on all real exchanges (or demo in demo mode)."""
     ctrl.stop_trader()
     results = {}
 
-    if _is_demo_mode():
-        adapter = _get_adapter("demo")
-        if adapter:
-            holdings = adapter.get_holdings()
+    if env.trading_mode == "demo":
+        exchange = _get_exchange("demo")
+        if exchange:
+            holdings = exchange.get_holdings()
             trades = []
             for coin, qty in holdings.items():
                 symbol = f"{coin}_USD"
-                result = adapter.place_sell(symbol, qty)
+                result = exchange.place_sell(symbol, qty)
                 sold = result is not None
                 trades.append({"coin": coin, "qty": qty, "sold": sold})
                 if sold:
@@ -742,25 +753,24 @@ async def api_close_all():
             results["demo"] = {"ok": True, "trades": trades}
         return {"ok": True, "results": results}
 
-    for xk in env.exchanges:  # real exchanges only
-        adapter = _get_adapter(xk)
-        if not adapter:
-            results[xk] = {"ok": False, "error": "no adapter"}
-            continue
-        holdings = adapter.get_holdings()
-        trades = []
-        for coin, qty in holdings.items():
-            symbol = f"{coin}_USD"
-            result = adapter.place_sell(symbol, qty)
-            sold = result is not None
-            trades.append({"coin": coin, "qty": qty, "sold": sold})
-            if sold:
-                _record_close_trade(xk, coin, symbol, qty, result)
-                _get_mirror().mirror_sell(coin, tag="CLOSE_ALL")
-        _refresh_exchange_balance(xk)
-        _clear_trader_positions(xk)
-        results[xk] = {"ok": True, "trades": trades}
-    _clear_trader_positions(_ctrl_xk())
+    ex = _real_exchange()
+    if not ex:
+        return {"ok": False, "error": "no real exchange configured"}
+    xk = ex.key
+    holdings = ex.get_holdings()
+    trades = []
+    for coin, qty in holdings.items():
+        symbol = f"{coin}_USD"
+        result = ex.place_sell(symbol, qty)  # auto-mirrors to shadow
+        sold = result is not None
+        trades.append({"coin": coin, "qty": qty, "sold": sold})
+        if sold:
+            _record_close_trade(xk, coin, symbol, qty, result)
+    _refresh_exchange_balance(xk)
+    _clear_trader_positions(xk)
+    results[xk] = {"ok": True, "trades": trades}
+
+    _clear_trader_positions("shadow")
     return {"ok": True, "results": results}
 
 
@@ -770,19 +780,19 @@ async def api_close_coin(coin: str, exchange: str):
     coin = coin.upper()
     xk = exchange.lower()
 
-    if xk == "control":
-        return {"ok": False, "error": "Control positions close automatically when the real exchange closes"}
+    if xk == "shadow":
+        return {"ok": False, "error": "Shadow positions are managed automatically"}
 
     if xk == "demo":
-        adapter = _get_adapter("demo")
-        if not adapter:
-            return {"ok": False, "error": "No demo adapter"}
-        holdings = adapter.get_holdings()
+        ex = _get_exchange("demo")
+        if not ex:
+            return {"ok": False, "error": "No demo exchange"}
+        holdings = ex.get_holdings()
         qty = holdings.get(coin, 0)
         symbol = f"{coin}_USD"
         if qty <= 0:
             return {"ok": False, "error": f"No {coin} position in demo"}
-        result = adapter.place_sell(symbol, qty)
+        result = ex.place_sell(symbol, qty)
         if not result:
             return {"ok": False, "error": "Demo sell failed"}
         _record_close_trade("demo", coin, symbol, qty, result, tag="CLOSE")
@@ -790,23 +800,22 @@ async def api_close_coin(coin: str, exchange: str):
         _refresh_exchange_balance("demo")
         return {"ok": True, "coin": coin, "exchange": "demo", "qty": qty}
 
-    if xk not in env.exchanges:
+    if xk != env.exchange:
         return {"ok": False, "error": f"Unknown exchange: {xk}"}
 
-    adapter = _get_adapter(xk)
-    if not adapter:
-        return {"ok": False, "error": "No adapter"}
+    ex = _get_exchange(xk)
+    if not ex:
+        return {"ok": False, "error": "No exchange"}
 
-    holdings = adapter.get_holdings()
+    holdings = ex.get_holdings()
     qty = holdings.get(coin, 0)
     symbol = f"{coin}_USD"
 
     if qty > 0:
-        result = adapter.place_sell(symbol, qty)
+        result = ex.place_sell(symbol, qty)  # auto-mirrors to shadow
         if not result:
             return {"ok": False, "error": "Sell failed"}
         _record_close_trade(xk, coin, symbol, qty, result, tag="CLOSE")
-        _get_mirror().mirror_sell(coin, tag="CLOSE")
     else:
         ledger = {}
         try:
@@ -836,10 +845,9 @@ async def api_close_coin(coin: str, exchange: str):
                 env.pnl_ledger_path(xk).write_text(json.dumps(ledger, indent=2))
             except Exception:
                 pass
-        _get_mirror().mirror_sell(coin, tag="CLOSE")
 
     _clear_coin_position(xk, coin)
-    _clear_coin_position(_ctrl_xk(), coin)
+    _clear_coin_position("shadow", coin)
     _refresh_exchange_balance(xk)
 
     return {"ok": True, "coin": coin, "exchange": xk, "qty": qty}
@@ -953,43 +961,44 @@ def _record_close_trade(xk: str, coin: str, symbol: str, qty: float, result,
         pass
 
 
-@app.post("/api/sync-control")
-async def api_sync_control():
-    """Reset control/demo balance to match the configured sync-source exchange. Requires traders stopped, no positions."""
+@app.post("/api/sync-shadow")
+async def api_sync_shadow():
+    """Reset shadow/demo balance to match the configured sync-source exchange. Requires traders stopped, no positions."""
     if ctrl.trader_running:
         return {"ok": False, "error": "Traders must be stopped"}
 
-    for xk in env.exchanges:
-        a = _get_adapter(xk)
-        if a:
-            holdings = a.get_holdings()
-            pnl = json.loads(env.pnl_ledger_path(xk).read_text()) if env.pnl_ledger_path(xk).exists() else {}
-            open_pos = pnl.get("open_positions") or {}
-            has_real = any(
-                float((open_pos.get(coin) or {}).get("qty", 0) or 0) > 1e-12
-                for coin in holdings
-            )
-            if has_real:
-                return {"ok": False, "error": f"{xk} has open positions"}
+    ex = _real_exchange()
+    if ex:
+        xk = ex.key
+        holdings = ex.get_holdings()
+        pnl = json.loads(env.pnl_ledger_path(xk).read_text()) if env.pnl_ledger_path(xk).exists() else {}
+        open_pos = pnl.get("open_positions") or {}
+        has_real = any(
+            float((open_pos.get(coin) or {}).get("qty", 0) or 0) > 1e-12
+            for coin in holdings
+        )
+        if has_real:
+            return {"ok": False, "error": f"{xk} has open positions"}
 
-    sync_xk = _control_sync_exchange()
-    adapter_sync = _get_adapter(sync_xk) if sync_xk else None
-    if not adapter_sync:
+    sync_xk = _shadow_sync_exchange()
+    exchange_sync = _get_exchange(sync_xk) if sync_xk else None
+    if not exchange_sync:
         return {"ok": False, "error": f"Cannot connect to sync exchange ({sync_xk or 'none configured'})"}
 
-    buying_power = adapter_sync.get_buying_power()
+    buying_power = exchange_sync.get_buying_power()
     if not buying_power or buying_power <= 0:
         return {"ok": False, "error": f"{sync_xk} has no USD balance"}
 
-    ck = _ctrl_xk()
-    state_path = env.exchange_state_path(ck)
+    shadow_key = _shadow_xk()
+    state_path = env.exchange_state_path(shadow_key)
     with open(state_path, "w") as f:
-        json.dump({"usd_balance": buying_power, "holdings": {}, "orders": {}}, f, indent=2)
+        json.dump({"usd_balance": buying_power, "holdings": {}, "orders": {}, "position_cost": {}}, f, indent=2)
 
-    _adapters.pop(ck, None)
-    _get_mirror().reload()
-    _refresh_exchange_balance(ck)
-    print(f"[Sync] {ck} balance set to ${buying_power:,.2f} from {sync_xk}")
+    # Clear cached exchange so shadow re-initialises from the new state file
+    _exchanges.pop(shadow_key if env.trading_mode == "demo" else (env.exchange or ""), None)
+
+    _refresh_exchange_balance(shadow_key)
+    print(f"[Sync] {shadow_key} balance set to ${buying_power:,.2f} from {sync_xk}")
     return {"ok": True, "balance": buying_power}
 
 
@@ -1028,7 +1037,7 @@ def _candles_kraken(coin: str, timeframe: str, limit: int) -> dict:
                 "volume": float(bar[5]),
             })
         return {"candles": candles}
-    except Exception as e:
+    except Exception:
         return _candles_kucoin(coin, timeframe, limit)
 
 
@@ -1122,7 +1131,7 @@ async def _file_watcher():
         try:
             env.reload()
 
-            for xk in _active_exchanges():
+            for xk in _active_accounts():
                 if _check(env.trader_status_path(xk), f"trader_status_{xk}"):
                     acct = AccountModel(env, xk)
                     ts = acct.trader_status()
@@ -1182,7 +1191,7 @@ async def _file_watcher():
                 await ws_manager.broadcast({"type": "data_manager_status", "data": dm_data})
 
             traders_status = {}
-            for xk in _active_exchanges():
+            for xk in _active_accounts():
                 traders_status[xk] = {"running": ctrl.trader_running_for(xk)}
             sys_status = {
                 "neural_running": ctrl.neural_running,
@@ -1196,11 +1205,14 @@ async def _file_watcher():
             balance_tick += 1
             if balance_tick >= 20:
                 balance_tick = 0
-                try:
-                    _get_mirror().write_status()
-                except Exception:
-                    pass
-                for xk in _active_exchanges():
+                # Refresh shadow status via tick() when trader is not running
+                ex = _real_exchange()
+                if ex and not ctrl.trader_running_for(ex.key):
+                    try:
+                        ex.tick()
+                    except Exception:
+                        pass
+                for xk in _active_accounts():
                     if not ctrl.trader_running_for(xk):
                         _refresh_exchange_balance(xk, write_history=False)
 
@@ -1211,26 +1223,27 @@ async def _file_watcher():
 
 
 def _init_exchange_balances():
-    """Seed initial control state if needed, then refresh all balances."""
+    """Seed initial shadow state if needed, then refresh all balances."""
     env.reload()
 
-    ck = _ctrl_xk()
-    ctrl_state = env.exchange_state_path(ck)
-    if not ctrl_state.exists():
-        cfg_key = "demo_starting_usd" if ck == "demo" else "control_starting_usd"
-        starting = float(env.get_config().get(cfg_key) or 0)
+    shadow_key = _shadow_xk()
+    shadow_state = env.exchange_state_path(shadow_key)
+    if not shadow_state.exists():
+        cfg = env.get_config()
+        cfg_key = "demo_starting_usd" if shadow_key == "demo" else "shadow_starting_usd"
+        starting = float(cfg.get(cfg_key) or 0)
         if starting <= 0:
-            sync_xk = _control_sync_exchange()
+            sync_xk = _shadow_sync_exchange()
             if sync_xk:
-                adapter_sync = _get_adapter(sync_xk)
-                starting = (adapter_sync.get_buying_power() or 0) if adapter_sync else 0
-                print(f"[Init] {ck} starting balance from {sync_xk}: ${starting:,.2f}")
+                exchange_sync = _get_exchange(sync_xk)
+                starting = (exchange_sync.get_buying_power() or 0) if exchange_sync else 0
+                print(f"[Init] {shadow_key} starting balance from {sync_xk}: ${starting:,.2f}")
         if starting > 0:
-            with open(ctrl_state, "w") as f:
-                json.dump({"usd_balance": starting, "holdings": {}, "orders": {}}, f)
-            print(f"[Init] wrote {ctrl_state}")
+            with open(shadow_state, "w") as f:
+                json.dump({"usd_balance": starting, "holdings": {}, "orders": {}, "position_cost": {}}, f)
+            print(f"[Init] wrote {shadow_state}")
 
-    for xk in _active_exchanges():
+    for xk in _active_accounts():
         _refresh_exchange_balance(xk)
         status_path = env.trader_status_path(xk)
         if status_path.exists():
@@ -1277,11 +1290,22 @@ def _migrate_hub_data_flat_to_subdirs():
         print(f"[Migrate] Moved {moved} state files into subdirectories")
 
 
+def _migrate_control_to_shadow():
+    """One-time migration: rename hub_data/exchanges/control/ → hub_data/exchanges/shadow/."""
+    hub = env.hub_data_dir
+    src = hub / "exchanges" / "control"
+    dst = hub / "exchanges" / "shadow"
+    if src.exists() and not dst.exists():
+        src.rename(dst)
+        print(f"[Migrate] exchanges/control → exchanges/shadow")
+
+
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app):
     _migrate_hub_data_flat_to_subdirs()
+    _migrate_control_to_shadow()
     _init_exchange_balances()
     asyncio.create_task(_file_watcher())
     yield
@@ -1296,5 +1320,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="PowerTrader Web UI")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--host", type=str, default="0.0.0.0")
+    parser.add_argument("--config", default=None, help="Path to config JSON (default: pt_config.json)")
     args = parser.parse_args()
     uvicorn.run(app, host=args.host, port=args.port)

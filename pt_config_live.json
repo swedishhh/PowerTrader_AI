@@ -30,7 +30,7 @@
     "ALGO",
     "HBAR"
   ],
-  "trading_mode": "demo",
+  "trading_mode": "trading",
   "exchange": "kraken",
   "shadow_sync_exchange": "kraken",
   "excluded_coins": [],
@@ -39,7 +39,7 @@
     "ETH",
     "SOL"
   ],
-  "trade_start_level": 4,
+  "trade_start_level": 3,
   "start_allocation_pct": 1,
   "dca_multiplier": 1,
   "dca_levels": [
