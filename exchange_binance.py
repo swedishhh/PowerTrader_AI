@@ -10,10 +10,19 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
 
-from exchange_api import ExchangeAdapter, OrderResult
+from exchange_api import Exchange, OrderResult
 
 
-class BinanceAdapter(ExchangeAdapter):
+class BinanceExchange(Exchange):
+
+    @property
+    def key(self) -> str:
+        return "binance"
+
+    @property
+    def display_name(self) -> str:
+        return "Binance"
+
 
     def __init__(self, api_key: str = "", api_secret: str = ""):
         self.api_key = api_key
@@ -51,7 +60,7 @@ class BinanceAdapter(ExchangeAdapter):
         raise NotImplementedError("Binance adapter not yet implemented")
 
 
-def create_adapter() -> BinanceAdapter:
+def create_exchange() -> BinanceExchange:
     from exchange_api import load_api_keys
     keys = load_api_keys("binance")
-    return BinanceAdapter(api_key=keys["api_key"], api_secret=keys["api_secret"])
+    return BinanceExchange(api_key=keys["api_key"], api_secret=keys["api_secret"])

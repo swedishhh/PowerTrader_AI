@@ -5,22 +5,22 @@
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
 const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
 
-// Control color is always #00D4FF. Real exchange colors fall back to a generic palette.
+// Shadow color is always #00D4FF. Real exchange colors fall back to a generic palette.
 const XK_PALETTE = ['#F0B429', '#A78BFA', '#34D399', '#F87171', '#60A5FA'];
 function xkColor(xk) {
-  if (xk === 'control' || xk === 'demo') return '#00D4FF';
-  const real = (state.exchangeList || []).filter(k => k !== 'control' && k !== 'demo');
+  if (xk === 'shadow' || xk === 'demo') return '#00D4FF';
+  const real = (state.exchangeList || []).filter(k => k !== 'shadow' && k !== 'demo');
   const idx = real.indexOf(xk);
   return XK_PALETTE[idx >= 0 ? idx : 0] || '#888';
 }
 function xkDisplayName(xk) {
   if (xk === 'demo') return 'Demo';
-  if (xk === 'control') return 'Control';
+  if (xk === 'shadow') return 'Shadow';
   return xk.charAt(0).toUpperCase() + xk.slice(1);
 }
 function xkShortLabel(xk) {
   if (xk === 'demo') return 'D';
-  if (xk === 'control') return 'C';
+  if (xk === 'shadow') return 'S';
   return xk.charAt(0).toUpperCase();
 }
 
@@ -269,7 +269,7 @@ async function refreshAll() {
       api('status'), api('coins'), api('positions'),
     ]);
 
-    state.exchangeList = statusData.exchange_list || ['control'];
+    state.exchangeList = statusData.exchange_list || ['shadow'];
     state.tradingMode = statusData.trading_mode || 'demo';
 
     if (statusData.exchanges) {
@@ -376,7 +376,7 @@ function updateSystemStatus(sys) {
     btnTrainAll.title = running ? 'Stop trader and neural runner before training' : '';
   }
 
-  const btnSync = $('#btn-sync-control');
+  const btnSync = $('#btn-sync-shadow');
   if (btnSync) {
     btnSync.disabled = sys.trader_running || hasPositions;
   }
@@ -614,7 +614,7 @@ function _updateCard(card, c, modeOverride) {
       const totalDcaLevels = (state.cfg.dca_levels || []).length;
       const dcaChip = pos.dca_triggered_stages > 0 ? `<span class="pos-dca-chip">stg ${pos.dca_triggered_stages}/${totalDcaLevels}</span>` : '—';
       const nextDca = pos.next_dca_display ? `${pos.dca_line_price ? fmtPrice(pos.dca_line_price) + ' ' : ''}(${pos.next_dca_display})` : '—';
-      const realExchangeFields = xk !== 'control' ? `
+      const realExchangeFields = xk !== 'shadow' ? `
             <div class="cc-pf"><span class="cc-pf-l">Sell Level</span><span class="cc-pf-v">${sellPrice}</span></div>
             <div class="cc-pf"><span class="cc-pf-l">DCA</span><span class="cc-pf-v">${dcaChip} ${pos.trail_active ? '<span class="pos-trail-active">TRAILING</span>' : ''} <span class="cc-dca24">${dca24}/${maxDca} 24h</span></span></div>
             <div class="cc-pf"><span class="cc-pf-l">Next DCA</span><span class="cc-pf-v">${nextDca}</span></div>` : '';
@@ -624,7 +624,7 @@ function _updateCard(card, c, modeOverride) {
             <span class="cc-xk-label" style="color:${color}">${xk}</span>
             <span class="cc-pos-value">${fmtUSD(pos.value_usd)}</span>
             <span class="cc-pos-pnl ${pnlClass}">${fmtPct(pnl)}</span>
-            ${xk !== 'control' ? `<button class="cc-close-btn" onclick="event.stopPropagation(); closeCoinPosition('${c.coin}', '${xk}')" title="Close ${c.coin} on ${xk}">CLOSE</button>` : ''}
+            ${xk !== 'shadow' ? `<button class="cc-close-btn" onclick="event.stopPropagation(); closeCoinPosition('${c.coin}', '${xk}')" title="Close ${c.coin} on ${xk}">CLOSE</button>` : ''}
           </div>
           <div class="cc-pos-grid">
             <div class="cc-pf"><span class="cc-pf-l">Qty</span><span class="cc-pf-v">${fmtQty(pos.quantity, c.coin)}</span></div>
@@ -1230,8 +1230,8 @@ function _buildAccountLegend() {
   if (state._diffSeries) {
     const item = document.createElement('span');
     item.className = 'legend-item legend-static';
-    const realXk = state.exchangeList.find(xk => xk !== 'control');
-    const ctrlLabel = xkDisplayName('control');
+    const realXk = state.exchangeList.find(xk => xk !== 'shadow');
+    const ctrlLabel = xkDisplayName('shadow');
     const realLabel = realXk ? xkDisplayName(realXk) : 'real';
     item.innerHTML = `<span class="legend-dot" style="background:#555570"></span><span class="legend-label">Δ ${realLabel} − ${ctrlLabel}</span>`;
     legend.appendChild(item);
@@ -1266,8 +1266,8 @@ async function _applyAccountData(hours) {
 
     // Diff series: real exchange − control
     if (state._diffSeries && state.exchangeList.length >= 2) {
-      const ctrlPts = pointsByXk['control'] || [];
-      const realXk2 = state.exchangeList.find(xk => xk !== 'control');
+      const ctrlPts = pointsByXk['shadow'] || [];
+      const realXk2 = state.exchangeList.find(xk => xk !== 'shadow');
       const realPts = realXk2 ? (pointsByXk[realXk2] || []) : [];
       if (ctrlPts.length > 0 && realPts.length > 0) {
         const ctrlMap = new Map(ctrlPts.map(p => [p.time, p.value]));
@@ -1284,11 +1284,11 @@ async function _applyAccountData(hours) {
     const realTrades = [];
     const tradesByXk = tradeData.trades || {};
     state.exchangeList.forEach(xk => {
-      if (xk === 'control') return;
+      if (xk === 'shadow') return;
       (tradesByXk[xk] || []).forEach(t => realTrades.push({...t, _xk: xk}));
     });
 
-    const realXk = state.exchangeList.find(xk => xk !== 'control');
+    const realXk = state.exchangeList.find(xk => xk !== 'shadow');
     if (state._acctMarkerSeries && realTrades.length > 0 && realXk) {
       const refSeries = state.acctSeries[realXk];
       if (refSeries) {
@@ -1338,7 +1338,7 @@ async function updateChartTradeMarkers(coin) {
     const allTrades = [];
     const tradesByXk = data.trades || {};
     state.exchangeList.forEach(xk => {
-      if (xk === 'control') return;
+      if (xk === 'shadow') return;
       (tradesByXk[xk] || []).forEach(t => allTrades.push({...t, _xk: xk}));
     });
 
@@ -1778,11 +1778,33 @@ function renderTraining(coins) {
   container.querySelectorAll('.train-log-panel').forEach(el => {
     if (el.dataset.timer) clearInterval(Number(el.dataset.timer));
   });
+
+  const locked = state.neuralRunning || state.traderRunning;
+  const anyTraining = (coins || []).some(c => c.training_running);
+  const header = $('#training-header');
+  if (header) {
+    const stateLabel = anyTraining ? 'Training' : (locked ? 'Locked' : 'Idle');
+    const stateClass = anyTraining ? 'backfill' : (locked ? 'stopped' : 'normal');
+    header.innerHTML = `
+      <div class="dm-status">
+        <span class="dm-state-badge dm-state-${stateClass}">${stateLabel}</span>
+      </div>
+      <div class="dm-controls">
+        <button class="btn btn-primary btn-small" id="btn-train-all-tab"
+          ${locked ? `disabled title="Stop trader and neural runner before training"` : ''}>
+          Train All
+        </button>
+      </div>`;
+    const btn = $('#btn-train-all-tab');
+    if (btn) btn.addEventListener('click', async () => {
+      await apiPost('train-all');
+    });
+  }
+
   if (!coins || coins.length === 0) {
     container.innerHTML = '<div class="empty-state">No coins configured</div>';
     return;
   }
-  const locked = state.neuralRunning || state.traderRunning;
   const trainDisabled = locked ? 'disabled title="Stop trader and neural runner before training"' : '';
 
   const _needsAttention = c => !c.is_trained && (c.training_state === 'FAILED' || c.training_state === 'FINISHED');
@@ -1926,9 +1948,6 @@ const _CFG_GROUP_ORDER = [
 ];
 
 function _cfgParseField(el, rule, key) {
-  if (key === 'exchanges') {
-    return $$('input[name="exchanges"]:checked', el).map(cb => cb.value);
-  }
   if (key === 'trading_mode') {
     const checked = $('input[name="trading_mode"]:checked', el);
     return checked ? checked.value : rule.options[0];
@@ -2020,31 +2039,26 @@ function _cfgCheckDirty(original) {
 function _cfgBuildInput(key, rule, value) {
   const id = `cfg-field-${key}`;
 
-  // Special: exchanges — render as checkboxes from discovered list
-  if (key === 'exchanges') {
-    const selected = Array.isArray(value) ? value : [];
+  // Special: exchange — dropdown of discovered real exchanges, greyed in demo mode
+  if (key === 'exchange') {
     const isDemo = state.tradingMode === 'demo';
     const discovered = state.discoveredExchanges;
-    const boxes = discovered.length
-      ? discovered.map(xk => `
-          <label class="cfg-exchange-check${isDemo ? ' cfg-exchange-disabled' : ''}">
-            <input type="checkbox" name="exchanges" value="${xk}" ${selected.includes(xk) ? 'checked' : ''} ${isDemo ? 'disabled' : ''}>
-            ${xk.charAt(0).toUpperCase() + xk.slice(1)}
-          </label>`).join('')
-      : '<span class="settings-field-hint">No real exchanges found (add exchange_*.py files)</span>';
-    return `<div class="settings-field" id="cfg-field-exchanges-wrap"${isDemo ? ' style="opacity:0.4;pointer-events:none"' : ''}>
-      <label>${rule.label}</label>
-      <div class="cfg-exchange-checks" id="${id}">${boxes}</div>
+    const opts = ['', ...discovered].map(xk =>
+      `<option value="${xk}" ${value === xk ? 'selected' : ''}>${xk ? xk.charAt(0).toUpperCase() + xk.slice(1) : '(none)'}</option>`
+    ).join('');
+    return `<div class="settings-field" id="cfg-field-exchange-wrap"${isDemo ? ' style="opacity:0.4;pointer-events:none"' : ''}>
+      <label for="${id}">${rule.label}</label>
+      <select id="${id}" ${isDemo ? 'disabled' : ''}>${opts}</select>
       ${rule.hint ? `<div class="settings-field-hint">${rule.hint}</div>` : ''}
       <div class="settings-field-error"></div>
     </div>`;
   }
 
-  // Special: control_sync_exchange — render as dropdown of discovered exchanges
-  if (key === 'control_sync_exchange') {
+  // Special: shadow_sync_exchange — render as dropdown of discovered exchanges
+  if (key === 'shadow_sync_exchange') {
     const discovered = state.discoveredExchanges;
     const opts = ['', ...discovered].map(xk =>
-      `<option value="${xk}" ${value === xk ? 'selected' : ''}>${xk || '(first in list)'}</option>`
+      `<option value="${xk}" ${value === xk ? 'selected' : ''}>${xk || '(use configured exchange)'}</option>`
     ).join('');
     return `<div class="settings-field">
       <label for="${id}">${rule.label}</label>
@@ -2142,18 +2156,16 @@ function renderConfig(cfg) {
   form.addEventListener('input', () => _cfgCheckDirty(original));
   form.addEventListener('change', () => {
     _cfgCheckDirty(original);
-    // When trading_mode changes, toggle exchanges disabled state
+    // When trading_mode changes, toggle exchange dropdown disabled state
     const modeEl = $('#cfg-field-trading_mode');
-    const wrap = $('#cfg-field-exchanges-wrap');
+    const wrap = $('#cfg-field-exchange-wrap');
     if (modeEl && wrap) {
       const checkedMode = $('input[name="trading_mode"]:checked', modeEl);
       const isDemo = checkedMode ? checkedMode.value === 'demo' : true;
       wrap.style.opacity = isDemo ? '0.4' : '';
       wrap.style.pointerEvents = isDemo ? 'none' : '';
-      $$('input[name="exchanges"]', wrap).forEach(cb => { cb.disabled = isDemo; });
-      $$('label', wrap).forEach(lbl => {
-        lbl.classList.toggle('cfg-exchange-disabled', isDemo);
-      });
+      const sel = $('#cfg-field-exchange', wrap);
+      if (sel) sel.disabled = isDemo;
     }
   });
 
@@ -2520,9 +2532,9 @@ function setupButtons() {
     setTimeout(refreshAll, 2000);
   });
 
-  $('#btn-sync-control').addEventListener('click', async () => {
+  $('#btn-sync-shadow').addEventListener('click', async () => {
     $('#actions-menu').classList.remove('open');
-    const res = await apiPost('sync-control');
+    const res = await apiPost('sync-shadow');
     if (res && !res.ok) alert(res.error || 'Sync failed');
     setTimeout(refreshAll, 1000);
   });

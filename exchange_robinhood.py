@@ -18,10 +18,19 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 from nacl.signing import SigningKey
 
-from exchange_api import ExchangeAdapter, OrderResult
+from exchange_api import Exchange, OrderResult
 
 
-class RobinhoodAdapter(ExchangeAdapter):
+class RobinhoodExchange(Exchange):
+
+    @property
+    def key(self) -> str:
+        return "robinhood"
+
+    @property
+    def display_name(self) -> str:
+        return "Robinhood"
+
 
     def __init__(self, api_key: str, base64_private_key: str,
                  base_url: str = "https://trading.robinhood.com",
@@ -676,7 +685,7 @@ class RobinhoodAdapter(ExchangeAdapter):
         return [(float(q), float(p)) for q, p in lots if q > 0 and p > 0]
 
 
-def create_adapter() -> RobinhoodAdapter:
+def create_exchange() -> RobinhoodExchange:
     from exchange_api import load_api_keys
     from pt_env import PTEnv
 
@@ -693,7 +702,7 @@ def create_adapter() -> RobinhoodAdapter:
     env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
     debug_dir = str(env.debug_trade_dumps_dir())
 
-    return RobinhoodAdapter(
+    return RobinhoodExchange(
         api_key=api_key,
         base64_private_key=private_key,
         debug_dir=debug_dir,

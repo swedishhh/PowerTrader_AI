@@ -231,7 +231,8 @@ class ProcessController:
             return [exchange]
         if self.env.trading_mode == "demo":
             return ["demo"]
-        return [xk for xk in self.env.exchanges if xk not in ("control", "demo")]
+        xk = self.env.exchange
+        return [xk] if xk else []
 
     def start_trader(self, exchange: str | None = None) -> bool:
         ok = True
@@ -403,9 +404,8 @@ class ProcessController:
             return self._neural
         if script == "data-manager":
             return self._data_manager
-        if script.startswith("trader"):
-            parts = script.split("-", 1)
-            xk = parts[1] if len(parts) > 1 else (self.env.exchanges[0] if self.env.exchanges else "control")
+        if script.startswith("trader-"):
+            xk = script.split("-", 1)[1]
             return self._traders.get(xk)
         if script.startswith("trainer-"):
             coin = script.split("-", 1)[1].upper()
@@ -464,7 +464,8 @@ class ProcessController:
             }
 
         traders = {}
-        for xk in self.env.exchanges:
+        xk = self.env.exchange
+        if xk:
             traders[xk] = {"running": self.trader_running_for(xk)}
 
         return {

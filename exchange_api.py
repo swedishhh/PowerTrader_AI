@@ -1,7 +1,7 @@
 """
-Abstract base class for exchange adapters.
+Abstract base class for exchanges.
 
-Each exchange lives in exchange_<exchange>.py and subclasses ExchangeAdapter.
+Each exchange lives in exchange_<exchange>.py and subclasses Exchange.
 The exchange key is the lowercase slug derived from the filename.
 """
 
@@ -32,8 +32,45 @@ class PriceQuote:
     ask: float
 
 
-class ExchangeAdapter(ABC):
-    """Thin adapter: HTTP/auth/data-format only. No accounting, no strategy."""
+class Exchange(ABC):
+    """Thin exchange interface: HTTP/auth/data-format only. No accounting, no strategy."""
+
+    # ------------------------------------------------------------------
+    # Self-description (abstract — each exchange must declare these)
+    # ------------------------------------------------------------------
+
+    @property
+    @abstractmethod
+    def key(self) -> str:
+        """Lowercase slug identifying this exchange/account (e.g. 'kraken', 'demo', 'shadow')."""
+
+    @property
+    @abstractmethod
+    def display_name(self) -> str:
+        """Human-readable name shown in the UI (e.g. 'Kraken', 'Demo', 'Shadow')."""
+
+    @property
+    def is_paper(self) -> bool:
+        """True for frictionless simulated accounts (PaperExchange)."""
+        return False
+
+    def all_accounts(self) -> List['Exchange']:
+        """Return all accounts this exchange exposes (default: just self).
+
+        ShadowedExchange overrides this to return [self, self._shadow].
+        """
+        return [self]
+
+    def tick(self) -> None:
+        """Called at the end of each pt_trader manage_trades() loop.
+
+        ShadowedExchange overrides this to run periodic shadow maintenance
+        (append account value history, write shadow trader_status.json).
+        """
+
+    # ------------------------------------------------------------------
+    # Core trading interface (abstract)
+    # ------------------------------------------------------------------
 
     @abstractmethod
     def get_account_value(self) -> Optional[float]:
@@ -71,7 +108,7 @@ class ExchangeAdapter(ABC):
 
     @abstractmethod
     def get_orders(self, symbol: str) -> dict:
-        """Return order history for symbol. Shape is adapter-specific (used for cost basis replay)."""
+        """Return order history for symbol. Shape is exchange-specific (used for cost basis replay)."""
 
     # ------------------------------------------------------------------
     # Optional overrides
@@ -125,13 +162,13 @@ class ExchangeAdapter(ABC):
 # Auto-discovery: scan for exchange_*.py to find available exchanges
 # ------------------------------------------------------------------
 
-_SYNTHETIC_EXCHANGES = {"api", "control", "demo"}
+_SYNTHETIC_EXCHANGES = {"api", "paper"}
 
 
 def discover_exchanges(search_dir: Optional[str] = None) -> List[str]:
     """Return sorted list of real exchange keys found as exchange_<key>.py files.
 
-    Excludes synthetic adapters (api, control) — those are managed internally.
+    Excludes synthetic modules (api, paper) — those are managed internally.
     """
     if search_dir is None:
         search_dir = os.path.dirname(os.path.abspath(__file__))
@@ -146,11 +183,7 @@ def discover_exchanges(search_dir: Optional[str] = None) -> List[str]:
 
 
 def load_api_keys(exchange_name: str) -> dict:
-    """Load credentials for *exchange_name* from exchange_api_keys.json.
-
-    Returns a dict with at least "api_key" and "api_secret" (may be empty strings).
-    Raises FileNotFoundError if the keys file doesn't exist yet.
-    """
+    """Load credentials for *exchange_name* from exchange_api_keys.json."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
     keys_path = os.path.join(base_dir, "exchange_api_keys.json")
     if not os.path.isfile(keys_path):
@@ -173,24 +206,37 @@ def exchange_display_name(key: str) -> str:
     return key.replace("_", " ").title()
 
 
-def load_exchange_adapter(key: str) -> ExchangeAdapter:
-    """Import exchange_<key> and return its create_adapter() result.
+def load_exchange(key: str) -> Exchange:
+    """Create and return an Exchange for the given key.
 
-    'demo' and 'control' both use exchange_control with the appropriate
-    per-exchange state path so each gets an isolated state directory.
+    'demo'           → PaperExchange(key='demo')
+    '<real_exchange>' → ShadowedExchange(RealExchange, PaperExchange(key='shadow'))
     """
-    if key in ("demo", "control"):
-        from pt_env import PTEnv
-        import os
-        env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
-        from exchange_control import create_adapter as _make_ctrl
-        cfg = env.get_config()
-        cfg_key = "demo_starting_usd" if key == "demo" else "control_starting_usd"
-        return _make_ctrl(
-            starting_usd=float(cfg.get(cfg_key) or 0),
+    from pt_env import PTEnv
+    env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
+    cfg = env.get_config()
+
+    if key == "demo":
+        from exchange_paper import PaperExchange
+        return PaperExchange(
+            key="demo",
+            starting_usd=float(cfg.get("demo_starting_usd") or 0),
             price_source=cfg.get("live_price_source", "kucoin"),
-            state_path=str(env.exchange_state_path(key)),
+            state_path=str(env.exchange_state_path("demo")),
         )
+
     import importlib
     mod = importlib.import_module(f"exchange_{key}")
-    return mod.create_adapter()
+    real = mod.create_exchange()
+
+    from exchange_paper import PaperExchange, ShadowedExchange
+    shadow_usd = float(
+        cfg.get("shadow_starting_usd") or cfg.get("control_starting_usd") or 0
+    )
+    shadow = PaperExchange(
+        key="shadow",
+        starting_usd=shadow_usd,
+        price_source=cfg.get("live_price_source", "kucoin"),
+        state_path=str(env.exchange_state_path("shadow")),
+    )
+    return ShadowedExchange(real, shadow)

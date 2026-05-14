@@ -1,5 +1,5 @@
 """
-Live mid-price fetcher for the control/demo adapter.
+Live mid-price fetcher for the paper/demo adapter.
 
 Uses public REST APIs only — no credentials required.
 Source is selected via the `live_price_source` config key ("kraken" or "kucoin").

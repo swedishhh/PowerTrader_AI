@@ -142,9 +142,9 @@ class CoinModel:
 class AccountModel:
     """Read-only view of trader status, positions, P&L, and trade history."""
 
-    def __init__(self, env: PTEnv, exchange: str | None = None):
+    def __init__(self, env: PTEnv, exchange: str):
         self.env = env
-        self.exchange = exchange or env.exchange
+        self.exchange = exchange
 
     def trader_status(self) -> dict | None:
         return _cache.get(self.env.trader_status_path(self.exchange), _read_json)
