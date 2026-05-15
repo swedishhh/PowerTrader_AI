@@ -26,7 +26,7 @@ ALGORITHM (per coin, per timeframe)
 COMMUNICATION LINKS
 --------------------
 Reads (inputs):
-  pt_config.json              — coin list, LTH coins, main_neural_dir
+  pt_config.json              — coin list, LTH coins, thinker_dir
   state/coins/<SYM>/
     memories_<tf>.json           — memory bank (written by pt_trainer.py)
     weights_<tf>.json            — per-memory weights (written by pt_trainer.py)
@@ -43,7 +43,7 @@ Writes (outputs consumed by pt_trader.py):
     high_bound_prices.html       — space-separated predicted sell price levels
 
   state/hub_data/
-    runner_ready.json            — readiness status polled by pt_web.py / UI
+    thinker_ready.json           — readiness status polled by pt_web.py / UI
     lth_daily_ema200.json        — 200-day EMA snapshots for LTH coins (read
                                    by pt_trader.py for LTH buy gating)
 """
@@ -53,6 +53,27 @@ import random
 from kucoin.client import Market
 
 market = Market(url="https://api.kucoin.com")
+
+# ---------------------------------------------------------------------------
+# Kline cache — eliminates redundant API calls within a 30-second window.
+# Phase-1 fetches each (coin, tf) once; phase-2 message loop and candle-check
+# reuse the same result instead of making duplicate network calls.
+# ---------------------------------------------------------------------------
+_kline_cache: dict = {}
+_startup_start: float = time.time()
+_STARTUP_LOG_WINDOW_S: float = 300.0  # log kline calls for first 5 minutes
+
+
+def _get_kline(coin: str, tf: str) -> str:
+    key = (coin, tf)
+    cached = _kline_cache.get(key)
+    if cached and time.time() - cached[0] < 30:
+        return cached[1]
+    result = str(market.get_kline(coin, tf))
+    _kline_cache[key] = (time.time(), result)
+    if time.time() - _startup_start < _STARTUP_LOG_WINDOW_S:
+        print(f"{time.strftime('%H:%M:%S')} [Thinker] kline fetch: {coin} {tf}", flush=True)
+    return result
 import sys
 import datetime
 import traceback
@@ -261,9 +282,52 @@ def _coin_is_trained(sym: str) -> bool:
         return False
 
 
-# --- GUI HUB "runner ready" gate file (read by gui_hub.py Start All toggle) ---
+# ---------------------------------------------------------------------------
+# Coin state persistence — save/restore across restarts to skip warmup cycles.
+# State is saved after each full TF cycle (phase-2) and restored in init_coin.
+# On restore, tf_times is zeroed so the first step fetches fresh candle data.
+# ---------------------------------------------------------------------------
 
-RUNNER_READY_PATH = str(_env.runner_ready_path())
+def _state_path(sym: str) -> str:
+    return os.path.join(coin_folder(sym), "thinker_state.json")
+
+
+def _save_coin_state(sym: str, st: dict) -> None:
+    try:
+        data = dict(st)
+        data["saved_at"] = time.time()
+        path = _state_path(sym)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _load_coin_state(sym: str) -> dict | None:
+    try:
+        path = _state_path(sym)
+        if not os.path.isfile(path):
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if time.time() - float(data.get("saved_at", 0)) > 86400:
+            return None
+        if data.get("last_display_bounds_version", -1) < 1:
+            return None
+        data.pop("saved_at", None)
+        # Reset tf_times to "0" so the first step detects new candles and fetches fresh data
+        n = len(data.get("tf_times") or [])
+        data["tf_times"] = ["0"] * (n or len(tf_choices))
+        return data
+    except Exception:
+        return None
+
+
+# --- Thinker ready gate file (read by pt_web.py / pt_controller to start traders) ---
+
+THINKER_READY_PATH = str(_env.thinker_ready_path())
 
 
 def _atomic_write_json(path: str, data: dict) -> None:
@@ -276,7 +340,7 @@ def _atomic_write_json(path: str, data: dict) -> None:
         pass
 
 
-def _write_runner_ready(
+def _write_thinker_ready(
     ready: bool, stage: str, ready_coins=None, total_coins: int = 0
 ) -> None:
     obj = {
@@ -286,7 +350,7 @@ def _write_runner_ready(
         "ready_coins": ready_coins or [],
         "total_coins": int(total_coins or 0),
     }
-    _atomic_write_json(RUNNER_READY_PATH, obj)
+    _atomic_write_json(THINKER_READY_PATH, obj)
 
 
 # Ensure folders exist for the current configured coins
@@ -395,9 +459,15 @@ def _sync_coins_from_settings():
     CURRENT_COINS = list(new_list)
 
 
-_write_runner_ready(
+def _tlog(msg: str) -> None:
+    """Write a timestamped thinker log line to stdout (captured by pt_controller)."""
+    print(f"{time.strftime('%H:%M:%S')} [Thinker] {msg}", flush=True)
+
+
+_write_thinker_ready(
     False, stage="starting", ready_coins=[], total_coins=len(CURRENT_COINS)
 )
+_tlog(f"Starting — {len(CURRENT_COINS)} coins")
 
 
 def init_coin(sym: str):
@@ -414,45 +484,18 @@ def init_coin(sym: str):
     with open("futures_short_onoff.txt", "w+") as f:
         f.write("OFF")
 
+    saved = _load_coin_state(sym)
+    if saved is not None:
+        states[sym] = saved
+        _tlog(f"Init {sym}: restored from saved state (bv={saved.get('last_display_bounds_version')})")
+        return
+
     st = new_coin_state()
-
-    coin = sym + "-USDT"
-    ind = 0
-    tf_times_local = []
-    while True:
-        history_list = []
-        while True:
-            try:
-                history = (
-                    str(market.get_kline(coin, tf_choices[ind]))
-                    .replace("]]", "], ")
-                    .replace("[[", "[")
-                )
-                break
-            except Exception as e:
-                time.sleep(3.5)
-                if "Requests" in str(e):
-                    pass
-                else:
-                    PrintException()
-                continue
-
-        history_list = history.split("], [")
-        ind += 1
-        try:
-            working_minute = (
-                str(history_list[1]).replace('"', "").replace("'", "").split(", ")
-            )
-            the_time = working_minute[0].replace("[", "")
-        except Exception:
-            the_time = 0.0
-
-        tf_times_local.append(the_time)
-        if len(tf_times_local) >= len(tf_choices):
-            break
-
-    st["tf_times"] = tf_times_local
+    # Initialize tf_times to "0" so the first step_coin call detects a new candle
+    # for every timeframe and fetches fresh data without requiring API calls here.
+    st["tf_times"] = ["0"] * len(tf_choices)
     states[sym] = st
+    _tlog(f"Init {sym}: fresh state")
 
 
 # init all coins once (from GUI settings)
@@ -461,6 +504,11 @@ for _sym in CURRENT_COINS:
 
 # restore CWD to base after init
 os.chdir(BASE_DIR)
+_restored = sum(1 for s in states.values() if s.get("last_display_bounds_version", -1) >= 1)
+_tlog(f"Init complete — {_restored}/{len(CURRENT_COINS)} restored, {len(CURRENT_COINS)-_restored} fresh")
+
+# Track which coins have had their state saved this session (for first-save logging).
+_state_saved_coins: set = set()
 
 
 wallet_addr_list = []
@@ -547,7 +595,7 @@ def step_coin(sym: str):
         try:
             _ready_coins.discard(sym)
             any_ready = len(_ready_coins) > 0
-            _write_runner_ready(
+            _write_thinker_ready(
                 any_ready,
                 stage=("real_predictions" if any_ready else "training_required"),
                 ready_coins=sorted(list(_ready_coins)),
@@ -596,7 +644,7 @@ def step_coin(sym: str):
         while True:
             try:
                 history = (
-                    str(market.get_kline(coin, tf_choices[tf_choice_index]))
+                    _get_kline(coin, tf_choices[tf_choice_index])
                     .replace("]]", "], ")
                     .replace("[[", "[")
                 )
@@ -834,7 +882,7 @@ def step_coin(sym: str):
             while True:
                 try:
                     history = (
-                        str(market.get_kline(coin, tf_choices[inder]))
+                        _get_kline(coin, tf_choices[inder])
                         .replace("]]", "], ")
                         .replace("[[", "[")
                     )
@@ -1152,6 +1200,7 @@ def step_coin(sym: str):
 
             # Only consider this coin "ready" once we've already rebuilt bounds at least once
             # AND we're now printing messages generated from those rebuilt bounds.
+            prev_ready_count = len(_ready_coins)
             if (
                 st["last_display_bounds_version"] >= 1
             ) and _is_printing_real_predictions(messages):
@@ -1160,12 +1209,17 @@ def step_coin(sym: str):
                 _ready_coins.discard(sym)
 
             any_ready = len(_ready_coins) > 0
-            _write_runner_ready(
+            _write_thinker_ready(
                 any_ready,
                 stage=("real_predictions" if any_ready else "warming_up"),
                 ready_coins=sorted(list(_ready_coins)),
                 total_coins=len(COIN_SYMBOLS),
             )
+            if prev_ready_count == 0 and any_ready:
+                _tlog(f"Ready — first predictions from {sym} "
+                      f"({len(_ready_coins)}/{len(COIN_SYMBOLS)} coins)")
+            elif len(_ready_coins) == len(COIN_SYMBOLS) and prev_ready_count < len(COIN_SYMBOLS):
+                _tlog(f"All {len(COIN_SYMBOLS)} coins ready")
 
         except:
             PrintException()
@@ -1212,7 +1266,7 @@ def step_coin(sym: str):
             while True:
                 try:
                     history = (
-                        str(market.get_kline(coin, tf_choices[this_index_now]))
+                        _get_kline(coin, tf_choices[this_index_now])
                         .replace("]]", "], ")
                         .replace("[[", "[")
                     )
@@ -1266,6 +1320,14 @@ def step_coin(sym: str):
     st["training_issues"] = training_issues
 
     states[sym] = st
+
+    # Persist state to disk after each full TF cycle so restarts skip warmup.
+    if st.get("tf_choice_index") == 0:
+        first_save = sym not in _state_saved_coins
+        _save_coin_state(sym, st)
+        if first_save and st.get("last_display_bounds_version", -1) >= 1:
+            _state_saved_coins.add(sym)
+            _tlog(f"State saved for {sym} (bv={st.get('last_display_bounds_version')})")
 
 
 try:

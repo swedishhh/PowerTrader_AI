@@ -28,9 +28,10 @@
     "POL",
     "ATOM",
     "ALGO",
-    "HBAR"
+    "HBAR",
+    "ONDO"
   ],
-  "trading_mode": "demo",
+  "trading_mode": "trading",
   "exchange": "kraken",
   "shadow_sync_exchange": "kraken",
   "excluded_coins": [],
@@ -39,7 +40,7 @@
     "ETH",
     "SOL"
   ],
-  "trade_start_level": 4,
+  "trade_start_level": 3,
   "start_allocation_pct": 1,
   "dca_multiplier": 1,
   "dca_levels": [
@@ -51,16 +52,16 @@
     -50
   ],
   "max_dca_buys_per_24h": 1,
-  "pm_start_pct_no_dca": 3,
-  "pm_start_pct_with_dca": 3,
+  "pm_start_pct_no_dca": 4,
+  "pm_start_pct_with_dca": 4,
   "trailing_gap_pct": 0.5,
   "lth_profit_alloc_pct": 50,
   "live_price_source": "kucoin",
   "training_data_source": "kucoin_local",
-  "main_neural_dir": "state",
+  "thinker_dir": "state",
   "hub_data_dir": "",
   "kucoin_local_data_dir": "state/historic_data/kucoin",
-  "script_neural_runner2": "pt_thinker.py",
+  "script_thinker": "pt_thinker.py",
   "script_neural_trainer": "pt_trainer.py",
   "script_trader": "pt_trader.py",
   "timeframes": [

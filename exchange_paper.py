@@ -104,6 +104,7 @@ class PaperExchange(Exchange):
         return exchange_sym
 
     def get_account_value(self) -> Optional[float]:
+        self._load_state()
         total = self._usd_balance
         for base, qty in self._holdings.items():
             price = self._get_price(base)

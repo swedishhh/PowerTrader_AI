@@ -58,10 +58,10 @@
   "lth_profit_alloc_pct": 50,
   "live_price_source": "kucoin",
   "training_data_source": "kucoin_local",
-  "main_neural_dir": "state",
+  "thinker_dir": "state",
   "hub_data_dir": "",
   "kucoin_local_data_dir": "state/historic_data/kucoin",
-  "script_neural_runner2": "pt_thinker.py",
+  "script_thinker": "pt_thinker.py",
   "script_neural_trainer": "pt_trainer.py",
   "script_trader": "pt_trader.py",
   "timeframes": [

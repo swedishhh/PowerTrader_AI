@@ -67,10 +67,10 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "training_data_source": "kucoin_local",
 
     # Paths / scripts
-    "main_neural_dir": "state",
+    "thinker_dir": "state",
     "hub_data_dir": "",
     "kucoin_local_data_dir": "state/historic_data/kucoin",
-    "script_neural_runner2": "pt_thinker.py",
+    "script_thinker": "pt_thinker.py",
     "script_neural_trainer": "pt_trainer.py",
     "script_trader": "pt_trader.py",
 
@@ -268,7 +268,7 @@ CONFIG_SCHEMA: dict[str, dict] = {
     "auto_start_scripts": {
         "type": "bool",
         "label": "Auto-start Scripts",
-        "hint": "Automatically start the neural runner and traders when the app launches",
+        "hint": "Automatically start the thinker and traders when the app launches",
         "group": "Startup",
     },
     # ── Training ─────────────────────────────────────────────────────────
@@ -300,9 +300,9 @@ CONFIG_SCHEMA: dict[str, dict] = {
     },
 
     # ── Internal (no UI group) ────────────────────────────────────────────
-    "main_neural_dir":         {"type": "str",       "group": None},
-    "hub_data_dir":            {"type": "str",       "group": None},
-    "script_neural_runner2": {"type": "str",       "group": None},
+    "thinker_dir":           {"type": "str",       "group": None},
+    "hub_data_dir":          {"type": "str",       "group": None},
+    "script_thinker":        {"type": "str",       "group": None},
     "script_neural_trainer": {"type": "str",       "group": None},
     "script_trader":         {"type": "str",       "group": None},
     "timeframes":            {"type": "list_str",  "group": None},
@@ -465,7 +465,7 @@ class PTEnv:
         return dict(self._config_cache)
 
     def _update_derived_paths(self, cfg: dict) -> None:
-        raw_main = str(cfg.get("main_neural_dir") or "state").strip() or "state"
+        raw_main = str(cfg.get("thinker_dir") or "state").strip() or "state"
         if os.path.isabs(raw_main):
             self._main_dir = Path(raw_main)
         else:
@@ -577,8 +577,8 @@ class PTEnv:
     def exchange_state_path(self, xk: str) -> Path:
         return self.hub_data_xk_dir(xk) / "exchange_state.json"
 
-    def runner_ready_path(self) -> Path:
-        return self._hub_dir / "runner_ready.json"
+    def thinker_ready_path(self) -> Path:
+        return self._hub_dir / "thinker_ready.json"
 
     def data_manager_status_path(self) -> Path:
         return self._hub_dir / "data_manager_status.json"
@@ -589,8 +589,8 @@ class PTEnv:
     def logs_dir(self) -> Path:
         return self._hub_dir / "logs"
 
-    def neural_autorestart_path(self) -> Path:
-        return self._hub_dir / "neural_autorestart_state.json"
+    def thinker_autorestart_path(self) -> Path:
+        return self._hub_dir / "thinker_autorestart_state.json"
 
     def ema200_path(self) -> Path:
         return self._hub_dir / "lth_daily_ema200.json"
@@ -614,7 +614,7 @@ class PTEnv:
 
     def script_path(self, key: str) -> Path:
         mapping = {
-            "thinker": "script_neural_runner2",
+            "thinker": "script_thinker",
             "trainer": "script_neural_trainer",
             "trader":  "script_trader",
         }

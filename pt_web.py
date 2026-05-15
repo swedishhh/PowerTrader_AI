@@ -193,7 +193,7 @@ async def api_status():
     env.reload()
     sm = SystemModel(env)
     ctrl_status = ctrl.status_summary()
-    rr = sm.runner_ready()
+    rr = sm.thinker_ready()
 
     active = _active_accounts()
     exchanges_data = {}
@@ -210,13 +210,13 @@ async def api_status():
 
     return {
         "system": {
-            "neural_running": ctrl_status["neural_running"],
+            "thinker_running": ctrl_status["thinker_running"],
             "trader_running": ctrl_status["trader_running"],
             "data_manager_running": ctrl_status["data_manager_running"],
             "data_manager_state": dm_state,
             "traders": ctrl_status.get("traders", {}),
-            "runner_ready": rr.get("ready", False),
-            "runner_stage": rr.get("stage", "unknown"),
+            "thinker_ready": rr.get("ready", False),
+            "thinker_stage": rr.get("stage", "unknown"),
             "any_training_running": ctrl_status["any_training_running"],
         },
         "exchanges": exchanges_data,
@@ -563,15 +563,15 @@ async def api_data_manager_chart(coin: str, tf_minutes: int, limit: int = 1500,
         return {"candles": [], "error": str(e)}
 
 
-@app.post("/api/start-neural")
-async def api_start_neural():
-    ok = ctrl.start_neural()
+@app.post("/api/start-thinker")
+async def api_start_thinker():
+    ok = ctrl.start_thinker()
     return {"ok": ok}
 
 
-@app.post("/api/stop-neural")
-async def api_stop_neural():
-    ctrl.stop_neural()
+@app.post("/api/stop-thinker")
+async def api_stop_thinker():
+    ctrl.stop_thinker()
     return {"ok": True}
 
 
@@ -1184,11 +1184,11 @@ async def _file_watcher():
                     }
                 await ws_manager.broadcast({"type": "signals", "data": coins_data})
 
-            if _check(env.runner_ready_path(), "runner_ready"):
+            if _check(env.thinker_ready_path(), "thinker_ready"):
                 sm = SystemModel(env)
-                rr = sm.runner_ready()
-                await ws_manager.broadcast({"type": "runner_ready", "data": rr})
-                if rr.get("ready") and ctrl.neural_running:
+                rr = sm.thinker_ready()
+                await ws_manager.broadcast({"type": "thinker_ready", "data": rr})
+                if rr.get("ready") and ctrl.thinker_running:
                     ctrl.poll_ready_and_start_trader()
 
             dm_status_path = env.data_manager_status_path()
@@ -1203,7 +1203,7 @@ async def _file_watcher():
             for xk in _active_accounts():
                 traders_status[xk] = {"running": ctrl.trader_running_for(xk)}
             sys_status = {
-                "neural_running": ctrl.neural_running,
+                "thinker_running": ctrl.thinker_running,
                 "trader_running": ctrl.trader_running,
                 "data_manager_running": ctrl.data_manager_running,
                 "traders": traders_status,

@@ -242,12 +242,12 @@ class SystemModel:
     def __init__(self, env: PTEnv):
         self.env = env
 
-    def runner_ready(self) -> dict:
-        data = _cache.get(self.env.runner_ready_path(), _read_json)
+    def thinker_ready(self) -> dict:
+        data = _cache.get(self.env.thinker_ready_path(), _read_json)
         return data or {"ready": False, "stage": "unknown"}
 
-    def neural_autorestart(self) -> dict:
-        data = _cache.get(self.env.neural_autorestart_path(), _read_json)
+    def thinker_autorestart(self) -> dict:
+        data = _cache.get(self.env.thinker_autorestart_path(), _read_json)
         return data or {}
 
     def ema200(self) -> dict:
