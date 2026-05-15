@@ -314,14 +314,14 @@ function updateDataManagerPill(dmState) {
   const dot = pill.querySelector('.pill-dot');
   const label = pill.querySelector('.pill-label');
   const stateMap = {
-    'Backfill': ['pill-dm-backfill', 'Backfill'],
-    'Topup':    ['pill-dm-topup',    'Topup'],
-    'Normal':   ['pill-dm-normal',   'Normal'],
-    'Stopped':  ['pill-dm-stopped',  'Data'],
+    'Backfill': 'pill-dm-backfill',
+    'Topup':    'pill-dm-topup',
+    'Normal':   'pill-dm-normal',
+    'Stopped':  'pill-dm-stopped',
   };
-  const [cls, text] = stateMap[dmState] || ['pill-dm-stopped', 'Data'];
+  const cls = stateMap[dmState] || 'pill-dm-stopped';
   pill.className = 'vital-pill ' + cls;
-  if (label) label.textContent = text;
+  if (label) label.textContent = 'Data : ' + (dmState || 'Stopped');
   if (dot) dot.className = 'pill-dot' + (['Backfill','Topup'].includes(dmState) ? ' pulsing' : '');
 
   const badge = $('.dm-state-badge');
@@ -354,7 +354,7 @@ function updateSystemStatus(sys) {
     const isDemo = state.tradingMode === 'demo';
     pillMode.className = 'vital-pill ' + (isDemo ? 'mode-demo' : 'mode-trading');
     const label = pillMode.querySelector('.pill-label');
-    if (label) label.textContent = isDemo ? 'Demo' : 'Trading';
+    if (label) label.textContent = isDemo ? 'Mode : Demo' : 'Mode : Trading';
   }
 
   const running = sys.thinker_running || sys.trader_running;

@@ -107,7 +107,9 @@ class ProcessController:
         self._lock = threading.Lock()
 
     def _make_env(self) -> dict:
-        return os.environ.copy()
+        env = os.environ.copy()
+        env["POWERTRADER_CONFIG"] = str(self.env.config_path)
+        return env
 
     def _log_dir(self) -> Path:
         return self.env.logs_dir()
