@@ -165,6 +165,15 @@ class ProcessController:
     def stop_data_manager(self):
         self._stop(self._data_manager)
 
+    def backfill_coin(self, coin: str) -> bool:
+        script = self.env.project_dir / "pt_data_manager.py"
+        if not script.is_file():
+            return False
+        h = ProcHandle(name=f"backfill-{coin.lower()}")
+        return self._launch(h, str(script), args=["--coin", coin.upper()],
+                            prefix=f"[BACKFILL:{coin}] ",
+                            log_name=f"backfill-{coin.lower()}")
+
     @property
     def data_manager_running(self) -> bool:
         return self._data_manager.alive

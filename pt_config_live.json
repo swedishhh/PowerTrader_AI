@@ -28,7 +28,8 @@
     "POL",
     "ATOM",
     "ALGO",
-    "HBAR"
+    "HBAR",
+    "ONDO"
   ],
   "trading_mode": "trading",
   "exchange": "kraken",
@@ -51,8 +52,8 @@
     -50
   ],
   "max_dca_buys_per_24h": 1,
-  "pm_start_pct_no_dca": 3,
-  "pm_start_pct_with_dca": 3,
+  "pm_start_pct_no_dca": 5,
+  "pm_start_pct_with_dca": 5,
   "trailing_gap_pct": 0.5,
   "lth_profit_alloc_pct": 50,
   "live_price_source": "kucoin",

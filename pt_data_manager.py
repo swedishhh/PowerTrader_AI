@@ -314,13 +314,57 @@ def run():
         _log(f"[DataManager] topup complete — next in {interval_s/3600:.1f}h")
 
 
-if __name__ == "__main__":
+def run_single(coin: str):
+    """One-shot backfill for a single coin. Used by pt_web backfill endpoint."""
+    coin = coin.upper()
+    _log(f"[DataManager] one-shot backfill: {coin}")
+
+    # Read existing status so we preserve error_coins from the running data manager
+    path = _env.data_manager_status_path()
     try:
-        run()
-    except KeyboardInterrupt:
-        _log("[DataManager] stopped")
+        existing = json.loads(path.read_text()) if path.exists() else {}
+    except Exception:
+        existing = {}
+    error_coins: list = list(existing.get("error_coins") or [])
+
+    try:
+        client = _get_client()
+        arctic = _get_arctic()
     except Exception as e:
-        _log(f"[DataManager] fatal: {e}")
-        traceback.print_exc()
-    finally:
-        _write_status("Stopped")
+        _log(f"[DataManager] startup failed: {e}")
+        return
+    _write_status("Backfill", coin=coin, error_coins=error_coins)
+    _backfill_coin(client, arctic, coin, error_coins)
+    # Restore prior state (Normal or Stopped) with merged error_coins
+    prior_state = existing.get("state", "Normal")
+    if prior_state not in ("Normal", "Topup", "Backfill"):
+        prior_state = "Normal"
+    _write_status(prior_state, error_coins=error_coins,
+                  last_topup=existing.get("last_topup", 0))
+    _log(f"[DataManager] one-shot backfill complete: {coin}")
+
+
+if __name__ == "__main__":
+    import argparse as _argparse
+    _p = _argparse.ArgumentParser()
+    _p.add_argument("--coin", default=None, help="Backfill a single coin and exit")
+    _args = _p.parse_args()
+
+    if _args.coin:
+        try:
+            run_single(_args.coin)
+        except Exception as e:
+            _log(f"[DataManager] fatal: {e}")
+            traceback.print_exc()
+        finally:
+            _write_status("Stopped")
+    else:
+        try:
+            run()
+        except KeyboardInterrupt:
+            _log("[DataManager] stopped")
+        except Exception as e:
+            _log(f"[DataManager] fatal: {e}")
+            traceback.print_exc()
+        finally:
+            _write_status("Stopped")

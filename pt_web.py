@@ -452,6 +452,15 @@ async def api_data_manager_stop():
     return {"ok": True}
 
 
+@app.post("/api/data-manager/backfill/{coin}")
+async def api_data_manager_backfill(coin: str):
+    coin = coin.upper()
+    if coin not in env.coins:
+        return {"ok": False, "error": f"{coin} not in configured coins"}
+    ok = ctrl.backfill_coin(coin)
+    return {"ok": ok}
+
+
 @app.get("/api/data-manager/stats")
 async def api_data_manager_stats():
     """Per-(coin, tf) stats from the local kucoin ArcticDB libraries."""

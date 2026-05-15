@@ -2351,11 +2351,15 @@ async function _loadDataTabStats() {
     return visible.map(r => {
       const tfLabel = TF_MINUTES_LABEL[r.tf_minutes] || `${r.tf_minutes}m`;
       if (r.error) {
+        const canBackfill = r.error === 'No data' && r.tf_minutes === 60;
+        const backfillBtn = canBackfill
+          ? `<button class="btn btn-small btn-primary dm-backfill-btn" data-coin="${r.coin}">Backfill</button>`
+          : '';
         return `<tr class="dm-row dm-row-error">
           <td class="dm-td dm-coin">${r.coin}</td>
           <td class="dm-td dm-tf">${tfLabel}</td>
           <td class="dm-td dm-error-cell" colspan="4">${r.error}</td>
-          <td class="dm-td"></td>
+          <td class="dm-td">${backfillBtn}</td>
         </tr>`;
       }
       return `<tr class="dm-row">
@@ -2430,7 +2434,7 @@ async function refreshLogs() {
 // ── Tabs ──
 
 function setupDataTabDelegation() {
-  $('#tab-data').addEventListener('click', e => {
+  $('#tab-data').addEventListener('click', async e => {
     const th = e.target.closest('.dm-th[data-col]');
     if (th) {
       if (_dataSortCol === th.dataset.col) _dataSortAsc = !_dataSortAsc;
@@ -2438,8 +2442,17 @@ function setupDataTabDelegation() {
       if (_renderDataTable) _renderDataTable();
       return;
     }
-    const btn = e.target.closest('.dm-chart-btn');
-    if (btn) showHistoricChart(btn.dataset.coin, parseInt(btn.dataset.tf));
+    const chartBtn = e.target.closest('.dm-chart-btn');
+    if (chartBtn) { showHistoricChart(chartBtn.dataset.coin, parseInt(chartBtn.dataset.tf)); return; }
+
+    const backfillBtn = e.target.closest('.dm-backfill-btn');
+    if (backfillBtn) {
+      const coin = backfillBtn.dataset.coin;
+      backfillBtn.disabled = true;
+      backfillBtn.textContent = 'Starting…';
+      await apiPost(`data-manager/backfill/${coin}`);
+      setTimeout(() => _loadDataTabStats(), 2000);
+    }
   });
 }
 
