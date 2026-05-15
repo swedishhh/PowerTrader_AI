@@ -36,7 +36,7 @@ const state = {
   tradeStartLevel: 1,
   selectedCoin: null,
   selectedTf: '1hour',
-  neuralRunning: false,
+  thinkerRunning: false,
   traderRunning: false,
   dataManagerState: 'Stopped',
   chart: null,
@@ -197,7 +197,7 @@ function handleWSMessage(msg) {
     case 'system':
       updateSystemStatus(msg.data);
       break;
-    case 'runner_ready':
+    case 'thinker_ready':
       break;
     case 'data_manager_status':
       state.dataManagerState = msg.data.state || 'Stopped';
@@ -333,7 +333,7 @@ function updateDataManagerPill(dmState) {
 
 function updateSystemStatus(sys) {
   if (!sys) return;
-  state.neuralRunning = sys.neural_running;
+  state.thinkerRunning = sys.thinker_running;
   state.traderRunning = sys.trader_running;
   if (sys.traders) state.tradersStatus = sys.traders;
   if (sys.data_manager_state) {
@@ -344,11 +344,11 @@ function updateSystemStatus(sys) {
     updateDataManagerPill('Stopped');
   }
 
-  const pillNeural = $('#pill-neural');
+  const pillNeural = $('#pill-thinker');
   const pillTrader = $('#pill-trader');
   const pillMode = $('#pill-mode');
 
-  pillNeural.className = 'vital-pill ' + (sys.neural_running ? 'running' : 'stopped');
+  pillNeural.className = 'vital-pill ' + (sys.thinker_running ? 'running' : 'stopped');
   pillTrader.className = 'vital-pill ' + (sys.trader_running ? 'running' : 'stopped');
   if (pillMode) {
     const isDemo = state.tradingMode === 'demo';
@@ -357,7 +357,7 @@ function updateSystemStatus(sys) {
     if (label) label.textContent = isDemo ? 'Demo' : 'Trading';
   }
 
-  const running = sys.neural_running || sys.trader_running;
+  const running = sys.thinker_running || sys.trader_running;
   const btnStart = $('#btn-start-all');
   const btnStop = $('#btn-stop-all');
   btnStart.style.display = running ? 'none' : '';
@@ -373,7 +373,7 @@ function updateSystemStatus(sys) {
   const btnTrainAll = $('#btn-train-all');
   if (btnTrainAll) {
     btnTrainAll.disabled = running;
-    btnTrainAll.title = running ? 'Stop trader and neural runner before training' : '';
+    btnTrainAll.title = running ? 'Stop trader and thinker before training' : '';
   }
 
   const btnSync = $('#btn-sync-shadow');
@@ -1779,7 +1779,7 @@ function renderTraining(coins) {
     if (el.dataset.timer) clearInterval(Number(el.dataset.timer));
   });
 
-  const locked = state.neuralRunning || state.traderRunning;
+  const locked = state.thinkerRunning || state.traderRunning;
   const anyTraining = (coins || []).some(c => c.training_running);
   const header = $('#training-header');
   if (header) {
@@ -1791,7 +1791,7 @@ function renderTraining(coins) {
       </div>
       <div class="dm-controls">
         <button class="btn btn-primary btn-small" id="btn-train-all-tab"
-          ${locked ? `disabled title="Stop trader and neural runner before training"` : ''}>
+          ${locked ? `disabled title="Stop trader and thinker before training"` : ''}>
           Train All
         </button>
       </div>`;
@@ -1805,7 +1805,7 @@ function renderTraining(coins) {
     container.innerHTML = '<div class="empty-state">No coins configured</div>';
     return;
   }
-  const trainDisabled = locked ? 'disabled title="Stop trader and neural runner before training"' : '';
+  const trainDisabled = locked ? 'disabled title="Stop trader and thinker before training"' : '';
 
   const _needsAttention = c => !c.is_trained && (c.training_state === 'FAILED' || c.training_state === 'FINISHED');
   const sorted = [...coins].sort((a, b) => {
@@ -1869,7 +1869,7 @@ function renderTraining(coins) {
 
 function updateTrainingBadges(coins) {
   if (!coins) return;
-  const locked = state.neuralRunning || state.traderRunning;
+  const locked = state.thinkerRunning || state.traderRunning;
   for (const c of coins) {
     const row = document.querySelector(`[data-train-coin="${c.coin}"]`);
     if (!row) continue;
@@ -1884,7 +1884,7 @@ function updateTrainingBadges(coins) {
     const trainBtn = row.querySelector('.train-btn');
     if (trainBtn) {
       trainBtn.disabled = locked;
-      trainBtn.title = locked ? 'Stop trader and neural runner before training' : '';
+      trainBtn.title = locked ? 'Stop trader and thinker before training' : '';
     }
   }
 }
@@ -2414,7 +2414,7 @@ function populateLogSourceDropdown() {
   const select = $('#log-source');
   if (!select) return;
   const currentVal = select.value;
-  select.innerHTML = '<option value="neural">Neural Runner</option>';
+  select.innerHTML = '<option value="thinker">Thinker</option>';
   select.innerHTML += '<option value="data-manager">Data Manager</option>';
   state.exchangeList.forEach(xk => {
     select.innerHTML += `<option value="trader-${xk}">Trader: ${xk}</option>`;

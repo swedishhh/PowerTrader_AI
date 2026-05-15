@@ -100,7 +100,7 @@ class ProcessController:
 
     def __init__(self, env: PTEnv):
         self.env = env
-        self._neural = ProcHandle(name="neural")
+        self._thinker = ProcHandle(name="thinker")
         self._data_manager = ProcHandle(name="data-manager")
         self._traders: dict[str, ProcHandle] = {}
         self._trainers: dict[str, ProcHandle] = {}
@@ -180,8 +180,8 @@ class ProcessController:
 
     # -- Neural (thinker) --
 
-    def start_neural(self) -> bool:
-        rr_path = self.env.runner_ready_path()
+    def start_thinker(self) -> bool:
+        rr_path = self.env.thinker_ready_path()
         try:
             rr_path.parent.mkdir(parents=True, exist_ok=True)
             with open(rr_path, "w") as f:
@@ -189,7 +189,7 @@ class ProcessController:
         except Exception:
             pass
 
-        ar_path = self.env.neural_autorestart_path()
+        ar_path = self.env.thinker_autorestart_path()
         try:
             with open(ar_path, "w") as f:
                 json.dump({
@@ -202,16 +202,15 @@ class ProcessController:
             pass
 
         return self._launch(
-            self._neural,
+            self._thinker,
             str(self.env.script_path("thinker")),
-            prefix="[RUNNER] ",
-            log_name="neural",
+            prefix="[THINKER] ",
+            log_name="thinker",
         )
 
-
-    def stop_neural(self):
-        self._stop(self._neural)
-        ar_path = self.env.neural_autorestart_path()
+    def stop_thinker(self):
+        self._stop(self._thinker)
+        ar_path = self.env.thinker_autorestart_path()
         try:
             with open(ar_path, "w") as f:
                 json.dump({
@@ -224,8 +223,8 @@ class ProcessController:
             pass
 
     @property
-    def neural_running(self) -> bool:
-        return self._neural.alive
+    def thinker_running(self) -> bool:
+        return self._thinker.alive
 
     # -- Traders (one per exchange) --
 
@@ -277,17 +276,17 @@ class ProcessController:
     # -- Start/stop all --
 
     def start_all(self) -> dict:
-        """Start data manager, neural, then traders when ready."""
+        """Start data manager, thinker, then traders when ready."""
         self.start_data_manager()
-        ok_neural = self.start_neural()
-        if not ok_neural:
-            return {"ok": False, "error": "Failed to start neural"}
-        return {"ok": True, "message": "Neural started, traders will start when ready"}
+        ok = self.start_thinker()
+        if not ok:
+            return {"ok": False, "error": "Failed to start thinker"}
+        return {"ok": True, "message": "Thinker started, traders will start when ready"}
 
     def poll_ready_and_start_trader(self) -> bool:
-        """Check runner_ready and start all traders if ready."""
+        """Check thinker_ready and start all traders if ready."""
         sm = SystemModel(self.env)
-        rr = sm.runner_ready()
+        rr = sm.thinker_ready()
         if rr.get("ready"):
             started = False
             for xk in self._trader_exchanges():
@@ -299,7 +298,7 @@ class ProcessController:
 
     def stop_all(self):
         self.stop_trader()
-        self.stop_neural()
+        self.stop_thinker()
         self.stop_data_manager()
 
     # -- Training --
@@ -378,7 +377,7 @@ class ProcessController:
             return ok
 
     def train_all(self) -> dict[str, bool]:
-        self.stop_neural()
+        self.stop_thinker()
         results = {}
         for coin in self.env.coins:
             results[coin] = self.start_training(coin)
@@ -409,8 +408,8 @@ class ProcessController:
     # -- Logs --
 
     def _resolve_handle(self, script: str) -> ProcHandle | None:
-        if script == "neural":
-            return self._neural
+        if script == "thinker":
+            return self._thinker
         if script == "data-manager":
             return self._data_manager
         if script.startswith("trader-"):
@@ -478,7 +477,7 @@ class ProcessController:
             traders[xk] = {"running": self.trader_running_for(xk)}
 
         return {
-            "neural_running": self.neural_running,
+            "thinker_running": self.thinker_running,
             "trader_running": self.trader_running,
             "data_manager_running": self.data_manager_running,
             "traders": traders,

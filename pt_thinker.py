@@ -26,7 +26,7 @@ ALGORITHM (per coin, per timeframe)
 COMMUNICATION LINKS
 --------------------
 Reads (inputs):
-  pt_config.json              — coin list, LTH coins, main_neural_dir
+  pt_config.json              — coin list, LTH coins, thinker_dir
   state/coins/<SYM>/
     memories_<tf>.json           — memory bank (written by pt_trainer.py)
     weights_<tf>.json            — per-memory weights (written by pt_trainer.py)
@@ -43,7 +43,7 @@ Writes (outputs consumed by pt_trader.py):
     high_bound_prices.html       — space-separated predicted sell price levels
 
   state/hub_data/
-    runner_ready.json            — readiness status polled by pt_web.py / UI
+    thinker_ready.json           — readiness status polled by pt_web.py / UI
     lth_daily_ema200.json        — 200-day EMA snapshots for LTH coins (read
                                    by pt_trader.py for LTH buy gating)
 """
@@ -325,9 +325,9 @@ def _load_coin_state(sym: str) -> dict | None:
         return None
 
 
-# --- GUI HUB "runner ready" gate file (read by gui_hub.py Start All toggle) ---
+# --- Thinker ready gate file (read by pt_web.py / pt_controller to start traders) ---
 
-RUNNER_READY_PATH = str(_env.runner_ready_path())
+THINKER_READY_PATH = str(_env.thinker_ready_path())
 
 
 def _atomic_write_json(path: str, data: dict) -> None:
@@ -340,7 +340,7 @@ def _atomic_write_json(path: str, data: dict) -> None:
         pass
 
 
-def _write_runner_ready(
+def _write_thinker_ready(
     ready: bool, stage: str, ready_coins=None, total_coins: int = 0
 ) -> None:
     obj = {
@@ -350,7 +350,7 @@ def _write_runner_ready(
         "ready_coins": ready_coins or [],
         "total_coins": int(total_coins or 0),
     }
-    _atomic_write_json(RUNNER_READY_PATH, obj)
+    _atomic_write_json(THINKER_READY_PATH, obj)
 
 
 # Ensure folders exist for the current configured coins
@@ -464,7 +464,7 @@ def _tlog(msg: str) -> None:
     print(f"{time.strftime('%H:%M:%S')} [Thinker] {msg}", flush=True)
 
 
-_write_runner_ready(
+_write_thinker_ready(
     False, stage="starting", ready_coins=[], total_coins=len(CURRENT_COINS)
 )
 _tlog(f"Starting — {len(CURRENT_COINS)} coins")
@@ -595,7 +595,7 @@ def step_coin(sym: str):
         try:
             _ready_coins.discard(sym)
             any_ready = len(_ready_coins) > 0
-            _write_runner_ready(
+            _write_thinker_ready(
                 any_ready,
                 stage=("real_predictions" if any_ready else "training_required"),
                 ready_coins=sorted(list(_ready_coins)),
@@ -1209,7 +1209,7 @@ def step_coin(sym: str):
                 _ready_coins.discard(sym)
 
             any_ready = len(_ready_coins) > 0
-            _write_runner_ready(
+            _write_thinker_ready(
                 any_ready,
                 stage=("real_predictions" if any_ready else "warming_up"),
                 ready_coins=sorted(list(_ready_coins)),
