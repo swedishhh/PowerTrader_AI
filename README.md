@@ -192,4 +192,60 @@ PowerTrader AI is released under the **Apache 2.0** license.
 
 ---
 
+## Error Handling & Observability
+
+### Architecture
+
+Errors surface through two independent channels so that different audiences get the right signal:
+
+- **Logs tab** (`pt_log.py` → stdout → controller queue) — narrative, timestamped, per-process. Format: `20260516:143201.042 WARNING  [trader-kucoin] could not save bot order IDs: …`. Useful for debugging what happened and when.
+- **Errors tab** (`pt_errors.py` → `hub_data/errors.jsonl`) — structured, filterable, actionable. Only written for events that a user should know about and potentially act on. Each entry carries a `component`, `level`, `message`, and `detail` field.
+
+The two channels are intentionally separate: the Errors tab should not be noise, and the Logs tab should not omit anything.
+
+### Three-Tier Classification
+
+**Tier 1 — Exchange adapters, thinker, controller**
+These are external boundaries (network I/O, subprocess management). Failures here are always surfaced with both `log.exception` and `pt_errors.emit()` because a broken adapter or dead subprocess directly affects trading.
+
+**Tier 2 — Trader, web layer, data manager**
+Internal business logic with mixed failure modes. Each failure site is individually classified:
+- `pt_errors.emit()` is added when the consequence is user-visible and actionable (wrong positions displayed, $0 buying power, broken PnL accounting, failed data backfill).
+- `log.warning` or `log.exception` only when the failure is self-contained or already gracefully degraded (file backup steps, per-item loop guards, best-effort state cleanup).
+
+**Tier 3 — Supporting modules** (`pt_env`, `pt_models`, `pt_trainer`)
+Structural exceptions and typed errors only. `pt_env` is excluded from `pt_errors` instrumentation due to circular import constraints.
+
+### Log Levels
+
+| Level | When to use |
+|---|---|
+| `log.debug` | High-frequency operational detail (loop timing, cache hits, skipped coins). Off in production. |
+| `log.info` | Normal state transitions, trade decisions, startup/shutdown. |
+| `log.warning` | Something went wrong but the system recovered or degraded gracefully. |
+| `log.exception` | Unexpected exception with full traceback; the operation failed entirely. |
+| `pt_errors.emit(level="warning")` | User should be aware; system is still running but degraded. |
+| `pt_errors.emit(level="error")` | User should act; a critical path has failed. |
+
+### Moving Towards Fail-Fast
+
+The current defensive `try/except` coverage is intentionally broad to capture a baseline during initial production monitoring. The plan is to progressively tighten it once real failure patterns are understood:
+
+1. **Monitor first.** The structured Errors tab and detailed logs will show which exceptions actually occur and how often. Fix root causes rather than noting the errors.
+
+2. **Classify exceptions by type when they appear:**
+   - *Transient* (network timeout, API rate limit, file lock): keep the guard, consider retry/backoff.
+   - *Invariant violation* (unexpected `None`, wrong type, logic bug): remove the guard and let it propagate — the exception is the information, and swallowing it corrupts state silently.
+
+3. **The natural fail-fast boundary already exists.** The outer `run()` loop catches everything from `manage_trades` and restarts automatically. The right direction is to let errors propagate up to that boundary rather than handling them deep in sub-functions. Most of the scattered guards exist because the code doesn't fully trust its own invariants — removing them makes those invariants explicit.
+
+4. **Priority order for removing guards:**
+   - First: pure in-memory operations (dict access, arithmetic, type coercions). Exceptions here are bugs, not conditions.
+   - Second: file I/O on files that should always exist (ledger, trade history). A missing or corrupt ledger should fail loudly, not return empty state and trade on wrong data.
+   - Keep: per-item loop guards (`continue` on bad data), external API call sites, and the single outer `manage_trades → run()` boundary.
+
+5. **Design signal.** If removing a guard feels wrong, that usually means the function is doing too much — mixing network calls, arithmetic, and file writes. Fail-fast pressure naturally pushes toward separating those concerns: pure functions can assert preconditions, I/O functions handle transient errors at the call site.
+
+---
+
 IMPORTANT: This software places real trades automatically. You are responsible for everything it does to your money and your account. Keep your API keys private. I am not giving financial advice. I am not responsible for any losses incurred or any security breaches to your computer (the code is entirely open source and can be confirmed non-malicious). You are fully responsible for doing your own due diligence to learn and understand this trading system and to use it properly. You are fully responsible for all of your money and all of the bot's actions, and any gains or losses.

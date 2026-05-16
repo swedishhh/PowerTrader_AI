@@ -135,6 +135,7 @@
         <button class="tab-btn" data-tab="training">Training</button>
         <button class="tab-btn" data-tab="data">Data</button>
         <button class="tab-btn" data-tab="logs">Logs</button>
+        <button class="tab-btn" data-tab="errors">Errors</button>
         <button class="tab-btn" data-tab="settings">Settings</button>
       </div>
     </div>
@@ -162,6 +163,21 @@
         <button class="btn btn-small" id="btn-refresh-logs">Refresh</button>
       </div>
       <pre id="log-output" class="log-output"></pre>
+    </div>
+    <div class="tab-content" id="tab-errors">
+      <div class="errors-controls">
+        <select id="errors-filter-level">
+          <option value="">All levels</option>
+          <option value="error">Error</option>
+          <option value="warning">Warning</option>
+        </select>
+        <select id="errors-filter-component">
+          <option value="">All components</option>
+        </select>
+        <button class="btn btn-small" id="btn-refresh-errors">Refresh</button>
+        <button class="btn btn-small btn-danger" id="btn-clear-errors">Clear</button>
+      </div>
+      <div id="errors-list" class="errors-list"></div>
     </div>
     <div class="tab-content" id="tab-settings">
       <div id="settings-form" class="settings-form"></div>

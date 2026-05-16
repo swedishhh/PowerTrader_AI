@@ -16,6 +16,7 @@ from typing import Dict, List, Optional, Tuple
 import ccxt
 
 from exchange_api import Exchange, OrderResult
+import pt_errors
 
 
 class KrakenExchange(Exchange):
@@ -96,7 +97,16 @@ class KrakenExchange(Exchange):
                 except Exception:
                     pass
             return total_usd
-        except Exception:
+        except Exception as e:
+            pt_errors.emit(
+                "exchange-kraken", level="error",
+                message=f"Failed to fetch account balance from Kraken: {e}",
+                detail=(
+                    "The total account value shown in the UI will be stale or missing. "
+                    "This is typically a network or API key issue. Trading decisions that "
+                    "depend on account value may be affected."
+                ),
+            )
             return None
 
     def get_buying_power(self) -> Optional[float]:
@@ -104,7 +114,15 @@ class KrakenExchange(Exchange):
             balance = self._exchange.fetch_balance()
             free = balance.get("free", {}) or {}
             return float(free.get("USD", 0) or 0) + float(free.get("USDT", 0) or 0)
-        except Exception:
+        except Exception as e:
+            pt_errors.emit(
+                "exchange-kraken", level="error",
+                message=f"Failed to fetch buying power from Kraken: {e}",
+                detail=(
+                    "The trader cannot determine available USD. Buy orders may be skipped "
+                    "or incorrectly sized until this resolves. Check API connectivity and key permissions."
+                ),
+            )
             return None
 
     def get_holdings(self) -> Dict[str, float]:
@@ -117,7 +135,15 @@ class KrakenExchange(Exchange):
                     continue
                 out[currency] = amount
             return out
-        except Exception:
+        except Exception as e:
+            pt_errors.emit(
+                "exchange-kraken", level="error",
+                message=f"Failed to fetch holdings from Kraken: {e}",
+                detail=(
+                    "Current coin positions are unknown. Sell decisions may be skipped, "
+                    "and the positions panel will be empty. This typically resolves on the next polling cycle."
+                ),
+            )
             return {}
 
     def get_price(self, symbols: List[str]) -> Tuple[Dict[str, float], Dict[str, float], List[str]]:
@@ -177,7 +203,15 @@ class KrakenExchange(Exchange):
             order = self._exchange.create_market_buy_order(exchange_sym, qty)
         except (ccxt.InvalidOrder, ccxt.InsufficientFunds):
             return None
-        except Exception:
+        except Exception as e:
+            pt_errors.emit(
+                "exchange-kraken", level="error",
+                message=f"Unexpected error placing buy order for {symbol}: {e}",
+                detail=(
+                    "The buy order was not submitted to Kraken. The trade opportunity "
+                    "was missed and no funds were spent. Check Kraken API status and key permissions."
+                ),
+            )
             return None
 
         order_id = str(order.get("id", ""))
@@ -199,7 +233,16 @@ class KrakenExchange(Exchange):
             order = self._exchange.create_market_sell_order(exchange_sym, qty)
         except (ccxt.InvalidOrder, ccxt.InsufficientFunds):
             return None
-        except Exception:
+        except Exception as e:
+            pt_errors.emit(
+                "exchange-kraken", level="error",
+                message=f"Unexpected error placing sell order for {symbol}: {e}",
+                detail=(
+                    "The sell order was not submitted to Kraken. The position remains open "
+                    "and the trader may attempt to sell again on the next cycle. "
+                    "Check Kraken API status and key permissions."
+                ),
+            )
             return None
 
         order_id = str(order.get("id", ""))
@@ -215,7 +258,15 @@ class KrakenExchange(Exchange):
             closed = self._exchange.fetch_closed_orders(exchange_sym)
             open_orders = self._exchange.fetch_open_orders(exchange_sym)
             return {"results": [self._normalize_order(o) for o in closed + open_orders]}
-        except Exception:
+        except Exception as e:
+            pt_errors.emit(
+                "exchange-kraken", level="warning",
+                message=f"Failed to fetch orders for {symbol} from Kraken: {e}",
+                detail=(
+                    "Order history for this coin is unavailable. Cost basis calculations "
+                    "may be incomplete until the next successful fetch."
+                ),
+            )
             return {"results": []}
 
     @staticmethod

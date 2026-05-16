@@ -16,6 +16,7 @@ from pathlib import Path
 
 from pt_env import PTEnv
 from pt_models import CoinModel, SystemModel
+import pt_errors
 
 
 MAX_LOG_BYTES = 2 * 1024 * 1024  # 2 MB per log file
@@ -41,7 +42,15 @@ def _reader_thread(proc: subprocess.Popen, q: queue.Queue, prefix: str,
         if log_path:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_fh = open(log_path, "a", encoding="utf-8", buffering=1)
-    except Exception:
+    except Exception as e:
+        pt_errors.emit(
+            "controller", level="warning",
+            message=f"Could not open log file {log_path}: {e}",
+            detail=(
+                "Process output will not be written to disk for this session. "
+                "Live logs in the UI still work but will be lost on restart."
+            ),
+        )
         log_fh = None
 
     try:
@@ -52,7 +61,7 @@ def _reader_thread(proc: subprocess.Popen, q: queue.Queue, prefix: str,
                     break
                 time.sleep(0.05)
                 continue
-            msg = f"{time.strftime('%H:%M:%S')} {prefix}{line.rstrip()}"
+            msg = line.rstrip()
             if q.full():
                 try:
                     q.get_nowait()
@@ -71,8 +80,15 @@ def _reader_thread(proc: subprocess.Popen, q: queue.Queue, prefix: str,
                         log_fh = open(log_path, "a", encoding="utf-8", buffering=1)
                 except Exception:
                     pass
-    except Exception:
-        pass
+    except Exception as e:
+        pt_errors.emit(
+            "controller", level="error",
+            message=f"Log reader thread for {prefix.strip()} crashed: {e}",
+            detail=(
+                "The subprocess is still running but its output is no longer being captured. "
+                "Live logs in the UI will be empty or stale. Restart the process to restore logging."
+            ),
+        )
     if log_fh:
         try:
             log_fh.close()
@@ -141,7 +157,16 @@ class ProcessController:
             )
             handle._thread.start()
             return True
-        except Exception:
+        except Exception as e:
+            pt_errors.emit(
+                "controller", level="error",
+                message=f"Failed to launch subprocess {handle.name}: {e}",
+                detail=(
+                    f"The {handle.name} process could not be started. "
+                    "Check that the script path exists and Python has permission to execute it. "
+                    "Trading and signal generation will not run until this is resolved."
+                ),
+            )
             return False
 
     def _stop(self, handle: ProcHandle):

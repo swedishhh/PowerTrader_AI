@@ -203,6 +203,9 @@ function handleWSMessage(msg) {
       state.dataManagerState = msg.data.state || 'Stopped';
       updateDataManagerPill(state.dataManagerState);
       break;
+    case 'error_event':
+      onNewErrorEvent(msg.data);
+      break;
   }
 }
 
@@ -2410,6 +2413,95 @@ async function _loadDataTabStats() {
   renderTable();
 }
 
+// ── Errors Tab ──
+
+let _errorsCache = [];
+
+function _errorsLevelClass(level) {
+  return level === 'error' ? 'err-row--error' : 'err-row--warning';
+}
+
+function _errorsTimestamp(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+}
+
+function renderErrors(entries) {
+  const list = $('#errors-list');
+  if (!list) return;
+  if (!entries.length) {
+    list.innerHTML = '<div class="err-empty">No errors recorded.</div>';
+    return;
+  }
+  const rows = entries.slice().reverse().map(e => `
+    <div class="err-row ${_errorsLevelClass(e.level)}">
+      <div class="err-row-header">
+        <span class="err-badge err-badge--${e.level}">${(e.level || '').toUpperCase()}</span>
+        <span class="err-component">${e.component || ''}</span>
+        <span class="err-time">${_errorsTimestamp(e.ts)}</span>
+      </div>
+      <div class="err-message">${_esc(e.message || '')}</div>
+      ${e.detail ? `<div class="err-detail">${_esc(e.detail)}</div>` : ''}
+    </div>
+  `).join('');
+  list.innerHTML = rows;
+}
+
+function _esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function loadErrors() {
+  const level = $('#errors-filter-level').value;
+  const component = $('#errors-filter-component').value;
+  let url = 'errors?limit=200';
+  if (level) url += `&level=${level}`;
+  if (component) url += `&component=${encodeURIComponent(component)}`;
+  const data = await api(url);
+  _errorsCache = data.errors || [];
+  _rebuildErrorComponentFilter(_errorsCache);
+  renderErrors(_errorsCache);
+}
+
+function _rebuildErrorComponentFilter(entries) {
+  const sel = $('#errors-filter-component');
+  if (!sel) return;
+  const current = sel.value;
+  const components = [...new Set(entries.map(e => e.component).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">All components</option>';
+  components.forEach(c => {
+    const opt = document.createElement('option');
+    opt.value = c;
+    opt.textContent = c;
+    sel.appendChild(opt);
+  });
+  if (current) sel.value = current;
+}
+
+let _errorsBadgeCount = 0;
+function _updateErrorsBadge(n) {
+  const btn = $('[data-tab="errors"]');
+  if (!btn) return;
+  if (n > 0) {
+    btn.dataset.badge = n > 99 ? '99+' : String(n);
+    btn.classList.add('has-badge');
+  } else {
+    btn.removeAttribute('data-badge');
+    btn.classList.remove('has-badge');
+  }
+}
+
+function onNewErrorEvent(entry) {
+  if (entry.level === 'error') {
+    _errorsBadgeCount++;
+    _updateErrorsBadge(_errorsBadgeCount);
+  }
+  const errTab = $('#tab-errors');
+  if (errTab && errTab.classList.contains('active')) {
+    loadErrors();
+  }
+}
+
 function populateLogSourceDropdown() {
   const select = $('#log-source');
   if (!select) return;
@@ -2479,6 +2571,11 @@ function setupTabs() {
       if (tab === 'logs') {
         refreshLogs();
         state.logRefreshTimer = setInterval(refreshLogs, 3000);
+      }
+      if (tab === 'errors') {
+        _errorsBadgeCount = 0;
+        _updateErrorsBadge(0);
+        loadErrors();
       }
     });
   });
@@ -2574,6 +2671,17 @@ function setupButtons() {
   });
 
   $('#btn-refresh-logs').addEventListener('click', refreshLogs);
+
+  $('#btn-refresh-errors').addEventListener('click', loadErrors);
+  $('#btn-clear-errors').addEventListener('click', async () => {
+    if (!confirm('Clear all error history?')) return;
+    await fetch('/api/errors', {method: 'DELETE'});
+    _errorsBadgeCount = 0;
+    _updateErrorsBadge(0);
+    loadErrors();
+  });
+  $('#errors-filter-level').addEventListener('change', loadErrors);
+  $('#errors-filter-component').addEventListener('change', loadErrors);
 
   $('#acct-block-portfolio').addEventListener('click', () => selectAccountChart(0));
 }

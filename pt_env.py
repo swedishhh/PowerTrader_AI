@@ -583,6 +583,9 @@ class PTEnv:
     def data_manager_status_path(self) -> Path:
         return self._hub_dir / "data_manager_status.json"
 
+    def errors_path(self) -> Path:
+        return self._hub_dir / "errors.jsonl"
+
     def debug_trade_dumps_dir(self) -> Path:
         return self._hub_dir / "debug_trade_dumps"
 

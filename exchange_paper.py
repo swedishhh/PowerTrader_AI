@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Tuple
 
 from exchange_api import Exchange, OrderResult
 from price_source import get_mid_price
+import pt_errors
 
 _DEFAULT_STARTING_USD = 10_000.0
 
@@ -74,8 +75,17 @@ class PaperExchange(Exchange):
             self._holdings = {k: float(v) for k, v in (data.get("holdings") or {}).items()}
             self._orders = data.get("orders", {})
             self._position_cost = data.get("position_cost", {})
-        except Exception:
-            pass
+        except Exception as e:
+            pt_errors.emit(
+                f"exchange-{self._key}", level="error",
+                message=f"Failed to load account state from {self._state_path}: {e}",
+                detail=(
+                    "The account state file exists but could not be read or parsed. "
+                    "Holdings and USD balance have been reset to defaults — the account "
+                    "is now out of sync with its last known state. Check for disk errors "
+                    "or a corrupt state file."
+                ),
+            )
 
     def _save_state(self) -> None:
         if not self._state_path:
@@ -91,8 +101,17 @@ class PaperExchange(Exchange):
                     "position_cost": self._position_cost,
                 }, f, indent=2)
             os.replace(tmp, self._state_path)
-        except Exception:
-            pass
+        except Exception as e:
+            pt_errors.emit(
+                f"exchange-{self._key}", level="error",
+                message=f"Failed to save account state to {self._state_path}: {e}",
+                detail=(
+                    "The current holdings and USD balance could not be written to disk. "
+                    "If this process restarts, all in-memory positions will be lost and "
+                    "the account will reset to its last successfully saved state. "
+                    "Check available disk space and write permissions."
+                ),
+            )
 
     def _get_price(self, base: str) -> Optional[float]:
         return get_mid_price(base, self._price_source)
@@ -240,8 +259,16 @@ class PaperExchange(Exchange):
         try:
             with open(d / "account_value_history.jsonl", "a", encoding="utf-8") as f:
                 f.write(json.dumps({"ts": time.time(), "total_account_value": total}) + "\n")
-        except Exception:
-            pass
+        except Exception as e:
+            pt_errors.emit(
+                f"exchange-{self._key}", level="warning",
+                message=f"Failed to append account value history: {e}",
+                detail=(
+                    "A data point was dropped from account_value_history.jsonl. "
+                    "The portfolio chart will show a gap at this timestamp. "
+                    "Trading is unaffected."
+                ),
+            )
 
     def write_status(self) -> None:
         """Write trader_status.json from current paper state + live prices."""
@@ -299,8 +326,16 @@ class PaperExchange(Exchange):
         try:
             tmp.write_text(json.dumps(status, indent=2))
             tmp.replace(d / "trader_status.json")
-        except Exception:
-            pass
+        except Exception as e:
+            pt_errors.emit(
+                f"exchange-{self._key}", level="error",
+                message=f"Failed to write trader_status.json: {e}",
+                detail=(
+                    "The UI will display stale positions and account values until "
+                    "this write succeeds. Check available disk space and write permissions. "
+                    "Trading is unaffected but the dashboard is out of sync."
+                ),
+            )
 
 
 class ShadowedExchange(Exchange):
@@ -341,8 +376,16 @@ class ShadowedExchange(Exchange):
             if total > 0:
                 self._shadow._append_account_value(total)
             self._shadow.write_status()
-        except Exception:
-            pass
+        except Exception as e:
+            pt_errors.emit(
+                "exchange-shadow", level="warning",
+                message=f"Shadow tick failed: {e}",
+                detail=(
+                    "The shadow account status and history were not updated this cycle. "
+                    "The friction comparison (real vs shadow) may show a temporary gap. "
+                    "This will self-correct on the next tick in ~5 minutes."
+                ),
+            )
 
     # ------------------------------------------------------------------
     # Mirrored trade operations
@@ -358,8 +401,16 @@ class ShadowedExchange(Exchange):
                     or amount_usd
                 )
                 self._shadow.place_buy(symbol, notional)
-            except Exception:
-                pass
+            except Exception as e:
+                pt_errors.emit(
+                    "exchange-shadow", level="error",
+                    message=f"Failed to mirror buy of {symbol} into shadow: {e}",
+                    detail=(
+                        "The real buy executed successfully but was not recorded in the "
+                        "shadow account. The friction comparison (real vs shadow P&L) will "
+                        "be inaccurate until the shadow is re-synced via 'Sync Shadow'."
+                    ),
+                )
         return result
 
     def place_sell(self, symbol: str, qty: float) -> Optional[OrderResult]:
@@ -370,8 +421,16 @@ class ShadowedExchange(Exchange):
             if shadow_qty > 1e-12:
                 try:
                     self._shadow.place_sell(symbol, shadow_qty)
-                except Exception:
-                    pass
+                except Exception as e:
+                    pt_errors.emit(
+                        "exchange-shadow", level="error",
+                        message=f"Failed to mirror sell of {symbol} into shadow: {e}",
+                        detail=(
+                            "The real sell executed successfully but was not recorded in the "
+                            "shadow account. The shadow may still show a position in this coin "
+                            "that no longer exists on the real exchange. Use 'Sync Shadow' to correct."
+                        ),
+                    )
         return result
 
     # ------------------------------------------------------------------
