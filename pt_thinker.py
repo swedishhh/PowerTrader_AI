@@ -535,44 +535,6 @@ cc_update = "yes"
 wr_update = "yes"
 
 
-def find_purple_area(lines):
-    """
-    Given a list of (price, color) pairs (color is 'orange' or 'blue'),
-    returns (purple_bottom, purple_top) if a purple area exists,
-    else (None, None).
-    """
-    oranges = sorted(
-        [price for price, color in lines if color == "orange"], reverse=True
-    )
-    blues = sorted([price for price, color in lines if color == "blue"])
-    if not oranges or not blues:
-        return (None, None)
-    purple_bottom = None
-    purple_top = None
-    all_levels = sorted(
-        set(oranges + blues + [float("-inf"), float("inf")]), reverse=True
-    )
-    for i in range(len(all_levels) - 1):
-        top = all_levels[i]
-        bottom = all_levels[i + 1]
-        oranges_below = [o for o in oranges if o < bottom]
-        blues_above = [b for b in blues if b > top]
-        has_orange_below = any(o < top for o in oranges)
-        has_blue_above = any(b > bottom for b in blues)
-        if has_orange_below and has_blue_above:
-            if purple_bottom is None or bottom < purple_bottom:
-                purple_bottom = bottom
-            if purple_top is None or top > purple_top:
-                purple_top = top
-    if (
-        purple_bottom is not None
-        and purple_top is not None
-        and purple_top > purple_bottom
-    ):
-        return (purple_bottom, purple_top)
-    return (None, None)
-
-
 def step_coin(sym: str):
     # run inside the coin folder so all existing file reads/writes stay relative + isolated
     os.chdir(coin_folder(sym))
@@ -642,8 +604,6 @@ def step_coin(sym: str):
         training_issues.extend([0] * (len(tf_choices) - len(training_issues)))
     elif len(training_issues) > len(tf_choices):
         del training_issues[len(tf_choices) :]
-
-    last_difference_between = 0.0
 
     # ====== ORIGINAL: fetch current candle for this timeframe index ======
     while True:
@@ -736,7 +696,7 @@ def step_coin(sym: str):
                         )
                         * 100
                     )
-                except:
+                except Exception:
                     difference = 0.0
 
             diff_avg = difference
@@ -771,20 +731,20 @@ def step_coin(sym: str):
 
             if mem_ind >= len(memory_list):
                 if any_perfect == "no":
-                    final_moves = 0.0
+                    # final_moves = 0.0
                     high_final_moves = 0.0
                     low_final_moves = 0.0
                     del perfects[tf_choice_index]
                     perfects.insert(tf_choice_index, "inactive")
                 else:
                     try:
-                        final_moves = sum(moves) / len(moves)
+                        # final_moves = sum(moves) / len(moves)
                         high_final_moves = sum(high_moves) / len(high_moves)
                         low_final_moves = sum(low_moves) / len(low_moves)
                         del perfects[tf_choice_index]
                         perfects.insert(tf_choice_index, "active")
-                    except:
-                        final_moves = 0.0
+                    except Exception:
+                        # final_moves = 0.0
                         high_final_moves = 0.0
                         low_final_moves = 0.0
                         del perfects[tf_choice_index]
@@ -806,7 +766,7 @@ def step_coin(sym: str):
             ),
         )
         training_issues[tf_choice_index] = 1
-        final_moves = 0.0
+        # final_moves = 0.0
         high_final_moves = 0.0
         low_final_moves = 0.0
         del perfects[tf_choice_index]
@@ -824,14 +784,14 @@ def step_coin(sym: str):
     current_pattern = [price_list2[0], price_list2[1]]
 
     try:
-        c_diff = final_moves / 100
+        # c_diff = final_moves / 100
         high_diff = high_final_moves
         low_diff = low_final_moves
 
         start_price = current_pattern[len(current_pattern) - 1]
         high_new_price = start_price + (start_price * high_diff)
         low_new_price = start_price + (start_price * low_diff)
-    except:
+    except Exception:
         start_price = current_pattern[len(current_pattern) - 1]
         high_new_price = start_price
         low_new_price = start_price
@@ -1123,7 +1083,7 @@ def step_coin(sym: str):
                             / 2
                         )
                     ) * 100
-                except:
+                except Exception:
                     low_perc_diff = 0.0
                 try:
                     high_perc_diff = (
@@ -1139,7 +1099,7 @@ def step_coin(sym: str):
                             / 2
                         )
                     ) * 100
-                except:
+                except Exception:
                     high_perc_diff = 0.0
 
                 if (
@@ -1179,13 +1139,13 @@ def step_coin(sym: str):
                 low_bound_prices.append(
                     new_low_bound_prices[og_low_index_list.index(og_index)]
                 )
-            except:
+            except Exception:
                 pass
             try:
                 high_bound_prices.append(
                     new_high_bound_prices[og_high_index_list.index(og_index)]
                 )
-            except:
+            except Exception:
                 pass
             og_index += 1
             if og_index >= len(new_low_bound_prices):
@@ -1262,7 +1222,7 @@ def step_coin(sym: str):
                 pm = sum(current_pms) / len(current_pms)
                 if pm < 0.25:
                     pm = 0.25
-            except:
+            except Exception:
                 pm = 0.25
 
             with open("futures_long_profit_margin.txt", "w+") as f:
@@ -1276,7 +1236,7 @@ def step_coin(sym: str):
                 pm = sum(current_pms) / len(current_pms)
                 if pm < 0.25:
                     pm = 0.25
-            except:
+            except Exception:
                 pm = 0.25
 
             with open("futures_short_profit_margin.txt", "w+") as f:

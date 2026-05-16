@@ -259,6 +259,8 @@ function _applyUiPrefs(cfg) {
   // Font size
   const fs = cfg.ui_font_size;
   if (fs) document.documentElement.style.setProperty('--ui-font-size', fs + 'px');
+  const lfs = cfg.ui_log_font_size;
+  if (lfs) document.documentElement.style.setProperty('--log-font-size', lfs + 'px');
 
   // Default timeframe (only set on first load, not on subsequent refreshes)
   if (!state.selectedCoin && cfg.default_timeframe) {

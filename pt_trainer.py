@@ -736,9 +736,9 @@ class TrainingLoop:
             tracker = AccuracyTracker()
             threshold = 1.0
             last_actual = None
-            last_pred_close = None
+            # last_pred_close = None
             last_pred_high = None
-            last_pred_low = None
+            # last_pred_low = None
             high_var2 = 0.0
             low_var2 = 0.0
 
@@ -792,7 +792,7 @@ class TrainingLoop:
 
                     # Compute predicted prices from last close
                     start_price = closes[pos - 1]
-                    pred_close_price = start_price + (start_price * pred_close)
+                    # pred_close_price = start_price + (start_price * pred_close)
                     pred_high_price = start_price + (start_price * pred_high)
                     pred_low_price = start_price + (start_price * pred_low)
 
@@ -836,9 +836,9 @@ class TrainingLoop:
                     )
 
                     last_actual = start_price
-                    last_pred_close = pred_close_price
+                    # last_pred_close = pred_close_price
                     last_pred_high = pred_high_price
-                    last_pred_low = pred_low_price
+                    # last_pred_low = pred_low_price
                 else:
                     # No match — store as new memory
                     # Outcome = close-to-close pct change: (close[pos] - close[pos-1]) / |close[pos-1]| * 100
@@ -865,9 +865,9 @@ class TrainingLoop:
 
                     if last_actual is not None:
                         last_actual = closes[pos - 1]
-                        last_pred_close = closes[pos - 1]  # no prediction
+                        # last_pred_close = closes[pos - 1]  # no prediction
                         last_pred_high = highs[pos - 1]
-                        last_pred_low = lows[pos - 1]
+                        # last_pred_low = lows[pos - 1]
 
                 # --- Weight updates (when we have a match and can see the actual next candle) ---
                 if has_match and pos < n_candles and closes[pos - 1] != 0:

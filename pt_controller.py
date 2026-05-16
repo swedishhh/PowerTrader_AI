@@ -480,7 +480,7 @@ class ProcessController:
             try:
                 with open(log_file, "r", encoding="utf-8") as f:
                     all_lines = f.readlines()
-                return [l.rstrip() for l in all_lines[-limit:]]
+                return [x.rstrip() for x in all_lines[-limit:]]
             except Exception:
                 pass
         return []

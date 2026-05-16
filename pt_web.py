@@ -15,21 +15,21 @@ Trading : ShadowedExchange wraps each real exchange; shadow account tracks
           frictionless baseline alongside real fills.
 """
 
+import argparse
 import asyncio
 import json
 import time
-import argparse
-import pandas as pd
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+import pandas as pd
+import pt_errors
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-
-from pt_env import PTEnv, TRAIN_TF_MINUTES
-from pt_models import CoinModel, AccountModel, SystemModel
 from pt_controller import ProcessController
-import pt_errors
+from pt_env import TRAIN_TF_MINUTES, PTEnv
+from pt_models import AccountModel, CoinModel, SystemModel
 
 PROJECT_DIR = Path(__file__).resolve().parent
 WEB_DIR = PROJECT_DIR / "web"
@@ -1376,10 +1376,8 @@ def _migrate_control_to_shadow():
     dst = hub / "exchanges" / "shadow"
     if src.exists() and not dst.exists():
         src.rename(dst)
-        print(f"[Migrate] exchanges/control → exchanges/shadow")
+        print("[Migrate] exchanges/control → exchanges/shadow")
 
-
-from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app):

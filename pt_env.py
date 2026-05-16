@@ -83,6 +83,7 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "chart_refresh_seconds": 4,
     "candles_limit": 300,
     "ui_font_size": 16,
+    "ui_log_font_size": 11,
 
     # Shadow / Demo exchange
     "shadow_starting_usd": 0,
@@ -261,6 +262,12 @@ CONFIG_SCHEMA: dict[str, dict] = {
         "type": "int", "min": 10, "max": 24,
         "label": "Font Size (px)",
         "hint": "Dashboard font size in pixels (10–24)",
+        "group": "UI Preferences",
+    },
+    "ui_log_font_size": {
+        "type": "int", "min": 8, "max": 20,
+        "label": "Log Font Size (px)",
+        "hint": "Font size for log output panels in pixels (8–20)",
         "group": "UI Preferences",
     },
 

@@ -82,6 +82,7 @@
   "chart_refresh_seconds": 60,
   "candles_limit": 500,
   "ui_font_size": 20,
+  "ui_log_font_size": 8,
   "shadow_starting_usd": 0,
   "demo_starting_usd": 10000,
   "auto_start_scripts": false,

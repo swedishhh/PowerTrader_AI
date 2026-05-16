@@ -148,7 +148,6 @@ from typing import Any, Dict, List, Optional
 
 import colorama
 import pt_errors
-from colorama import Fore
 from exchange_api import Exchange, OrderResult, load_exchange
 from pt_env import PTEnv as _PTEnv
 from pt_log import get_logger
@@ -2833,23 +2832,6 @@ class CryptoAPITrading:
                 # (same calculation as GUI "Buy Price PnL": current buy/ask vs avg cost basis)
                 dca_line_pct = gain_loss_percentage_buy
 
-            dca_line_price_disp = (
-                self._fmt_price(dca_line_price) if avg_cost_basis > 0 else "N/A"
-            )
-
-            # Set color code:
-            # - DCA is green if we're above the chosen DCA line, red if we're below it
-            # - SELL stays based on profit vs cost basis (your original behavior)
-            if dca_line_pct >= 0:
-                color = Fore.GREEN
-            else:
-                color = Fore.RED
-
-            if gain_loss_percentage_sell >= 0:
-                color2 = Fore.GREEN
-            else:
-                color2 = Fore.RED
-
             # --- Trailing PM display (per-coin, isolated) ---
             # Display uses current state if present; otherwise shows the base PM start line.
             trail_status = "N/A"
@@ -3189,7 +3171,6 @@ class CryptoAPITrading:
                 asset = str(h.get("asset_code", "")).upper().strip()
                 if not asset or asset == "USDC":
                     continue
-                total_qty = float(h.get("total_quantity", 0.0) or 0.0)
 
                 # Only include symbols where the bot actually has a ledger qty.
                 try:

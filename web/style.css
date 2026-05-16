@@ -29,6 +29,8 @@
   --font-mono: 'Azeret Mono', monospace;
   --font-body: 'Outfit', sans-serif;
 
+  --log-font-size: 11px;
+
   --radius: 8px;
   --radius-sm: 4px;
   --transition: 180ms ease;
@@ -1300,7 +1302,7 @@ body {
   margin: 0;
   padding: 8px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--log-font-size);
   line-height: 1.5;
   color: var(--text-muted);
   background: var(--bg-base);
@@ -1413,7 +1415,7 @@ body {
 
 .log-output {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--log-font-size);
   line-height: 1.5;
   color: var(--text-muted);
   white-space: pre-wrap;
