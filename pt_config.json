@@ -40,7 +40,7 @@
     "ETH",
     "SOL"
   ],
-  "trade_start_level": 3,
+  "trade_start_level": 2,
   "start_allocation_pct": 1,
   "dca_multiplier": 1,
   "dca_levels": [
@@ -83,6 +83,8 @@
   "candles_limit": 500,
   "ui_font_size": 20,
   "ui_log_font_size": 8,
+  "ntfy_url": "https://ntfy.sh/swedishhh_cryptoid",
+  "ntfy_summary_interval_minutes": 240,
   "shadow_starting_usd": 0,
   "demo_starting_usd": 10000,
   "auto_start_scripts": false,
