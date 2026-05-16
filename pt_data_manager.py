@@ -14,14 +14,16 @@ State values: Stopped | Backfill | Topup | Normal
 
 import json
 import os
-import sys
 import time
-import traceback
 
 import ccxt
 import pandas as pd
 
 from pt_env import PTEnv, TRAIN_TF_MINUTES, TRAIN_TF_CCXT
+import pt_errors
+from pt_log import get_logger
+
+log = get_logger("data-manager")
 
 _env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
 
@@ -49,10 +51,6 @@ def _get_arctic():
     return adb.Arctic(f"lmdb:///{data_dir}")
 
 
-def _log(msg: str):
-    print(f"{time.strftime('%H:%M:%S')} {msg}", flush=True)
-
-
 def _write_status(state: str, coin: str = "", tf: int = 0,
                   error_coins: list = None, last_topup: float = 0.0):
     status = {
@@ -70,7 +68,7 @@ def _write_status(state: str, coin: str = "", tf: int = 0,
         tmp.write_text(json.dumps(status, indent=2))
         tmp.rename(path)
     except Exception as e:
-        _log(f"[Status] write failed: {e}")
+        log.warning(f"status write failed: {e}")
 
 
 def _topup_interval_seconds(cfg: dict) -> float:
@@ -87,7 +85,7 @@ def _backfill_coin(client, arctic, coin: str, error_coins: list):
     c_sym = _ccxt_sym(coin)
 
     if c_sym not in client.markets:
-        _log(f"[Backfill] {coin}: not available on KuCoin — skipping")
+        log.warning(f"[Backfill] {coin}: not available on KuCoin — skipping")
         if coin not in error_coins:
             error_coins.append(coin)
         return
@@ -104,7 +102,7 @@ def _backfill_coin(client, arctic, coin: str, error_coins: list):
         if a_sym in lib.list_symbols():
             continue  # already have data; topup handles this
 
-        _log(f"[Backfill] {coin} {lib_name} …")
+        log.info(f"[Backfill] {coin} {lib_name}")
         try:
             all_candles = []
             end_ms = int(pd.Timestamp.now(tz="UTC").timestamp() * 1000)
@@ -122,7 +120,7 @@ def _backfill_coin(client, arctic, coin: str, error_coins: list):
                 end_ms = oldest - 1
 
             if not all_candles:
-                _log(f"[Backfill] {coin} {lib_name}: no candles returned")
+                log.warning(f"[Backfill] {coin} {lib_name}: no candles returned")
                 continue
 
             seen: set = set()
@@ -134,12 +132,11 @@ def _backfill_coin(client, arctic, coin: str, error_coins: list):
             df = df.set_index("timestamp").sort_index().astype(float)
 
             lib.write(a_sym, df, prune_previous_versions=True)
-            _log(f"[Backfill] {coin} {lib_name}: {len(df)} rows "
-                 f"({df.index[0].date()} → {df.index[-1].date()})")
+            log.info(f"[Backfill] {coin} {lib_name}: {len(df)} rows "
+                     f"({df.index[0].date()} → {df.index[-1].date()})")
 
-        except Exception as e:
-            _log(f"[Backfill] {coin} {lib_name} error: {e}")
-            traceback.print_exc()
+        except Exception:
+            log.exception(f"[Backfill] {coin} {lib_name} error")
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +149,7 @@ def _topup_coin(client, arctic, coin: str, error_coins: list):
     c_sym = _ccxt_sym(coin)
 
     if c_sym not in client.markets:
-        _log(f"[Topup] {coin}: not available on KuCoin")
+        log.warning(f"[Topup] {coin}: not available on KuCoin")
         if coin not in error_coins:
             error_coins.append(coin)
         return
@@ -186,7 +183,7 @@ def _topup_coin(client, arctic, coin: str, error_coins: list):
                 since_ms = candles[-1][0] + 1
 
             if not all_candles:
-                _log(f"[Topup] {coin} {lib_name}: up to date")
+                log.debug(f"[Topup] {coin} {lib_name}: up to date")
                 continue
 
             df = pd.DataFrame(all_candles,
@@ -196,15 +193,14 @@ def _topup_coin(client, arctic, coin: str, error_coins: list):
             df = df[df.index > last_ts]
 
             if df.empty:
-                _log(f"[Topup] {coin} {lib_name}: up to date")
+                log.debug(f"[Topup] {coin} {lib_name}: up to date")
                 continue
 
             lib.append(a_sym, df)
-            _log(f"[Topup] {coin} {lib_name}: +{len(df)} rows → {df.index[-1]}")
+            log.info(f"[Topup] {coin} {lib_name}: +{len(df)} rows → {df.index[-1]}")
 
-        except Exception as e:
-            _log(f"[Topup] {coin} {lib_name} error: {e}")
-            traceback.print_exc()
+        except Exception:
+            log.exception(f"[Topup] {coin} {lib_name} error")
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +215,7 @@ def _get_client():
 
 
 def run():
-    _log("[DataManager] starting")
+    log.info("starting")
     error_coins: list = []
 
     # ── Initial pass: backfill missing, topup existing ────────────────────
@@ -227,13 +223,18 @@ def run():
     coins: list[str] = [str(c).upper() for c in cfg.get("coins", []) if str(c).strip()]
     interval_s = _topup_interval_seconds(cfg)
 
-    _log(f"[DataManager] {len(coins)} coins, topup every {interval_s/3600:.1f}h")
+    log.info(f"{len(coins)} coins, topup every {interval_s/3600:.1f}h")
 
     try:
         client = _get_client()
         arctic = _get_arctic()
     except Exception as e:
-        _log(f"[DataManager] startup failed: {e}")
+        log.error(f"startup failed: {e}")
+        pt_errors.emit(
+            "data_manager", level="error",
+            message=f"Data manager startup failed: {e}",
+            detail="Could not connect to KuCoin or open the ArcticDB store. Historic OHLCV data will not be backfilled or topped up until the issue is resolved.",
+        )
         _write_status("Normal", error_coins=["startup failed"])
         return
 
@@ -253,8 +254,7 @@ def run():
             pass
         coins_to_backfill.append(coin)
 
-    _log(f"[DataManager] {len(coins_to_backfill)} to backfill, "
-         f"{len(coins_to_topup)} to topup")
+    log.info(f"{len(coins_to_backfill)} to backfill, {len(coins_to_topup)} to topup")
 
     # Backfill
     for coin in coins_to_backfill:
@@ -267,11 +267,11 @@ def run():
         _topup_coin(client, arctic, coin, error_coins)
 
     if error_coins:
-        _log(f"[DataManager] problem coins: {', '.join(error_coins)}")
+        log.warning(f"problem coins: {', '.join(error_coins)}")
 
     last_topup = time.time()
     _write_status("Normal", error_coins=error_coins, last_topup=last_topup)
-    _log(f"[DataManager] initial pass complete — next topup in {interval_s/3600:.1f}h")
+    log.info(f"initial pass complete — next topup in {interval_s/3600:.1f}h")
 
     # ── Scheduled topup loop ──────────────────────────────────────────────
     while True:
@@ -285,13 +285,18 @@ def run():
         if time.time() - last_topup < interval_s:
             continue
 
-        _log("[DataManager] scheduled topup starting")
+        log.info("scheduled topup starting")
         error_coins = []
         try:
             client = _get_client()
             arctic = _get_arctic()
         except Exception as e:
-            _log(f"[DataManager] client error: {e}")
+            log.error(f"client error: {e}")
+            pt_errors.emit(
+                "data_manager", level="warning",
+                message=f"Scheduled topup failed to connect: {e}",
+                detail="Could not reach KuCoin or open the ArcticDB store for the scheduled topup. Historic data will be stale until the next successful topup cycle.",
+            )
             continue
 
         for coin in coins:
@@ -311,13 +316,13 @@ def run():
 
         last_topup = time.time()
         _write_status("Normal", error_coins=error_coins, last_topup=last_topup)
-        _log(f"[DataManager] topup complete — next in {interval_s/3600:.1f}h")
+        log.info(f"topup complete — next in {interval_s/3600:.1f}h")
 
 
 def run_single(coin: str):
     """One-shot backfill for a single coin. Used by pt_web backfill endpoint."""
     coin = coin.upper()
-    _log(f"[DataManager] one-shot backfill: {coin}")
+    log.info(f"one-shot backfill: {coin}")
 
     # Read existing status so we preserve error_coins from the running data manager
     path = _env.data_manager_status_path()
@@ -331,7 +336,7 @@ def run_single(coin: str):
         client = _get_client()
         arctic = _get_arctic()
     except Exception as e:
-        _log(f"[DataManager] startup failed: {e}")
+        log.error(f"startup failed: {e}")
         return
     _write_status("Backfill", coin=coin, error_coins=error_coins)
     _backfill_coin(client, arctic, coin, error_coins)
@@ -341,7 +346,7 @@ def run_single(coin: str):
         prior_state = "Normal"
     _write_status(prior_state, error_coins=error_coins,
                   last_topup=existing.get("last_topup", 0))
-    _log(f"[DataManager] one-shot backfill complete: {coin}")
+    log.info(f"one-shot backfill complete: {coin}")
 
 
 if __name__ == "__main__":
@@ -353,18 +358,21 @@ if __name__ == "__main__":
     if _args.coin:
         try:
             run_single(_args.coin)
-        except Exception as e:
-            _log(f"[DataManager] fatal: {e}")
-            traceback.print_exc()
+        except Exception:
+            log.exception("fatal")
         finally:
             _write_status("Stopped")
     else:
         try:
             run()
         except KeyboardInterrupt:
-            _log("[DataManager] stopped")
+            log.info("stopped")
         except Exception as e:
-            _log(f"[DataManager] fatal: {e}")
-            traceback.print_exc()
+            log.exception("fatal")
+            pt_errors.emit(
+                "data_manager", level="error",
+                message=f"Data manager crashed: {e}",
+                detail="The data manager process encountered an unhandled exception and has stopped. Historic OHLCV data will not be updated until it is restarted.",
+            )
         finally:
             _write_status("Stopped")

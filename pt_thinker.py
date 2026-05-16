@@ -47,12 +47,20 @@ Writes (outputs consumed by pt_trader.py):
     lth_daily_ema200.json        — 200-day EMA snapshots for LTH coins (read
                                    by pt_trader.py for LTH buy gating)
 """
+
+import json
 import os
+import sys
 import time
-import random
+
+import pt_errors
 from kucoin.client import Market
+from pt_env import TRAIN_TF_NAMES as tf_choices
+from pt_env import PTEnv as _PTEnv
+from pt_log import get_logger
 
 market = Market(url="https://api.kucoin.com")
+log = get_logger("thinker")
 
 # ---------------------------------------------------------------------------
 # Kline cache — eliminates redundant API calls within a 30-second window.
@@ -72,20 +80,8 @@ def _get_kline(coin: str, tf: str) -> str:
     result = str(market.get_kline(coin, tf))
     _kline_cache[key] = (time.time(), result)
     if time.time() - _startup_start < _STARTUP_LOG_WINDOW_S:
-        print(f"{time.strftime('%H:%M:%S')} [Thinker] kline fetch: {coin} {tf}", flush=True)
+        log.debug(f"kline fetch: {coin} {tf}")
     return result
-import sys
-import datetime
-import traceback
-import linecache
-import calendar
-import hashlib
-import hmac
-from datetime import datetime
-import psutil
-import logging
-import json
-import uuid
 
 
 def kucoin_current_price(symbol: str) -> float:
@@ -107,23 +103,7 @@ def restart_program():
     try:
         os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)])
     except Exception as e:
-        print(f"Error during program restart: {e}")
-
-
-def PrintException():
-    exc_type, exc_obj, tb = sys.exc_info()
-
-    # walk to the innermost frame (where the error actually happened)
-    while tb and tb.tb_next:
-        tb = tb.tb_next
-
-    f = tb.tb_frame
-    lineno = tb.tb_lineno
-    filename = f.f_code.co_filename
-
-    linecache.checkcache(filename)
-    line = linecache.getline(filename, lineno, f.f_globals)
-    print('EXCEPTION IN (LINE {} "{}"): {}'.format(lineno, line.strip(), exc_obj))
+        log.error(f"Error during program restart: {e}")
 
 
 restarted = "no"
@@ -135,7 +115,6 @@ last_minute = 0
 # -----------------------------
 # Config (via PTEnv)
 # -----------------------------
-from pt_env import PTEnv as _PTEnv, TRAIN_TF_NAMES as tf_choices
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _env = _PTEnv(BASE_DIR)
@@ -143,7 +122,9 @@ _env = _PTEnv(BASE_DIR)
 
 def _load_gui_coins() -> list:
     """Return active coin list from config (mtime-cached via PTEnv)."""
-    return [str(c).strip().upper() for c in _env.get_config()["coins"] if str(c).strip()]
+    return [
+        str(c).strip().upper() for c in _env.get_config()["coins"] if str(c).strip()
+    ]
 
 
 def _load_long_term_symbols_from_settings() -> list:
@@ -247,8 +228,17 @@ def _write_lth_ema200_snapshot() -> None:
     try:
         with open(LTH_EMA200_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f)
-    except Exception:
-        pass
+    except Exception as e:
+        pt_errors.emit(
+            "thinker",
+            level="warning",
+            message=f"Failed to write LTH EMA200 snapshot: {e}",
+            detail=(
+                "Long-term holding buy gating (200-day EMA check) will use the previous "
+                "snapshot until the next successful write. LTH buy decisions may be stale "
+                "by up to one thinker cycle."
+            ),
+        )
 
 
 def coin_folder(sym: str) -> str:
@@ -257,7 +247,13 @@ def coin_folder(sym: str) -> str:
 
 def _strip_noise(s: str) -> str:
     """Strip list-serialisation artefacts from a memory token."""
-    return s.replace("'", "").replace(",", "").replace('"', "").replace("]", "").replace("[", "")
+    return (
+        s.replace("'", "")
+        .replace(",", "")
+        .replace('"', "")
+        .replace("]", "")
+        .replace("[", "")
+    )
 
 
 def _mem_field_pct(line: str, idx: int) -> float:
@@ -288,6 +284,7 @@ def _coin_is_trained(sym: str) -> bool:
 # On restore, tf_times is zeroed so the first step fetches fresh candle data.
 # ---------------------------------------------------------------------------
 
+
 def _state_path(sym: str) -> str:
     return os.path.join(coin_folder(sym), "thinker_state.json")
 
@@ -301,8 +298,17 @@ def _save_coin_state(sym: str, st: dict) -> None:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f)
         os.replace(tmp, path)
-    except Exception:
-        pass
+    except Exception as e:
+        pt_errors.emit(
+            "thinker",
+            level="warning",
+            message=f"Failed to save thinker state for {sym}: {e}",
+            detail=(
+                "If the thinker restarts, this coin will start a fresh warmup cycle "
+                "instead of restoring from the saved state. Expect 1-2 extra cycles "
+                "before predictions resume for this coin."
+            ),
+        )
 
 
 def _load_coin_state(sym: str) -> dict | None:
@@ -459,15 +465,10 @@ def _sync_coins_from_settings():
     CURRENT_COINS = list(new_list)
 
 
-def _tlog(msg: str) -> None:
-    """Write a timestamped thinker log line to stdout (captured by pt_controller)."""
-    print(f"{time.strftime('%H:%M:%S')} [Thinker] {msg}", flush=True)
-
-
 _write_thinker_ready(
     False, stage="starting", ready_coins=[], total_coins=len(CURRENT_COINS)
 )
-_tlog(f"Starting — {len(CURRENT_COINS)} coins")
+log.info(f"Starting — {len(CURRENT_COINS)} coins")
 
 
 def init_coin(sym: str):
@@ -487,7 +488,9 @@ def init_coin(sym: str):
     saved = _load_coin_state(sym)
     if saved is not None:
         states[sym] = saved
-        _tlog(f"Init {sym}: restored from saved state (bv={saved.get('last_display_bounds_version')})")
+        log.info(
+            f"Init {sym}: restored from saved state (bv={saved.get('last_display_bounds_version')})"
+        )
         return
 
     st = new_coin_state()
@@ -495,7 +498,7 @@ def init_coin(sym: str):
     # for every timeframe and fetches fresh data without requiring API calls here.
     st["tf_times"] = ["0"] * len(tf_choices)
     states[sym] = st
-    _tlog(f"Init {sym}: fresh state")
+    log.info(f"Init {sym}: fresh state")
 
 
 # init all coins once (from GUI settings)
@@ -504,8 +507,12 @@ for _sym in CURRENT_COINS:
 
 # restore CWD to base after init
 os.chdir(BASE_DIR)
-_restored = sum(1 for s in states.values() if s.get("last_display_bounds_version", -1) >= 1)
-_tlog(f"Init complete — {_restored}/{len(CURRENT_COINS)} restored, {len(CURRENT_COINS)-_restored} fresh")
+_restored = sum(
+    1 for s in states.values() if s.get("last_display_bounds_version", -1) >= 1
+)
+log.info(
+    f"Init complete — {_restored}/{len(CURRENT_COINS)} restored, {len(CURRENT_COINS) - _restored} fresh"
+)
 
 # Track which coins have had their state saved this session (for first-save logging).
 _state_saved_coins: set = set()
@@ -676,7 +683,9 @@ def step_coin(sym: str):
 
     # ====== ORIGINAL: load threshold + memories/weights and compute moves ======
     try:
-        file = open("neural_perfect_threshold_" + tf_choices[tf_choice_index] + ".txt", "r")
+        file = open(
+            "neural_perfect_threshold_" + tf_choices[tf_choice_index] + ".txt", "r"
+        )
         perfect_threshold = float(file.read())
         file.close()
     except (FileNotFoundError, ValueError):
@@ -710,7 +719,9 @@ def step_coin(sym: str):
         low_moves = []
 
         while True:
-            memory_pattern = _strip_noise(memory_list[mem_ind].split("{}")[0]).split(" ")
+            memory_pattern = _strip_noise(memory_list[mem_ind].split("{}")[0]).split(
+                " "
+            )
             check_dex = 0
             memory_candle = float(memory_pattern[check_dex])
 
@@ -780,8 +791,20 @@ def step_coin(sym: str):
                         perfects.insert(tf_choice_index, "inactive")
                 break
 
-    except Exception:
-        PrintException()
+    except Exception as e:
+        log.exception(
+            f"Failed to load training data for {sym} tf={tf_choices[tf_choice_index]}"
+        )
+        pt_errors.emit(
+            "thinker",
+            level="error",
+            message=f"Failed to load training data for {sym} tf={tf_choices[tf_choice_index]}: {e}",
+            detail=(
+                "Memory or weight files for this coin/timeframe are missing or corrupt. "
+                "This timeframe will vote 'inactive' (no signal) until the coin is retrained. "
+                "Other timeframes for this coin are unaffected."
+            ),
+        )
         training_issues[tf_choice_index] = 1
         final_moves = 0.0
         high_final_moves = 0.0
@@ -838,7 +861,7 @@ def step_coin(sym: str):
                 current = kucoin_current_price(f"{sym}_USD")
                 break
             except Exception as e:
-                print(e)
+                log.warning(str(e))
                 continue
 
         # IMPORTANT: messages printed below use the bounds currently in state.
@@ -892,7 +915,7 @@ def step_coin(sym: str):
                     if "Requests" in str(e):
                         pass
                     else:
-                        PrintException()
+                        log.exception("kline fetch error")
                     continue
 
             history_list = history.split("], [")
@@ -1216,13 +1239,17 @@ def step_coin(sym: str):
                 total_coins=len(COIN_SYMBOLS),
             )
             if prev_ready_count == 0 and any_ready:
-                _tlog(f"Ready — first predictions from {sym} "
-                      f"({len(_ready_coins)}/{len(COIN_SYMBOLS)} coins)")
-            elif len(_ready_coins) == len(COIN_SYMBOLS) and prev_ready_count < len(COIN_SYMBOLS):
-                _tlog(f"All {len(COIN_SYMBOLS)} coins ready")
+                log.info(
+                    f"Ready — first predictions from {sym} "
+                    f"({len(_ready_coins)}/{len(COIN_SYMBOLS)} coins)"
+                )
+            elif len(_ready_coins) == len(COIN_SYMBOLS) and prev_ready_count < len(
+                COIN_SYMBOLS
+            ):
+                log.info(f"All {len(COIN_SYMBOLS)} coins ready")
 
-        except:
-            PrintException()
+        except Exception:
+            log.exception("ready-check error")
 
         # write PM + DCA signals (same as before)
         try:
@@ -1257,8 +1284,8 @@ def step_coin(sym: str):
             with open("short_dca_signal.txt", "w+") as f:
                 f.write(str(shorts))
 
-        except:
-            PrintException()
+        except Exception:
+            log.exception("signal write error")
 
         # ====== NON-BLOCKING candle update check (single pass) ======
         this_index_now = 0
@@ -1276,7 +1303,7 @@ def step_coin(sym: str):
                     if "Requests" in str(e):
                         pass
                     else:
-                        PrintException()
+                        log.exception("kline fetch error")
                     continue
 
             history_list = history.split("], [")
@@ -1327,7 +1354,9 @@ def step_coin(sym: str):
         _save_coin_state(sym, st)
         if first_save and st.get("last_display_bounds_version", -1) >= 1:
             _state_saved_coins.add(sym)
-            _tlog(f"State saved for {sym} (bv={st.get('last_display_bounds_version')})")
+            log.info(
+                f"State saved for {sym} (bv={st.get('last_display_bounds_version')})"
+            )
 
 
 try:
@@ -1345,11 +1374,21 @@ try:
         os.system("cls" if os.name == "nt" else "clear")
 
         for _sym in CURRENT_COINS:
-            print(display_cache.get(_sym, _sym + "  (no data yet)"))
-            print("\n" + ("-" * 60) + "\n")
+            log.debug(display_cache.get(_sym, _sym + "  (no data yet)"))
+            log.debug("-" * 60)
 
         # small sleep so you don't peg CPU when running many coins
         time.sleep(0.15)
 
-except Exception:
-    PrintException()
+except Exception as e:
+    log.exception("main loop crashed")
+    pt_errors.emit(
+        "thinker",
+        level="error",
+        message=f"Thinker main loop crashed: {e}",
+        detail=(
+            "The thinker has stopped. No new trading signals will be generated. "
+            "All active coins will hold their last computed signal state. "
+            "Restart the thinker from the UI to resume signal generation."
+        ),
+    )

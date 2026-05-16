@@ -17,25 +17,30 @@ Data source defaults to pt_config.json "training_data_source" field.
 Override with --source kucoin|binance|kraken|kucoin_live_api.
 """
 
+from pt_env import (
+    TRAIN_TF_MINUTES,
+    TRAIN_TF_NAMES,
+    VALID_DATA_SOURCES,
+)
+from pt_env import PTEnv as _PTEnv
+
 import argparse
+import getpass
 import json
 import os
 import sys
 import time
 import traceback
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 
+import arcticdb as adb
 import numpy as np
 import pandas as pd
 
-import arcticdb as adb
-import getpass
 arctic_path = f"/home/{getpass.getuser()}/dev/data/arcticdb"
 arctic = adb.Arctic(f"lmdb:///{arctic_path}")
 
-from pt_env import PTEnv as _PTEnv, TRAIN_TF_NAMES, TRAIN_TF_MINUTES, TF_MINUTE_TO_NAME_MAP
 _trainer_env = _PTEnv(os.path.dirname(os.path.abspath(__file__)))
 
 TIMEFRAMES = list(TRAIN_TF_NAMES)
@@ -58,8 +63,6 @@ FLUSH_EVERY = 200
 PROGRESS_EVERY = 500
 WARMUP_START = 10  # original starts growing window at size 10 (positions 9..N)
 
-from pt_env import VALID_DATA_SOURCES
-
 
 @dataclass
 class TrainerConfig:
@@ -77,19 +80,31 @@ class TrainerConfig:
             prog="pt_trainer",
             description="PowerTrader neural pattern-matching trainer.",
             epilog="Data source defaults to pt_config.json 'training_data_source' field, "
-                   "overridden by --source.",
+            "overridden by --source.",
         )
-        parser.add_argument("coin", nargs="?", default="BTC",
-                            help="Coin symbol to train (default: BTC)")
-        parser.add_argument("reprocess", nargs="?", default="reprocess_yes",
-                            help="'reprocess_yes' or 'reprocess_no' (default: reprocess_yes)")
-        parser.add_argument("--source", choices=VALID_DATA_SOURCES,
-                            default=None,
-                            help="Data source override (default: from pt_config.json or kucoin)")
-        parser.add_argument("--timeframes", default=None,
-                            help="Comma-separated subset of timeframes to train (e.g. 1hour,4hour)")
-        parser.add_argument("-v", "--verbose", action="store_true",
-                            help="Enable verbose output")
+        parser.add_argument(
+            "coin", nargs="?", default="BTC", help="Coin symbol to train (default: BTC)"
+        )
+        parser.add_argument(
+            "reprocess",
+            nargs="?",
+            default="reprocess_yes",
+            help="'reprocess_yes' or 'reprocess_no' (default: reprocess_yes)",
+        )
+        parser.add_argument(
+            "--source",
+            choices=VALID_DATA_SOURCES,
+            default=None,
+            help="Data source override (default: from pt_config.json or kucoin)",
+        )
+        parser.add_argument(
+            "--timeframes",
+            default=None,
+            help="Comma-separated subset of timeframes to train (e.g. 1hour,4hour)",
+        )
+        parser.add_argument(
+            "-v", "--verbose", action="store_true", help="Enable verbose output"
+        )
 
         args = parser.parse_args(argv)
         coin = args.coin.upper()
@@ -100,6 +115,7 @@ class TrainerConfig:
             data_source = "kucoin"
             try:
                 from pt_env import PTEnv as _PTEnv
+
                 _cfg = _PTEnv().get_config()
                 ds = _cfg["training_data_source"]
                 if ds in VALID_DATA_SOURCES:
@@ -107,18 +123,24 @@ class TrainerConfig:
             except Exception:
                 pass
 
-        config = cls(coin=coin, data_source=data_source, reprocess=reprocess,
-                     verbose=args.verbose)
+        config = cls(
+            coin=coin,
+            data_source=data_source,
+            reprocess=reprocess,
+            verbose=args.verbose,
+        )
         config._timeframes = args.timeframes
         return config
-
 
 
 # ---------------------------------------------------------------------------
 # Data Sources
 # ---------------------------------------------------------------------------
 
-def fetch_candles(coin: str, tf_name: str, tf_minutes: int, source: str) -> pd.DataFrame:
+
+def fetch_candles(
+    coin: str, tf_name: str, tf_minutes: int, source: str
+) -> pd.DataFrame:
     """Fetch OHLCV data, returning a DataFrame with columns [open, high, low, close].
 
     Source determines where data comes from:
@@ -142,7 +164,9 @@ def fetch_candles(coin: str, tf_name: str, tf_minutes: int, source: str) -> pd.D
     )
 
 
-def _fetch_from_arctic(coin: str, tf_minutes: int, source: str) -> Optional[pd.DataFrame]:
+def _fetch_from_arctic(
+    coin: str, tf_minutes: int, source: str
+) -> Optional[pd.DataFrame]:
     """Read candles from ArcticDB library."""
     if source == "kucoin_local":
         # Local store: kucoin{tf} libs, USDT symbols, configurable path
@@ -179,10 +203,13 @@ def _fetch_from_arctic(coin: str, tf_minutes: int, source: str) -> Optional[pd.D
     return df
 
 
-def _fetch_from_kucoin_live(coin: str, tf_name: str, tf_minutes: int) -> Optional[pd.DataFrame]:
+def _fetch_from_kucoin_live(
+    coin: str, tf_name: str, tf_minutes: int
+) -> Optional[pd.DataFrame]:
     """Fetch candles from KuCoin REST API (paginated, oldest-first)."""
     try:
         from kucoin.client import Market
+
         market = Market(url="https://api.kucoin.com")
     except ImportError:
         return None
@@ -196,7 +223,9 @@ def _fetch_from_kucoin_live(coin: str, tf_name: str, tf_minutes: int) -> Optiona
         end_time = start_time - chunk_seconds
         time.sleep(0.5)
         try:
-            raw = market.get_kline(kucoin_symbol, tf_name, startAt=end_time, endAt=start_time)
+            raw = market.get_kline(
+                kucoin_symbol, tf_name, startAt=end_time, endAt=start_time
+            )
         except Exception:
             time.sleep(3.5)
             continue
@@ -207,13 +236,15 @@ def _fetch_from_kucoin_live(coin: str, tf_name: str, tf_minutes: int) -> Optiona
         batch = []
         for candle in raw:
             try:
-                batch.append({
-                    "timestamp": int(candle[0]),
-                    "open": float(candle[1]),
-                    "close": float(candle[2]),
-                    "high": float(candle[3]),
-                    "low": float(candle[4]),
-                })
+                batch.append(
+                    {
+                        "timestamp": int(candle[0]),
+                        "open": float(candle[1]),
+                        "close": float(candle[2]),
+                        "high": float(candle[3]),
+                        "low": float(candle[4]),
+                    }
+                )
             except (IndexError, ValueError, TypeError):
                 continue
 
@@ -241,6 +272,7 @@ class InsufficientDataError(Exception):
 # Memory I/O — format-compatible with pt_thinker.py consumer
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class MemoryStore:
     """Manages memory patterns and weights for one timeframe.
@@ -254,20 +286,28 @@ class MemoryStore:
     """
 
     tf_name: str
-    patterns: list = field(default_factory=list)      # list of np.ndarray (each is the pattern incl. outcome)
-    high_pcts: list = field(default_factory=list)     # high % for each memory (stored /100)
-    low_pcts: list = field(default_factory=list)      # low % for each memory (stored /100)
-    weights: list = field(default_factory=list)       # close weights
+    patterns: list = field(
+        default_factory=list
+    )  # list of np.ndarray (each is the pattern incl. outcome)
+    high_pcts: list = field(
+        default_factory=list
+    )  # high % for each memory (stored /100)
+    low_pcts: list = field(default_factory=list)  # low % for each memory (stored /100)
+    weights: list = field(default_factory=list)  # close weights
     high_weights: list = field(default_factory=list)  # high weights
-    low_weights: list = field(default_factory=list)   # low weights
+    low_weights: list = field(default_factory=list)  # low weights
     dirty: bool = False
 
     def load(self):
         """Load from disk. Tolerates missing files (starts empty)."""
         self.patterns, self.high_pcts, self.low_pcts = self._load_memories()
         self.weights = self._load_weight_file(f"memory_weights_{self.tf_name}.txt")
-        self.high_weights = self._load_weight_file(f"memory_weights_high_{self.tf_name}.txt")
-        self.low_weights = self._load_weight_file(f"memory_weights_low_{self.tf_name}.txt")
+        self.high_weights = self._load_weight_file(
+            f"memory_weights_high_{self.tf_name}.txt"
+        )
+        self.low_weights = self._load_weight_file(
+            f"memory_weights_low_{self.tf_name}.txt"
+        )
 
         # Ensure all lists are same length (pad if needed)
         n = len(self.patterns)
@@ -385,15 +425,19 @@ class MemoryStore:
 
     def get_outcomes(self) -> np.ndarray:
         """Return the outcome (last element) for each pattern."""
-        return np.array([p[-1] if len(p) > 0 else 0.0 for p in self.patterns], dtype=np.float64)
+        return np.array(
+            [p[-1] if len(p) > 0 else 0.0 for p in self.patterns], dtype=np.float64
+        )
 
 
 # ---------------------------------------------------------------------------
 # Pattern Matching — vectorized with numpy
 # ---------------------------------------------------------------------------
 
-def compute_pct_changes(opens: np.ndarray, closes: np.ndarray,
-                        highs: np.ndarray, lows: np.ndarray) -> tuple:
+
+def compute_pct_changes(
+    opens: np.ndarray, closes: np.ndarray, highs: np.ndarray, lows: np.ndarray
+) -> tuple:
     """Compute percentage price changes: 100 * (price - open) / open.
 
     Returns (close_pct, high_pct, low_pct) arrays.
@@ -405,8 +449,9 @@ def compute_pct_changes(opens: np.ndarray, closes: np.ndarray,
     return close_pct, high_pct, low_pct
 
 
-def find_matches(current_pattern: np.ndarray, memory_matrix: np.ndarray,
-                 threshold: float) -> tuple:
+def find_matches(
+    current_pattern: np.ndarray, memory_matrix: np.ndarray, threshold: float
+) -> tuple:
     """Find memory patterns within threshold of current pattern.
 
     Uses mean absolute percentage difference:
@@ -432,10 +477,15 @@ def find_matches(current_pattern: np.ndarray, memory_matrix: np.ndarray,
     return indices, mean_diffs[indices]
 
 
-def compute_weighted_prediction(indices: np.ndarray, outcomes: np.ndarray,
-                                weights: np.ndarray, high_pcts: np.ndarray,
-                                high_weights: np.ndarray, low_pcts: np.ndarray,
-                                low_weights: np.ndarray) -> tuple:
+def compute_weighted_prediction(
+    indices: np.ndarray,
+    outcomes: np.ndarray,
+    weights: np.ndarray,
+    high_pcts: np.ndarray,
+    high_weights: np.ndarray,
+    low_pcts: np.ndarray,
+    low_weights: np.ndarray,
+) -> tuple:
     """Compute weighted average predictions for matched patterns.
 
     Returns (close_pred_pct, high_pred_pct, low_pred_pct) where each is the
@@ -463,8 +513,10 @@ def compute_weighted_prediction(indices: np.ndarray, outcomes: np.ndarray,
 # Weight Updates
 # ---------------------------------------------------------------------------
 
-def update_weight(actual_pct: float, predicted_pct: float, current_weight: float,
-                  clamp: tuple) -> float:
+
+def update_weight(
+    actual_pct: float, predicted_pct: float, current_weight: float, clamp: tuple
+) -> float:
     """Adjust a single weight based on prediction accuracy.
 
     If actual exceeds prediction by >10%: increase weight by 0.25
@@ -484,6 +536,7 @@ def update_weight(actual_pct: float, predicted_pct: float, current_weight: float
 # ---------------------------------------------------------------------------
 # Accuracy Tracking
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class AccuracyTracker:
@@ -508,6 +561,7 @@ class AccuracyTracker:
 # Status & File I/O
 # ---------------------------------------------------------------------------
 
+
 class StatusWriter:
     """Writes trainer status files compatible with the hub GUI."""
 
@@ -516,46 +570,58 @@ class StatusWriter:
         self.started_at = int(time.time())
 
     def write_training(self):
-        self._write_json("trainer_status.json", {
-            "coin": self.coin,
-            "state": "TRAINING",
-            "started_at": self.started_at,
-            "timestamp": self.started_at,
-        })
+        self._write_json(
+            "trainer_status.json",
+            {
+                "coin": self.coin,
+                "state": "TRAINING",
+                "started_at": self.started_at,
+                "timestamp": self.started_at,
+            },
+        )
         self._write_json("trainer_failure_info.json", {})
 
     def write_finished(self):
         finished_at = int(time.time())
-        self._write_json("trainer_status.json", {
-            "coin": self.coin,
-            "state": "FINISHED",
-            "started_at": self.started_at,
-            "finished_at": finished_at,
-            "timestamp": finished_at,
-        })
+        self._write_json(
+            "trainer_status.json",
+            {
+                "coin": self.coin,
+                "state": "FINISHED",
+                "started_at": self.started_at,
+                "finished_at": finished_at,
+                "timestamp": finished_at,
+            },
+        )
         _write_file("trainer_last_training_time.txt", str(finished_at))
         _write_file("trainer_last_start_time.txt", str(self.started_at))
 
     def write_failure(self, exc: BaseException, tb_str: str = ""):
         failed_at = int(time.time())
         error_msg = f"{type(exc).__name__}: {exc}"
-        self._write_json("trainer_status.json", {
-            "coin": self.coin,
-            "state": "FAILED",
-            "started_at": self.started_at,
-            "failed_at": failed_at,
-            "timestamp": failed_at,
-            "error": error_msg,
-        })
-        self._write_json("trainer_failure_info.json", {
-            "coin": self.coin,
-            "state": "FAILED",
-            "exception_type": type(exc).__name__,
-            "exception_message": str(exc),
-            "traceback": tb_str,
-            "timestamp": failed_at,
-            "started_at": self.started_at,
-        })
+        self._write_json(
+            "trainer_status.json",
+            {
+                "coin": self.coin,
+                "state": "FAILED",
+                "started_at": self.started_at,
+                "failed_at": failed_at,
+                "timestamp": failed_at,
+                "error": error_msg,
+            },
+        )
+        self._write_json(
+            "trainer_failure_info.json",
+            {
+                "coin": self.coin,
+                "state": "FAILED",
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+                "traceback": tb_str,
+                "timestamp": failed_at,
+                "started_at": self.started_at,
+            },
+        )
 
     def _write_json(self, path: str, data: dict):
         try:
@@ -592,6 +658,7 @@ def _write_file(path: str, content: str):
 # ---------------------------------------------------------------------------
 # Training Loop
 # ---------------------------------------------------------------------------
+
 
 class TrainingLoop:
     """Orchestrates the full training process across all timeframes."""
@@ -639,15 +706,18 @@ class TrainingLoop:
         iteration = 0
 
         for phase_idx, (fetch_tf, fetch_min, fraction) in enumerate(phases):
-            df = fetch_candles(self.config.coin, fetch_tf, fetch_min,
-                              self.config.data_source)
+            df = fetch_candles(
+                self.config.coin, fetch_tf, fetch_min, self.config.data_source
+            )
 
             opens = df["open"].values
             closes = df["close"].values
             highs = df["high"].values
             lows = df["low"].values
 
-            close_pct, high_pct, low_pct = compute_pct_changes(opens, closes, highs, lows)
+            close_pct, high_pct, low_pct = compute_pct_changes(
+                opens, closes, highs, lows
+            )
             n_candles = len(close_pct)
 
             # Original behavior: growing window from index 0.
@@ -711,9 +781,13 @@ class TrainingLoop:
                     low_weights_arr = np.array(memory.low_weights, dtype=np.float64)
 
                     pred_close, pred_high, pred_low = compute_weighted_prediction(
-                        indices, outcomes, weights_arr,
-                        high_pcts_arr, high_weights_arr,
-                        low_pcts_arr, low_weights_arr,
+                        indices,
+                        outcomes,
+                        weights_arr,
+                        high_pcts_arr,
+                        high_weights_arr,
+                        low_pcts_arr,
+                        low_weights_arr,
                     )
 
                     # Compute predicted prices from last close
@@ -724,19 +798,42 @@ class TrainingLoop:
 
                     # --- Accuracy tracking ---
                     if last_actual is not None and last_pred_high is not None:
-                        actual_close_pct = ((closes[pos - 1] - last_actual) / abs(last_actual)) * 100 if last_actual != 0 else 0
-                        actual_high_pct = ((highs[pos - 1] - last_actual) / abs(last_actual)) * 100 if last_actual != 0 else 0
-                        actual_low_pct = ((lows[pos - 1] - last_actual) / abs(last_actual)) * 100 if last_actual != 0 else 0
+                        actual_close_pct = (
+                            ((closes[pos - 1] - last_actual) / abs(last_actual)) * 100
+                            if last_actual != 0
+                            else 0
+                        )
+                        actual_high_pct = (
+                            ((highs[pos - 1] - last_actual) / abs(last_actual)) * 100
+                            if last_actual != 0
+                            else 0
+                        )
+                        actual_low_pct = (
+                            ((lows[pos - 1] - last_actual) / abs(last_actual)) * 100
+                            if last_actual != 0
+                            else 0
+                        )
 
                         hit = self._score_accuracy(
-                            actual_close_pct, actual_high_pct, actual_low_pct,
-                            high_var2, low_var2,
+                            actual_close_pct,
+                            actual_high_pct,
+                            actual_low_pct,
+                            high_var2,
+                            low_var2,
                         )
                         if hit is not None:
                             tracker.record(hit)
 
-                    high_var2 = ((pred_high_price - start_price) / abs(start_price)) * 100 if start_price != 0 else 0
-                    low_var2 = ((pred_low_price - start_price) / abs(start_price)) * 100 if start_price != 0 else 0
+                    high_var2 = (
+                        ((pred_high_price - start_price) / abs(start_price)) * 100
+                        if start_price != 0
+                        else 0
+                    )
+                    low_var2 = (
+                        ((pred_low_price - start_price) / abs(start_price)) * 100
+                        if start_price != 0
+                        else 0
+                    )
 
                     last_actual = start_price
                     last_pred_close = pred_close_price
@@ -747,16 +844,24 @@ class TrainingLoop:
                     # Outcome = close-to-close pct change: (close[pos] - close[pos-1]) / |close[pos-1]| * 100
                     # High/low outcomes relative to previous close (not open)
                     if pos < n_candles and closes[pos - 1] != 0:
-                        outcome = ((closes[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100.0
-                        high_outcome = ((highs[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100.0
-                        low_outcome = ((lows[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100.0
+                        outcome = (
+                            (closes[pos] - closes[pos - 1]) / abs(closes[pos - 1])
+                        ) * 100.0
+                        high_outcome = (
+                            (highs[pos] - closes[pos - 1]) / abs(closes[pos - 1])
+                        ) * 100.0
+                        low_outcome = (
+                            (lows[pos] - closes[pos - 1]) / abs(closes[pos - 1])
+                        ) * 100.0
                     else:
                         outcome = 0.0
                         high_outcome = 0.0
                         low_outcome = 0.0
 
                     full_pattern = np.append(current_pattern, outcome)
-                    memory.add_entry(full_pattern, high_outcome / 100.0, low_outcome / 100.0)
+                    memory.add_entry(
+                        full_pattern, high_outcome / 100.0, low_outcome / 100.0
+                    )
 
                     if last_actual is not None:
                         last_actual = closes[pos - 1]
@@ -766,9 +871,15 @@ class TrainingLoop:
 
                 # --- Weight updates (when we have a match and can see the actual next candle) ---
                 if has_match and pos < n_candles and closes[pos - 1] != 0:
-                    actual_next_close_pct = ((closes[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100
-                    actual_next_high_pct = ((highs[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100
-                    actual_next_low_pct = ((lows[pos] - closes[pos - 1]) / abs(closes[pos - 1])) * 100
+                    actual_next_close_pct = (
+                        (closes[pos] - closes[pos - 1]) / abs(closes[pos - 1])
+                    ) * 100
+                    actual_next_high_pct = (
+                        (highs[pos] - closes[pos - 1]) / abs(closes[pos - 1])
+                    ) * 100
+                    actual_next_low_pct = (
+                        (lows[pos] - closes[pos - 1]) / abs(closes[pos - 1])
+                    ) * 100
 
                     for idx in indices:
                         if idx >= len(memory.weights):
@@ -776,20 +887,32 @@ class TrainingLoop:
                         # Original scales predicted by *100 before comparing to actual pct.
                         # This makes tolerance bands ~100x wider than actual moves,
                         # so weights rarely change (all remain ~1.0 in practice).
-                        predicted_close_move = memory.patterns[idx][-1] * memory.weights[idx] * 100.0
+                        predicted_close_move = (
+                            memory.patterns[idx][-1] * memory.weights[idx] * 100.0
+                        )
                         memory.weights[idx] = update_weight(
-                            actual_next_close_pct, predicted_close_move,
-                            memory.weights[idx], WEIGHT_CLAMP_CLOSE,
+                            actual_next_close_pct,
+                            predicted_close_move,
+                            memory.weights[idx],
+                            WEIGHT_CLAMP_CLOSE,
                         )
-                        predicted_high_move = memory.high_pcts[idx] * 100.0 * memory.high_weights[idx]
+                        predicted_high_move = (
+                            memory.high_pcts[idx] * 100.0 * memory.high_weights[idx]
+                        )
                         memory.high_weights[idx] = update_weight(
-                            actual_next_high_pct, predicted_high_move,
-                            memory.high_weights[idx], WEIGHT_CLAMP_HIGH_LOW,
+                            actual_next_high_pct,
+                            predicted_high_move,
+                            memory.high_weights[idx],
+                            WEIGHT_CLAMP_HIGH_LOW,
                         )
-                        predicted_low_move = memory.low_pcts[idx] * 100.0 * memory.low_weights[idx]
+                        predicted_low_move = (
+                            memory.low_pcts[idx] * 100.0 * memory.low_weights[idx]
+                        )
                         memory.low_weights[idx] = update_weight(
-                            actual_next_low_pct, predicted_low_move,
-                            memory.low_weights[idx], WEIGHT_CLAMP_HIGH_LOW,
+                            actual_next_low_pct,
+                            predicted_low_move,
+                            memory.low_weights[idx],
+                            WEIGHT_CLAMP_HIGH_LOW,
                         )
                     memory.dirty = True
 
@@ -800,7 +923,7 @@ class TrainingLoop:
                 if iteration % PROGRESS_EVERY == 0 or pos == end_pos - 1:
                     pct_done = (pos - start_pos) / max(1, end_pos - start_pos) * 100
                     print(
-                        f"[{tf_name} {tf_idx+1}/{len(TIMEFRAMES)}] "
+                        f"[{tf_name} {tf_idx + 1}/{len(TIMEFRAMES)}] "
                         f"phase={phase_idx} candle {pos}/{end_pos} ({pct_done:.0f}%)  "
                         f"accuracy={tracker.accuracy:.1f}%  "
                         f"memories={memory.count}  "
@@ -819,7 +942,9 @@ class TrainingLoop:
             memory.flush()
             write_threshold(tf_name, threshold)
 
-        print(f"[{tf_name}] Complete — {memory.count} memories, threshold={threshold:.4f}")
+        print(
+            f"[{tf_name}] Complete — {memory.count} memories, threshold={threshold:.4f}"
+        )
 
     def _load_threshold(self, tf_name: str) -> float:
         """Load the last threshold or default to 1.0."""
@@ -831,9 +956,14 @@ class TrainingLoop:
             pass
         return 1.0
 
-    def _score_accuracy(self, actual_close_pct: float, actual_high_pct: float,
-                        actual_low_pct: float, pred_high_pct: float,
-                        pred_low_pct: float) -> Optional[bool]:
+    def _score_accuracy(
+        self,
+        actual_close_pct: float,
+        actual_high_pct: float,
+        actual_low_pct: float,
+        pred_high_pct: float,
+        pred_low_pct: float,
+    ) -> Optional[bool]:
         """Score whether prediction correctly bounded the actual movement.
 
         Hit conditions (matches original logic):
@@ -847,17 +977,25 @@ class TrainingLoop:
         high_tolerance = abs(pred_high_pct) * 0.005 if pred_high_pct != 0 else 0
         low_tolerance = abs(pred_low_pct) * 0.005 if pred_low_pct != 0 else 0
 
-        if (actual_high_pct >= pred_high_pct + high_tolerance
-                and actual_close_pct < pred_high_pct):
+        if (
+            actual_high_pct >= pred_high_pct + high_tolerance
+            and actual_close_pct < pred_high_pct
+        ):
             return True
-        if (actual_low_pct <= pred_low_pct - low_tolerance
-                and actual_close_pct > pred_low_pct):
+        if (
+            actual_low_pct <= pred_low_pct - low_tolerance
+            and actual_close_pct > pred_low_pct
+        ):
             return True
-        if (actual_high_pct >= pred_high_pct + high_tolerance
-                and actual_close_pct > pred_high_pct):
+        if (
+            actual_high_pct >= pred_high_pct + high_tolerance
+            and actual_close_pct > pred_high_pct
+        ):
             return False
-        if (actual_low_pct <= pred_low_pct - low_tolerance
-                and actual_close_pct < pred_low_pct):
+        if (
+            actual_low_pct <= pred_low_pct - low_tolerance
+            and actual_close_pct < pred_low_pct
+        ):
             return False
         return None
 
@@ -865,6 +1003,7 @@ class TrainingLoop:
 # ---------------------------------------------------------------------------
 # Entry Point
 # ---------------------------------------------------------------------------
+
 
 def main():
     config = TrainerConfig.from_args()

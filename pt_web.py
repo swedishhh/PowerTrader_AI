@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from pt_env import PTEnv, TRAIN_TF_MINUTES
 from pt_models import CoinModel, AccountModel, SystemModel
 from pt_controller import ProcessController
+import pt_errors
 
 PROJECT_DIR = Path(__file__).resolve().parent
 WEB_DIR = PROJECT_DIR / "web"
@@ -79,6 +80,11 @@ def _get_exchange(xk: str):
                 _exchanges[xk] = ShadowedExchange(real, shadow)
         except Exception as e:
             print(f"[Exchange] failed to create {xk}: {e}")
+            pt_errors.emit(
+                "pt_web", level="error",
+                message=f"Failed to initialise exchange '{xk}': {e}",
+                detail="The exchange adapter could not be created. Balance, position, and trading data will be unavailable until the issue is resolved (bad API keys, missing config, or exchange module error).",
+            )
             return None
     return _exchanges.get(xk)
 
@@ -623,6 +629,42 @@ async def api_logs(script: str, limit: int = 200):
     return {"lines": lines}
 
 
+@app.get("/api/errors")
+async def api_errors(limit: int = 200, level: str = "", component: str = "", since: float = 0):
+    path = env.errors_path()
+    if not path.exists():
+        return {"errors": []}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        entries = []
+        for line in lines:
+            try:
+                e = json.loads(line.strip())
+                if level and e.get("level") != level:
+                    continue
+                if component and e.get("component") != component:
+                    continue
+                if since and float(e.get("ts", 0)) < since:
+                    continue
+                entries.append(e)
+            except Exception:
+                pass
+        return {"errors": entries[-limit:]}
+    except Exception as e:
+        return {"errors": [], "error": str(e)}
+
+
+@app.delete("/api/errors")
+async def api_clear_errors():
+    path = env.errors_path()
+    try:
+        path.write_text("")
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
 def _refresh_exchange_balance(xk: str, write_history: bool = True):
     """Query account for current balance and update trader_status file."""
     account = _get_account(xk)
@@ -662,6 +704,11 @@ def _refresh_exchange_balance(xk: str, write_history: bool = True):
                 f.write(json.dumps({"ts": time.time(), "total_account_value": total_value}) + "\n")
     except Exception as e:
         print(f"[Balance] {xk} refresh failed: {e}")
+        pt_errors.emit(
+            "pt_web", level="warning",
+            message=f"Balance refresh failed for '{xk}': {e}",
+            detail="Could not read the current account balance from the exchange adapter. The UI may show stale balance and portfolio values until the next successful refresh.",
+        )
 
 
 @app.post("/api/clear-account-history")
@@ -940,8 +987,12 @@ def _record_close_trade(xk: str, coin: str, symbol: str, qty: float, result,
 
     try:
         ledger_path.write_text(json.dumps(ledger, indent=2))
-    except Exception:
-        pass
+    except Exception as e:
+        pt_errors.emit(
+            "pt_web", level="error",
+            message=f"PnL ledger write failed for '{xk}' after close trade: {e}",
+            detail="The realized-profit ledger could not be saved. The trade was executed on the exchange but the PnL record may be out of date. Check disk space and file permissions.",
+        )
 
     entry = {
         "ts": ts,
@@ -966,8 +1017,12 @@ def _record_close_trade(xk: str, coin: str, symbol: str, qty: float, result,
     try:
         with open(history_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, default=str) + "\n")
-    except Exception:
-        pass
+    except Exception as e:
+        pt_errors.emit(
+            "pt_web", level="warning",
+            message=f"Trade history write failed for '{xk}': {e}",
+            detail="A close-trade record could not be appended to trade history. The trade was executed on the exchange but will not appear in the Trades tab or PnL calculations.",
+        )
 
 
 @app.post("/api/sync-shadow")
@@ -1199,6 +1254,17 @@ async def _file_watcher():
                     dm_data = {}
                 await ws_manager.broadcast({"type": "data_manager_status", "data": dm_data})
 
+            errors_path = env.errors_path()
+            if _check(errors_path, "errors"):
+                try:
+                    with open(errors_path, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                    if lines:
+                        entry = json.loads(lines[-1].strip())
+                        await ws_manager.broadcast({"type": "error_event", "data": entry})
+                except Exception:
+                    pass
+
             traders_status = {}
             for xk in _active_accounts():
                 traders_status[xk] = {"running": ctrl.trader_running_for(xk)}
@@ -1225,8 +1291,12 @@ async def _file_watcher():
                     if not ctrl.trader_running_for(xk):
                         _refresh_exchange_balance(xk, write_history=False)
 
-        except Exception:
-            pass
+        except Exception as e:
+            pt_errors.emit(
+                "pt_web", level="warning",
+                message=f"File-watcher iteration failed: {e}",
+                detail="The background loop that pushes live updates to the UI encountered an error. Real-time WebSocket updates (trader status, signals, balances) may have been missed this cycle; they will resume on the next iteration.",
+            )
 
         await asyncio.sleep(1.5)
 
@@ -1313,6 +1383,7 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app):
+    pt_errors.trim(max_lines=500)
     _migrate_hub_data_flat_to_subdirs()
     _migrate_control_to_shadow()
     _init_exchange_balances()

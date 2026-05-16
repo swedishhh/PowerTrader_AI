@@ -134,23 +134,24 @@ One real exchange at a time:
   supported; there is one shadow account and it must correspond to one
   real exchange to keep the frictionless comparison meaningful.
 """
+
 import argparse
 import datetime
 import json
-import uuid
-import time
 import math
-import shutil
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Any, Dict, Optional, List
 import os
-import colorama
-from colorama import Fore, Style
-import traceback
+import shutil
+import time
+import uuid
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Dict, List, Optional
 
+import colorama
+import pt_errors
+from colorama import Fore
 from exchange_api import Exchange, OrderResult, load_exchange
 from pt_env import PTEnv as _PTEnv
-
+from pt_log import get_logger
 
 # Initialize colorama
 colorama.init(autoreset=True)
@@ -165,13 +166,14 @@ _pt_env = _PTEnv(_PROJECT_DIR)
 _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument("--exchange", default="demo")
 EXCHANGE_KEY = _parser.parse_known_args()[0].exchange
+log = get_logger(f"trader-{EXCHANGE_KEY}")
 
-TRADER_STATUS_PATH        = str(_pt_env.trader_status_path(EXCHANGE_KEY))
-TRADE_HISTORY_PATH        = str(_pt_env.trade_history_path(EXCHANGE_KEY))
-PNL_LEDGER_PATH           = str(_pt_env.pnl_ledger_path(EXCHANGE_KEY))
+TRADER_STATUS_PATH = str(_pt_env.trader_status_path(EXCHANGE_KEY))
+TRADE_HISTORY_PATH = str(_pt_env.trade_history_path(EXCHANGE_KEY))
+PNL_LEDGER_PATH = str(_pt_env.pnl_ledger_path(EXCHANGE_KEY))
 ACCOUNT_VALUE_HISTORY_PATH = str(_pt_env.account_history_path(EXCHANGE_KEY))
-BOT_ORDER_IDS_PATH        = str(_pt_env.bot_order_ids_path(EXCHANGE_KEY))
-LTH_EMA200_PATH           = str(_pt_env.ema200_path())
+BOT_ORDER_IDS_PATH = str(_pt_env.bot_order_ids_path(EXCHANGE_KEY))
+LTH_EMA200_PATH = str(_pt_env.ema200_path())
 
 
 def _refresh_paths_and_symbols():
@@ -193,8 +195,16 @@ def _refresh_paths_and_symbols():
     PM_START_PCT_NO_DCA = float(cfg["pm_start_pct_no_dca"])
     PM_START_PCT_WITH_DCA = float(cfg["pm_start_pct_with_dca"])
     LTH_PROFIT_ALLOC_PCT = float(cfg["lth_profit_alloc_pct"])
-    LONG_TERM_SYMBOLS = {str(v).upper().strip() for v in cfg.get("long_term_holdings") or [] if str(v).strip()}
-    EXCLUDED_COINS = {str(v).upper().strip() for v in cfg.get("excluded_coins") or [] if str(v).strip()}
+    LONG_TERM_SYMBOLS = {
+        str(v).upper().strip()
+        for v in cfg.get("long_term_holdings") or []
+        if str(v).strip()
+    }
+    EXCLUDED_COINS = {
+        str(v).upper().strip()
+        for v in cfg.get("excluded_coins") or []
+        if str(v).strip()
+    }
 
 
 _refresh_paths_and_symbols()
@@ -203,7 +213,6 @@ _refresh_paths_and_symbols()
 class CryptoAPITrading:
     def __init__(self, exchange: Exchange):
         self.exchange = exchange
-
 
         self._skipped_coins: set = set()
         self.dca_levels_triggered = {}  # Track DCA levels for each crypto
@@ -241,14 +250,14 @@ class CryptoAPITrading:
 
         # GUI hub persistence
         self._pnl_ledger = self._load_pnl_ledger()
-        print("[Init] Reconciling pending orders…")
+        log.info("Reconciling pending orders")
         self._reconcile_pending_orders()
 
-        print("[Init] Calculating cost basis…")
+        log.info("Calculating cost basis")
         self.cost_basis = (
             self.calculate_cost_basis()
         )  # Initialize cost basis at startup
-        print("[Init] Initializing DCA levels…")
+        log.info("Initializing DCA levels")
         self.initialize_dca_levels()  # Initialize DCA levels based on historical buy orders
 
         # We must seed open_positions from the selected bot order IDs (Hub picker),
@@ -336,16 +345,31 @@ class CryptoAPITrading:
             except Exception:
                 pass
 
-        except Exception:
+        except Exception as e:
             # If anything goes wrong, do NOT delete the old file.
-            pass
+            pt_errors.emit(
+                f"trader-{EXCHANGE_KEY}",
+                level="error",
+                message=f"Failed to write state file {path}: {e}",
+                detail=(
+                    "A critical state file (PnL ledger, bot order IDs, or trader status) "
+                    "could not be saved. The in-memory state is intact and trading continues, "
+                    "but if the process restarts the last successfully saved state will be used, "
+                    "which may be out of date. Check disk space and write permissions."
+                ),
+            )
 
     def _append_jsonl(self, path: str, obj: dict) -> None:
         try:
             with open(path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(obj) + "\n")
-        except Exception:
-            pass
+        except Exception as e:
+            pt_errors.emit(
+                f"trader-{EXCHANGE_KEY}",
+                level="warning",
+                message=f"Failed to write history entry to {path}: {e}",
+                detail="A trade or account-value history record was not written. Trading continues normally; the missing entry will create a gap in history charts.",
+            )
 
     # -----------------------------
     # BOT ORDER OWNERSHIP (for long-term holdings support)
@@ -365,8 +389,8 @@ class CryptoAPITrading:
                     out[sym] = {str(x).strip() for x in v if str(x).strip()}
                 elif isinstance(v, set):
                     out[sym] = set(v)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not load bot order IDs: {e}")
         return out
 
     def _save_bot_order_ids(self) -> None:
@@ -379,8 +403,8 @@ class CryptoAPITrading:
                     {str(x).strip() for x in ids if str(x).strip()}
                 )
             self._atomic_write_json(BOT_ORDER_IDS_PATH, data)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not save bot order IDs: {e}")
 
     def _load_bot_order_ids_from_trade_history(self) -> Dict[str, set]:
         """
@@ -451,8 +475,8 @@ class CryptoAPITrading:
                 if ts_f > float(last_sell_ts.get(base, 0.0) or 0.0):
                     out.setdefault(base, set()).add(oid)
 
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not load bot order IDs from trade history: {e}")
         return out
 
     def _mark_bot_order_id(self, base_symbol: str, order_id: Optional[str]) -> None:
@@ -470,8 +494,8 @@ class CryptoAPITrading:
                 return
             self._bot_order_ids.setdefault(base, set()).add(oid)
             self._save_bot_order_ids()
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not mark bot order ID {order_id}: {e}")
 
     def _clear_bot_order_ids_for_coin(self, base_symbol: str) -> None:
         """Clear the tracked order_ids for the current open trade on this coin (called after a filled bot SELL)."""
@@ -482,8 +506,8 @@ class CryptoAPITrading:
             if isinstance(self._bot_order_ids, dict):
                 self._bot_order_ids.pop(base, None)
             self._save_bot_order_ids()
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not clear bot order IDs for {base_symbol}: {e}")
 
     def _is_bot_order_id(self, base_symbol: str, order_id: Optional[str]) -> bool:
         base = str(base_symbol).upper().strip()
@@ -645,8 +669,8 @@ class CryptoAPITrading:
                 except Exception:
                     continue
                 out[s] = pct_f
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not read LTH EMA snapshot: {e}")
         return out
 
     def _pick_lth_symbol_to_buy(self) -> Optional[str]:
@@ -685,7 +709,8 @@ class CryptoAPITrading:
             # None below: pick smallest positive (closest above EMA200)
             scored.sort(key=lambda t: abs(t[0]))
             return scored[0][1]
-        except Exception:
+        except Exception as e:
+            log.warning(f"LTH symbol picker failed: {e}")
             return None
 
     def _lth_market_buy_for_usd(self, base_symbol: str, usd_amount: float) -> bool:
@@ -707,7 +732,7 @@ class CryptoAPITrading:
                 min_cost = 0.0
             if min_cost > 0 and usd_amount < min_cost:
                 reason = f"LTH: ${usd_amount:.2f} below min order ${min_cost:.2f}"
-                print(f"  [LTH] SKIP {sym}: {reason}")
+                log.debug(f"LTH skip {sym}: {reason}")
                 self._record_skip(canonical, reason)
                 return False
 
@@ -765,7 +790,9 @@ class CryptoAPITrading:
             bucket = 0.0
 
         if rp != 0.0 and alloc != 0.0:
-            print(f"  [LTH] Realized profit ${rp:.2f} × {pct:.0f}% = ${alloc:.2f} allocated to LTH bucket (was ${prev_bucket:.2f}, now ${bucket:.2f})")
+            log.info(
+                f"LTH: realized ${rp:.2f} × {pct:.0f}% = ${alloc:.2f} allocated to bucket (was ${prev_bucket:.2f}, now ${bucket:.2f})"
+            )
 
         spend_now = 0.0
 
@@ -774,14 +801,18 @@ class CryptoAPITrading:
         if alloc >= 0.50:
             spend_now = float(alloc) + float(prev_bucket)
             bucket = 0.0
-            print(f"  [LTH] Single allocation ${alloc:.2f} >= $0.50 threshold — spending ${spend_now:.2f} (allocation + saved bucket)")
+            log.info(
+                f"LTH: single allocation ${alloc:.2f} >= $0.50 — spending ${spend_now:.2f} (allocation + bucket)"
+            )
         else:
             if bucket >= 0.50:
                 spend_now = float(bucket)
                 bucket = 0.0
-                print(f"  [LTH] Bucket reached ${spend_now:.2f} >= $0.50 threshold — spending accumulated bucket")
+                log.info(
+                    f"LTH: bucket reached ${spend_now:.2f} — spending accumulated bucket"
+                )
             elif rp != 0.0:
-                print(f"  [LTH] Bucket ${bucket:.2f} below $0.50 threshold — accumulating, no buy yet")
+                log.debug(f"LTH: bucket ${bucket:.2f} below $0.50 — accumulating")
 
         # Persist bucket update even if we don't buy yet
         self._pnl_ledger["lth_profit_bucket_usd"] = float(bucket)
@@ -795,7 +826,7 @@ class CryptoAPITrading:
             # can't pick a coin; put it back into bucket so it isn't lost
             self._pnl_ledger["lth_profit_bucket_usd"] = float(bucket + spend_now)
             self._save_pnl_ledger()
-            print(f"  [LTH] No eligible LTH coin to buy — returning ${spend_now:.2f} to bucket")
+            log.info(f"LTH: no eligible coin — returning ${spend_now:.2f} to bucket")
             return
 
         # Pre-check min order — keep accumulating silently if bucket can't cover it yet
@@ -811,7 +842,14 @@ class CryptoAPITrading:
         pct_map = self._read_lth_ema200_snapshot()
         pct_from_ema = pct_map.get(pick, None)
 
-        print(f"  [LTH] Buying ${spend_now:.2f} of {pick}" + (f" ({pct_from_ema:+.1f}% from EMA200)" if pct_from_ema is not None else ""))
+        log.info(
+            f"LTH: buying ${spend_now:.2f} of {pick}"
+            + (
+                f" ({pct_from_ema:+.1f}% from EMA200)"
+                if pct_from_ema is not None
+                else ""
+            )
+        )
         ok = self._lth_market_buy_for_usd(pick, spend_now)
         if ok:
             self._pnl_ledger["lth_profit_bucket_usd"] = 0.0
@@ -824,13 +862,17 @@ class CryptoAPITrading:
                 ),
             }
             self._save_pnl_ledger()
-            print(f"  [LTH] Buy filled — {pick} ${spend_now:.2f}")
+            log.info(f"LTH: buy filled — {pick} ${spend_now:.2f}")
         else:
             # failed buy -> restore funds to bucket so they're not lost
             self._pnl_ledger["lth_profit_bucket_usd"] = float(bucket + spend_now)
             self._save_pnl_ledger()
-            print(f"  [LTH] Buy FAILED for {pick} — returning ${spend_now:.2f} to bucket")
-            self._record_skip(f"{pick}_USD", f"LTH: buy ${spend_now:.2f} of {pick} failed")
+            log.warning(
+                f"LTH: buy FAILED for {pick} — returning ${spend_now:.2f} to bucket"
+            )
+            self._record_skip(
+                f"{pick}_USD", f"LTH: buy ${spend_now:.2f} of {pick} failed"
+            )
 
     # -----------------------------
     # Ledger seeding from selected bot order IDs
@@ -889,7 +931,9 @@ class CryptoAPITrading:
             except Exception:
                 pass
             try:
-                all_selected_ids |= set(self._bot_order_ids_from_history.get(sym, set()) or set())
+                all_selected_ids |= set(
+                    self._bot_order_ids_from_history.get(sym, set()) or set()
+                )
             except Exception:
                 pass
 
@@ -937,7 +981,11 @@ class CryptoAPITrading:
                 for oid, fill in hist_fills.items():
                     if float(fill.get("qty", 0) or 0) <= 0:
                         continue
-                    created = datetime.datetime.utcfromtimestamp(fill["ts"]).isoformat() if fill.get("ts") else ""
+                    created = (
+                        datetime.datetime.utcfromtimestamp(fill["ts"]).isoformat()
+                        if fill.get("ts")
+                        else ""
+                    )
                     cost = fill["notional_usd"] + fill["fees_usd"]
                     buys.append((created, fill["qty"], cost))
 
@@ -979,7 +1027,13 @@ class CryptoAPITrading:
             }
             self._save_pnl_ledger()
         except Exception:
-            pass
+            log.exception("rebuild open position from selected orders failed")
+            pt_errors.emit(
+                f"trader-{EXCHANGE_KEY}",
+                level="error",
+                message="Failed to rebuild open position from selected bot orders",
+                detail="Cost basis and DCA stage for one or more coins may be wrong until the next full reseed. Check bot order ID selection in the Hub.",
+            )
 
     def _bot_net_qty_from_selected_orders(self, base_symbol: str) -> Optional[float]:
         """
@@ -1086,9 +1140,16 @@ class CryptoAPITrading:
                     if qty <= 0:
                         continue
                     selected_buy_qty += qty
-                    created = datetime.datetime.utcfromtimestamp(fill["ts"]).isoformat() if fill.get("ts") else ""
+                    created = (
+                        datetime.datetime.utcfromtimestamp(fill["ts"]).isoformat()
+                        if fill.get("ts")
+                        else ""
+                    )
                     if created:
-                        if earliest_selected_buy_created is None or created < earliest_selected_buy_created:
+                        if (
+                            earliest_selected_buy_created is None
+                            or created < earliest_selected_buy_created
+                        ):
                             earliest_selected_buy_created = created
 
             # If the user selected no buys, bot owns zero in-trade qty for this coin.
@@ -1157,7 +1218,13 @@ class CryptoAPITrading:
                 except Exception:
                     continue
         except Exception:
-            pass
+            log.exception("seed open positions from selected orders failed")
+            pt_errors.emit(
+                f"trader-{EXCHANGE_KEY}",
+                level="error",
+                message="Failed to seed open positions from selected bot orders",
+                detail="Position cost basis and DCA stages may be incorrect. The issue will resolve on the next successful reseed triggered by selection changes.",
+            )
 
     def _trade_history_has_order_id(self, order_id: str) -> bool:
         try:
@@ -1180,7 +1247,9 @@ class CryptoAPITrading:
             return False
         return False
 
-    def _get_fills_from_trade_history(self, base_symbol: str, order_ids: set) -> Dict[str, dict]:
+    def _get_fills_from_trade_history(
+        self, base_symbol: str, order_ids: set
+    ) -> Dict[str, dict]:
         """Look up fill data from trade_history.jsonl for specific order IDs.
 
         Returns {order_id: {"qty": float, "notional_usd": float, "fees_usd": float, "ts": float}}
@@ -1209,22 +1278,37 @@ class CryptoAPITrading:
                     try:
                         qty = float(obj.get("qty", 0) or 0)
                         notional = float(obj.get("notional_usd", 0) or 0)
-                        fees = float(obj.get("fees_usd", 0) or 0) if obj.get("fees_usd") is not None else 0.0
+                        fees = (
+                            float(obj.get("fees_usd", 0) or 0)
+                            if obj.get("fees_usd") is not None
+                            else 0.0
+                        )
                         ts = float(obj.get("ts", 0) or 0)
                         if qty > 0 and notional > 0:
-                            out[oid] = {"qty": qty, "notional_usd": notional, "fees_usd": fees, "ts": ts}
+                            out[oid] = {
+                                "qty": qty,
+                                "notional_usd": notional,
+                                "fees_usd": fees,
+                                "ts": ts,
+                            }
                     except Exception:
                         continue
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not read trade history fills: {e}")
         return out
 
     def _get_buying_power(self) -> float:
         try:
             bp = self.exchange.get_buying_power()
             return float(bp) if bp is not None else 0.0
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not fetch buying power: {e}")
+            pt_errors.emit(
+                f"trader-{EXCHANGE_KEY}",
+                level="warning",
+                message=f"Buying power fetch failed: {e}",
+                detail="The trader will see $0 buying power this cycle and skip new entries. It will retry on the next iteration.",
+            )
         return 0.0
 
     def _extract_fill_from_order(self, order: dict) -> tuple:
@@ -1419,7 +1503,7 @@ class CryptoAPITrading:
             if not isinstance(pending, dict) or not pending:
                 return
 
-            print(f"[Reconcile] {len(pending)} pending order(s) to reconcile")
+            log.info(f"[Reconcile] {len(pending)} pending order(s)")
             retries = 0
 
             while True:
@@ -1432,7 +1516,9 @@ class CryptoAPITrading:
                 for order_id, info in list(pending.items()):
                     try:
                         if self._trade_history_has_order_id(order_id):
-                            print(f"[Reconcile] {order_id[:12]}… found in trade history, removing")
+                            log.info(
+                                f"[Reconcile] {order_id[:12]}… found in history, removing"
+                            )
                             self._pnl_ledger["pending_orders"].pop(order_id, None)
                             self._save_pnl_ledger()
                             progressed = True
@@ -1447,19 +1533,23 @@ class CryptoAPITrading:
                             progressed = True
                             continue
 
-                        print(f"[Reconcile] Querying exchange for {order_id[:12]}… ({symbol} {side})")
+                        log.info(
+                            f"[Reconcile] querying exchange for {order_id[:12]}… ({symbol} {side})"
+                        )
                         result = self.exchange.get_order_result(symbol, order_id)
                         if not result:
                             continue
 
                         if result.state != "filled":
-                            print(f"[Reconcile] {order_id[:12]}… state={result.state}, discarding")
+                            log.info(
+                                f"[Reconcile] {order_id[:12]}… state={result.state}, discarding"
+                            )
                             self._pnl_ledger["pending_orders"].pop(order_id, None)
                             self._save_pnl_ledger()
                             progressed = True
                             continue
 
-                        print(f"[Reconcile] {order_id[:12]}… filled, recording trade")
+                        log.info(f"[Reconcile] {order_id[:12]}… filled, recording")
                         self._record_trade(
                             side=side,
                             symbol=symbol,
@@ -1486,15 +1576,19 @@ class CryptoAPITrading:
                         remaining = self._pnl_ledger.get("pending_orders", {})
                         for oid, info in list(remaining.items()):
                             sym = info.get("symbol", "?")
-                            print(f"[Reconcile] Giving up on {oid[:12]}… ({sym}) after {MAX_RETRIES} retries, discarding")
+                            log.warning(
+                                f"[Reconcile] giving up on {oid[:12]}… ({sym}) after {MAX_RETRIES} retries"
+                            )
                         self._pnl_ledger["pending_orders"] = {}
                         self._save_pnl_ledger()
                         break
-                    print(f"[Reconcile] No progress, retrying ({retries}/{MAX_RETRIES})…")
+                    log.warning(
+                        f"[Reconcile] no progress, retrying ({retries}/{MAX_RETRIES})"
+                    )
                     time.sleep(1)
 
         except Exception:
-            pass
+            log.exception("pending order reconciliation failed")
 
     def _record_skip(self, symbol: str, reason: str) -> None:
         """Record a skipped buy in trade_history so the UI can show it."""
@@ -1511,8 +1605,8 @@ class CryptoAPITrading:
         try:
             with open(TRADE_HISTORY_PATH, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, default=str) + "\n")
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not write skip record for {symbol}: {e}")
 
     def _record_trade(
         self,
@@ -1678,7 +1772,13 @@ class CryptoAPITrading:
                     except Exception:
                         pass
         except Exception:
-            pass
+            log.exception("PnL ledger update failed in _record_trade")
+            pt_errors.emit(
+                f"trader-{EXCHANGE_KEY}",
+                level="error",
+                message="PnL ledger update failed after trade record",
+                detail="Realized profit accounting, open position tracking, and cost basis may be out of sync. Check the PnL ledger file for corruption.",
+            )
 
         # --- Fallback realized profit calc (if not found on ledger; should be rare) ---
         if (
@@ -1749,15 +1849,15 @@ class CryptoAPITrading:
                 self._bot_order_ids_from_history.setdefault(base, set()).add(
                     str(order_id)
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not update bot order ID cache after trade: {e}")
 
         # If this was a bot sell, let profit allocation update the bucket (wins and losses)
         try:
             if tag_u != "LTH" and side_l == "sell" and realized is not None:
                 self._maybe_process_lth_profit_allocation(float(realized))
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"LTH profit allocation trigger failed: {e}")
 
     def _write_trader_status(self, status: dict) -> None:
         self._atomic_write_json(TRADER_STATUS_PATH, status)
@@ -1902,7 +2002,7 @@ class CryptoAPITrading:
         """
         holdings = self.get_holdings()
         if not holdings or "results" not in holdings:
-            print("No holdings found. Skipping DCA levels initialization.")
+            log.info("No holdings found. Skipping DCA levels initialization.")
             return
 
         for holding in holdings.get("results", []):
@@ -1966,7 +2066,7 @@ class CryptoAPITrading:
 
             triggered_levels_count = max(0, len(relevant_buy_orders) - 1)
             self.dca_levels_triggered[symbol] = list(range(triggered_levels_count))
-            print(f"Initialized DCA stages for {symbol}: {triggered_levels_count}")
+            log.debug(f"Initialized DCA stages for {symbol}: {triggered_levels_count}")
 
     def _seed_dca_window_from_history(self) -> None:
         """
@@ -2017,7 +2117,8 @@ class CryptoAPITrading:
                     elif side == "buy" and tag == "DCA":
                         self._dca_buy_ts.setdefault(base, []).append(ts_f)
 
-        except Exception:
+        except Exception as e:
+            log.warning(f"DCA window seeding from history failed: {e}")
             return
 
         # Keep only DCA buys after the last sell (current trade) and within rolling 24h
@@ -2124,8 +2225,8 @@ class CryptoAPITrading:
                 "created_ts": time.time(),
             }
             self._save_pnl_ledger()
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not save pending buy order for {symbol}: {e}")
 
         result = self.exchange.place_buy(symbol, amount_in_usd)
 
@@ -2163,8 +2264,8 @@ class CryptoAPITrading:
             try:
                 base_symbol = self.exchange.base_from_canonical(symbol)
                 self._mark_bot_order_id(base_symbol, order_id)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"could not mark bot order ID after buy for {symbol}: {e}")
 
             try:
                 base_symbol = self.exchange.base_from_canonical(symbol)
@@ -2176,8 +2277,10 @@ class CryptoAPITrading:
                     self.dca_levels_triggered[base_symbol] = current_levels
                 else:
                     self.dca_levels_triggered[base_symbol] = []
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(
+                    f"could not update DCA level count after buy for {symbol}: {e}"
+                )
 
         try:
             self._save_pnl_ledger()
@@ -2209,8 +2312,8 @@ class CryptoAPITrading:
                 "created_ts": time.time(),
             }
             self._save_pnl_ledger()
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"could not save pending sell order for {symbol}: {e}")
 
         result = self.exchange.place_sell(symbol, asset_quantity)
 
@@ -2257,8 +2360,8 @@ class CryptoAPITrading:
             self._clear_bot_order_ids_for_coin(base_symbol)
             self.dca_levels_triggered[base_symbol] = []
             self.trailing_pm.pop(base_symbol, None)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"post-sell state cleanup failed for {symbol}: {e}")
 
         try:
             self._save_pnl_ledger()
@@ -2297,14 +2400,14 @@ class CryptoAPITrading:
                 self.trailing_pm = {}
 
             self._last_trailing_settings_sig = new_sig
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"settings hot-reload failed: {e}")
 
         # NEW: Also allow LTH bucket spending during normal loops (not only right after sells)
         try:
             self._maybe_process_lth_profit_allocation(0.0)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"LTH profit allocation loop failed: {e}")
 
         # Fetch account details via adapter
         holdings = self.get_holdings()
@@ -2316,8 +2419,8 @@ class CryptoAPITrading:
             if reloaded:
                 # selection changed -> force a re-seed of open_positions from selected order IDs
                 self._needs_ledger_seed_from_orders = True
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"bot order ID reload failed: {e}")
 
         # Use the (possibly refreshed) stored cost_basis
         cost_basis = self.cost_basis
@@ -2379,7 +2482,13 @@ class CryptoAPITrading:
 
                 self._needs_ledger_seed_from_orders = False
         except Exception:
-            pass
+            log.exception("ledger seed from selected orders failed")
+            pt_errors.emit(
+                f"trader-{EXCHANGE_KEY}",
+                level="error",
+                message="Failed to reseed open positions from selected bot orders",
+                detail="Position cost basis and DCA stages may be stale. The reseed will be retried on the next selection change.",
+            )
 
         holdings_buy_value = 0.0
         holdings_sell_value = 0.0
@@ -2476,16 +2585,9 @@ class CryptoAPITrading:
                 "percent_in_trade": float(in_use),
             }
 
-        os.system("cls" if os.name == "nt" else "clear")
-        print("\n--- Account Summary ---")
-        print(f"Total Account Value: ${total_account_value:.2f}")
-        print(f"Holdings Value: ${holdings_sell_value:.2f}")
-        print(f"Percent In Trade: {in_use:.2f}%")
-        print(
-            f"Trailing PM: start +{self.pm_start_pct_no_dca:.2f}% (no DCA) / +{self.pm_start_pct_with_dca:.2f}% (with DCA) "
-            f"| gap {self.trailing_gap_pct:.2f}%"
+        log.info(
+            f"Account: ${total_account_value:.2f} total | ${holdings_sell_value:.2f} holdings | {in_use:.2f}% in trade | PM no-DCA +{self.pm_start_pct_no_dca:.2f}% with-DCA +{self.pm_start_pct_with_dca:.2f}% gap {self.trailing_gap_pct:.2f}%"
         )
-        print("\n--- Current Trades ---")
 
         positions = {}
         for holding in holdings.get("results", []):
@@ -2652,8 +2754,8 @@ class CryptoAPITrading:
                                 self._save_pnl_ledger()
                             except Exception:
                                 pass
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"suspicious cost basis check failed for {symbol}: {e}")
 
             if avg_cost_basis <= 0.0:
                 avg_cost_basis = cost_basis.get(symbol, 0) or 0.0
@@ -2668,9 +2770,7 @@ class CryptoAPITrading:
             else:
                 gain_loss_percentage_buy = 0
                 gain_loss_percentage_sell = 0
-                print(
-                    f"  Warning: Average Cost Basis is 0 for {symbol}, Gain/Loss calculation skipped."
-                )
+                log.warning(f"avg_cost_basis is 0 for {symbol}, gain/loss skipped")
 
             value = quantity * current_sell_price
             triggered_levels_count = len(self.dca_levels_triggered.get(symbol, []))
@@ -2816,22 +2916,16 @@ class CryptoAPITrading:
                 "lth_reserved_qty": float(reserved_qty),
             }
 
-            print(
-                f"\nSymbol: {symbol}"
-                f"  |  DCA: {color}{dca_line_pct:+.2f}%{Style.RESET_ALL} @ {self._fmt_price(current_buy_price)} (Line: {dca_line_price_disp} {dca_line_source} | Next: {next_dca_display})"
-                f"  |  Gain/Loss SELL: {color2}{gain_loss_percentage_sell:.2f}%{Style.RESET_ALL} @ {self._fmt_price(current_sell_price)}"
-                f"  |  DCA Levels Triggered: {triggered_levels}"
-                f"  |  Trade Value: ${value:.2f}"
-            )
-
-            if avg_cost_basis > 0:
-                print(
-                    f"  Trailing Profit Margin"
-                    f"  |  Line: {self._fmt_price(trail_line_disp)}"
-                    f"  |  Above: {above_disp}"
+            log.info(
+                f"{symbol}: DCA {dca_line_pct:+.2f}% @ {self._fmt_price(current_buy_price)}"
+                f" | G/L sell {gain_loss_percentage_sell:.2f}% @ {self._fmt_price(current_sell_price)}"
+                f" | DCA levels {triggered_levels} | ${value:.2f}"
+                + (
+                    f" | PM line {self._fmt_price(trail_line_disp)} above={above_disp}"
+                    if avg_cost_basis > 0
+                    else " | PM N/A"
                 )
-            else:
-                print("  PM/Trail: N/A (avg_cost_basis is 0)")
+            )
 
             # --- Trailing profit margin (0.5% trail gap) ---
             # PM "start line" is the normal 5% / 2.5% line (depending on DCA levels hit).
@@ -2898,9 +2992,8 @@ class CryptoAPITrading:
 
                     # Forced sell on cross from ABOVE -> BELOW trailing line
                     if state["was_above"] and (current_sell_price < state["line"]):
-                        print(
-                            f"  Trailing PM hit for {symbol}. "
-                            f"Sell price {current_sell_price:.8f} fell below trailing line {state['line']:.8f}."
+                        log.info(
+                            f"Trailing PM hit {symbol}: sell {current_sell_price:.8f} < line {state['line']:.8f}"
                         )
                         response = self.place_sell_order(
                             full_symbol,
@@ -2919,7 +3012,7 @@ class CryptoAPITrading:
                             # Trade ended -> reset rolling 24h DCA window for this coin
                             self._reset_dca_window_for_trade(symbol, sold=True)
                             self.dca_levels_triggered[symbol] = []
-                            print(f"  Successfully sold {quantity} {symbol}.")
+                            log.info(f"Sold {quantity} {symbol}")
                             time.sleep(5)
                             holdings = self.get_holdings()
                             continue
@@ -2996,18 +3089,15 @@ class CryptoAPITrading:
                 else:
                     reason = f"HARD {hard_level:.2f}%"
 
-                print(f"  DCAing {symbol} (stage {current_stage + 1}) via {reason}.")
-
-                print(f"  Current Value: ${value:.2f}")
                 dca_amount = value * float(DCA_MULTIPLIER or 0.0)
-                print(f"  DCA Amount: ${dca_amount:.2f}")
-                print(f"  Buying Power: ${buying_power:.2f}")
+                log.info(
+                    f"DCA {symbol} stage {current_stage + 1} via {reason} | value ${value:.2f} | dca ${dca_amount:.2f} | bp ${buying_power:.2f}"
+                )
 
                 recent_dca = self._dca_window_count(symbol)
                 if recent_dca >= int(getattr(self, "max_dca_buys_per_24h", 2)):
-                    print(
-                        f"  Skipping DCA for {symbol}. "
-                        f"Already placed {recent_dca} DCA buys in the last 24h (max {self.max_dca_buys_per_24h})."
+                    log.info(
+                        f"DCA {symbol} skipped — {recent_dca} buys in last 24h (max {self.max_dca_buys_per_24h})"
                     )
 
                 elif dca_amount <= buying_power:
@@ -3019,19 +3109,16 @@ class CryptoAPITrading:
                         tag="DCA",
                     )
 
-                    print(f"  Buy Response: {response}")
                     if response is not None:
                         self._note_dca_buy(symbol)
-
                         self.trailing_pm.pop(symbol, None)
-
                         trades_made = True
-                        print(f"  Successfully placed DCA buy order for {symbol}.")
+                        log.info(f"DCA buy placed for {symbol}")
                     else:
-                        print(f"  Failed to place DCA buy order for {symbol}.")
+                        log.warning(f"DCA buy FAILED for {symbol}")
 
                 else:
-                    print(f"  Skipping DCA for {symbol}. Not enough funds.")
+                    log.info(f"DCA {symbol} skipped — insufficient funds")
 
             else:
                 pass
@@ -3085,8 +3172,8 @@ class CryptoAPITrading:
                     "lth_reserved_qty": float(reserved_qty),
                 }
 
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"positions update for untracked coins failed: {e}")
 
         if not trading_pairs:
             return
@@ -3155,7 +3242,7 @@ class CryptoAPITrading:
                     pos["skip_reason"] = reason
                 if base_symbol not in self._skipped_coins:
                     self._skipped_coins.add(base_symbol)
-                    print(f"[SKIP] {base_symbol}: {reason}")
+                    log.debug(f"skip {base_symbol}: {reason}")
                     self._record_skip(full_symbol, reason)
                 start_index += 1
                 continue
@@ -3179,9 +3266,8 @@ class CryptoAPITrading:
                 # Reset trailing PM state for this coin (fresh trade, fresh trailing logic)
                 self.trailing_pm.pop(base_symbol, None)
 
-                print(
-                    f"Starting new trade for {full_symbol} (AI start signal long={buy_count}, short={sell_count}). "
-                    f"Allocating ${allocation_in_usd:.2f}."
+                log.info(
+                    f"New trade {full_symbol} long={buy_count} short={sell_count} alloc=${allocation_in_usd:.2f}"
                 )
                 time.sleep(5)
                 holdings = self.get_holdings()
@@ -3215,13 +3301,13 @@ class CryptoAPITrading:
         # If any trades were made, recalculate the cost basis
         if trades_made:
             time.sleep(5)
-            print("Trades were made in this iteration. Recalculating cost basis...")
+            log.info("Trades made — recalculating cost basis")
             new_cost_basis = self.calculate_cost_basis()
             if new_cost_basis:
                 self.cost_basis = new_cost_basis
-                print("Cost basis recalculated successfully.")
+                log.info("Cost basis recalculated")
             else:
-                print("Failed to recalculcate cost basis.")
+                log.warning("Cost basis recalculation failed")
 
         # --- GUI HUB STATUS WRITE ---
         try:
@@ -3253,18 +3339,23 @@ class CryptoAPITrading:
                     ACCOUNT_VALUE_HISTORY_PATH,
                     {"ts": now, "total_account_value": total_account_value},
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            pt_errors.emit(
+                f"trader-{EXCHANGE_KEY}",
+                level="warning",
+                message=f"Status write failed: {e}",
+                detail="The trader could not write its status snapshot this cycle. The UI may show stale position/balance data until the next successful write.",
+            )
 
         try:
             self.exchange.tick()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"exchange.tick() failed: {e}")
 
         _mt_total = time.time() - _mt_start
-        if _mt_total > 5 or not hasattr(self, '_mt_logged'):
+        if _mt_total > 5 or not hasattr(self, "_mt_logged"):
             self._mt_logged = True
-            print(f"[Loop] total={_mt_total:.1f}s prices={_price_dur:.1f}s")
+            log.debug(f"loop total={_mt_total:.1f}s prices={_price_dur:.1f}s")
 
     def run(self):
         while True:
@@ -3272,13 +3363,19 @@ class CryptoAPITrading:
                 self.manage_trades()
                 time.sleep(0.5)
             except Exception as e:
-                print(traceback.format_exc())
+                log.exception("manage_trades crashed")
+                pt_errors.emit(
+                    f"trader-{EXCHANGE_KEY}",
+                    level="error",
+                    message=f"manage_trades crashed: {e}",
+                    detail="The main trading loop raised an unhandled exception. The loop will restart automatically on the next iteration, but open orders or pending fills may not have been processed this cycle.",
+                )
 
 
 if __name__ == "__main__":
     exchange = load_exchange(EXCHANGE_KEY)
-    print(f"[PowerTrader] Exchange: {EXCHANGE_KEY}")
+    log.info(f"Exchange: {EXCHANGE_KEY}")
     t0 = time.time()
     trading_bot = CryptoAPITrading(exchange)
-    print(f"[PowerTrader] Init took {time.time() - t0:.1f}s")
+    log.info(f"Init took {time.time() - t0:.1f}s")
     trading_bot.run()
