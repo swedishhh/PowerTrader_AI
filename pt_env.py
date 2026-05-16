@@ -85,6 +85,10 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "ui_font_size": 16,
     "ui_log_font_size": 11,
 
+    # Notifications
+    "ntfy_url": "",
+    "ntfy_summary_interval_minutes": 60,
+
     # Shadow / Demo exchange
     "shadow_starting_usd": 0,
     "demo_starting_usd": 10000,
@@ -269,6 +273,20 @@ CONFIG_SCHEMA: dict[str, dict] = {
         "label": "Log Font Size (px)",
         "hint": "Font size for log output panels in pixels (8–20)",
         "group": "UI Preferences",
+    },
+
+    # ── Notifications ─────────────────────────────────────────────────────
+    "ntfy_url": {
+        "type": "str",
+        "label": "ntfy URL",
+        "hint": "Full ntfy topic URL for push notifications, e.g. https://ntfy.sh/my-topic. Leave blank to disable.",
+        "group": "Notifications",
+    },
+    "ntfy_summary_interval_minutes": {
+        "type": "int", "min": 5, "max": 1440,
+        "label": "Summary Interval (min)",
+        "hint": "How often to send the positions summary notification (5–1440 min)",
+        "group": "Notifications",
     },
 
     # ── Startup ───────────────────────────────────────────────────────────

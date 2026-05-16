@@ -284,6 +284,7 @@ class CryptoAPITrading:
         self._seed_dca_window_from_history()
 
         self._last_history_write_ts = 0.0
+        self._last_notify_summary_ts = 0.0
 
     def _atomic_read_json(self, path: str) -> Optional[dict]:
         """
@@ -1858,6 +1859,20 @@ class CryptoAPITrading:
         except Exception as e:
             log.warning(f"LTH profit allocation trigger failed: {e}")
 
+        # Push notification (daemon thread; never blocks)
+        try:
+            import pt_notify
+            bp = float(self._pnl_ledger.get("buying_power", 0.0) or 0.0)
+            pt_notify.notify_trade(
+                side=side, symbol=symbol, qty=qty, price=price,
+                avg_cost_basis=avg_cost_basis, pnl_pct=pnl_pct,
+                notional_usd=notional_usd, tag=tag,
+                buying_power=bp,
+                account_history_path=ACCOUNT_VALUE_HISTORY_PATH,
+            )
+        except Exception:
+            pass
+
     def _write_trader_status(self, status: dict) -> None:
         self._atomic_write_json(TRADER_STATUS_PATH, status)
 
@@ -2683,6 +2698,7 @@ class CryptoAPITrading:
                     "gain_loss_pct_sell": 0.0,
                     "value_usd": 0.0,
                     "dca_triggered_stages": 0,
+                    "dca_total_stages": len(self.dca_levels),
                     "next_dca_display": "",
                     "dca_line_price": 0.0,
                     "dca_line_source": "N/A",
@@ -2884,6 +2900,7 @@ class CryptoAPITrading:
                 "gain_loss_pct_sell": gain_loss_percentage_sell,
                 "value_usd": value,
                 "dca_triggered_stages": int(triggered_levels_count),
+                "dca_total_stages": len(self.dca_levels),
                 "next_dca_display": next_dca_display,
                 "dca_line_price": float(dca_line_price) if dca_line_price else 0.0,
                 "dca_line_source": dca_line_source,
@@ -3327,6 +3344,20 @@ class CryptoAPITrading:
                 message=f"Status write failed: {e}",
                 detail="The trader could not write its status snapshot this cycle. The UI may show stale position/balance data until the next successful write.",
             )
+
+        # Positions summary notification (configurable interval)
+        try:
+            now = time.time()
+            _summary_interval = max(5, int(_pt_env.get_config().get("ntfy_summary_interval_minutes") or 60)) * 60
+            if now - self._last_notify_summary_ts >= _summary_interval:
+                self._last_notify_summary_ts = now
+                import pt_notify
+                pt_notify.notify_positions_summary(
+                    positions, status["account"], ACCOUNT_VALUE_HISTORY_PATH,
+                    exchange=EXCHANGE_KEY,
+                )
+        except Exception:
+            pass
 
         try:
             self.exchange.tick()

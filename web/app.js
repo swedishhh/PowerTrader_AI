@@ -1949,7 +1949,7 @@ window.toggleTrainerLog = function(coin) {
 
 const _CFG_GROUP_ORDER = [
   'General', 'Trading', 'Trailing Profit', 'Long-Term Holdings',
-  'Control Exchange', 'UI Preferences', 'Training', 'Startup', 'Data Manager',
+  'Control Exchange', 'UI Preferences', 'Notifications', 'Training', 'Startup', 'Data Manager',
 ];
 
 function _cfgParseField(el, rule, key) {
@@ -2149,6 +2149,9 @@ function renderConfig(cfg) {
     for (const key of fields) {
       html += _cfgBuildInput(key, schema[key], cfg[key]);
     }
+    if (group === 'Notifications') {
+      html += `<div class="settings-field"><button type="button" class="btn btn-secondary" id="btn-test-notify">Send test notification</button><span id="notify-test-status" style="margin-left:10px;font-size:12px;color:var(--text-muted)"></span></div>`;
+    }
     html += '</div>';
   }
   html += `<div class="settings-save">
@@ -2175,6 +2178,23 @@ function renderConfig(cfg) {
   });
 
   $('#btn-save-cfg').addEventListener('click', () => saveConfig(original));
+
+  const btnTest = $('#btn-test-notify');
+  if (btnTest) {
+    btnTest.addEventListener('click', async () => {
+      const statusEl = $('#notify-test-status');
+      btnTest.disabled = true;
+      if (statusEl) statusEl.textContent = 'Sending…';
+      try {
+        const r = await api('notify/test', {method: 'POST'});
+        if (statusEl) statusEl.textContent = r.ok ? '✓ Sent' : `Error: ${r.error}`;
+      } catch (e) {
+        if (statusEl) statusEl.textContent = `Error: ${e.message}`;
+      } finally {
+        btnTest.disabled = false;
+      }
+    });
+  }
 }
 
 async function loadAndRenderConfig() {

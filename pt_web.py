@@ -665,6 +665,21 @@ async def api_clear_errors():
     return {"ok": True}
 
 
+@app.post("/api/notify/test")
+async def api_notify_test():
+    cfg = env.get_config()
+    if not str(cfg.get("ntfy_url") or "").strip():
+        return {"ok": False, "error": "ntfy_url is not configured in Settings"}
+    try:
+        import pt_notify
+        xk = env.exchange or "demo"
+        history_path = str(env.account_history_path(xk))
+        pt_notify.test_notify(account_history_path=history_path)
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 def _refresh_exchange_balance(xk: str, write_history: bool = True):
     """Query account for current balance and update trader_status file."""
     account = _get_account(xk)

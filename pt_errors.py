@@ -45,6 +45,12 @@ def emit(component: str, message: str, level: str = "error", detail: str = "") -
     except Exception:
         pass  # Never fail trying to log
 
+    try:
+        import pt_notify
+        pt_notify.notify_error(component, level, message, detail)
+    except Exception:
+        pass
+
 
 def trim(max_lines: int = 500) -> None:
     """Trim errors.jsonl to the most recent max_lines entries. Called at web startup."""
