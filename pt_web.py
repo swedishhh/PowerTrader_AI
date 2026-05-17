@@ -1126,10 +1126,19 @@ def _candles_kucoin(coin: str, timeframe: str, limit: int) -> dict:
         "1hour": "1hour", "2hour": "2hour", "4hour": "4hour",
         "8hour": "8hour", "12hour": "12hour", "1day": "1day", "1week": "1week",
     }
+    tf_seconds = {
+        "1min": 60, "5min": 300, "15min": 900, "30min": 1800,
+        "1hour": 3600, "2hour": 7200, "4hour": 14400,
+        "8hour": 28800, "12hour": 43200, "1day": 86400, "1week": 604800,
+    }
     kc_tf = tf_map.get(timeframe, "1hour")
+    secs  = tf_seconds.get(timeframe, 3600)
     try:
+        import time as _time
         import requests as _req
-        url = f"https://api.kucoin.com/api/v1/market/candles?type={kc_tf}&symbol={coin}-USDT&pageSize={limit}"
+        start_at = int(_time.time()) - limit * secs
+        url = (f"https://api.kucoin.com/api/v1/market/candles"
+               f"?type={kc_tf}&symbol={coin}-USDT&startAt={start_at}")
         resp = _req.get(url, timeout=10)
         data = resp.json()
         klines = data.get("data", [])
@@ -1143,7 +1152,7 @@ def _candles_kucoin(coin: str, timeframe: str, limit: int) -> dict:
                 "low": float(k[4]),
                 "volume": float(k[5]),
             })
-        return {"candles": candles}
+        return {"candles": candles[-limit:]}
     except Exception as e:
         return {"candles": [], "error": str(e)}
 

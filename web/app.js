@@ -2259,6 +2259,7 @@ async function saveConfig(original) {
 
   const result = await apiPut('config', patch);
   if (result.ok) {
+    const candlesChanged = patch.candles_limit !== undefined && patch.candles_limit !== state.cfg.candles_limit;
     state.cfg = {...state.cfg, ...patch};
     _applyUiPrefs(state.cfg);
     if (modeChanged) {
@@ -2267,6 +2268,7 @@ async function saveConfig(original) {
       renderConfig(state.cfg);
     } else {
       btn.textContent = 'Saved!';
+      if (candlesChanged && state.selectedCoin) initCoinChart(state.selectedCoin, state.selectedTf);
       setTimeout(() => {
         btn.textContent = 'Save Config';
         renderConfig(state.cfg);
