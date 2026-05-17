@@ -501,12 +501,9 @@ def _position_detail_text(sym: str, position: dict, exchange: str) -> tuple[str,
     next_dca_disp = str(position.get("next_dca_display", "") or "")
 
     sign = "+" if pnl >= 0 else ""
-    title = f"{base}  {sign}{pnl:.2f}%  val {val:,.2f}"
+    title = f"{base} {exchange.upper()} {sign}{pnl:.2f}%  USD{val:,.2f}"
 
     lines = [
-        f"**{exchange.upper()} · {base}**",
-        f"`{_fmt_price(sell)}`  **{sign}{pnl:.2f}%**  ·  `{val:,.2f} USD`",
-        "",
         f"**Qty**         `{qty:,.6g}`",
         f"**Avg Cost**    `{_fmt_price(cb)}`",
     ]

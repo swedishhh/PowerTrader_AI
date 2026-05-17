@@ -80,7 +80,7 @@
   "default_timeframe": "1hour",
   "ui_refresh_seconds": 5,
   "chart_refresh_seconds": 60,
-  "candles_limit": 500,
+  "candles_limit": 300,
   "ui_font_size": 20,
   "ui_log_font_size": 8,
   "ntfy_url": "https://ntfy.sh/swedishhh_cryptoid",

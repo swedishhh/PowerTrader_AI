@@ -56,7 +56,7 @@ import time
 import pt_errors
 from kucoin.client import Market
 from pt_env import TRAIN_TF_NAMES as tf_choices
-from pt_env import PTEnv as _PTEnv
+from pt_env import PTEnv
 from pt_log import get_logger
 
 market = Market(url="https://api.kucoin.com")
@@ -117,7 +117,7 @@ last_minute = 0
 # -----------------------------
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-_env = _PTEnv(BASE_DIR)
+_env = PTEnv(BASE_DIR)
 
 
 def _load_gui_coins() -> list:

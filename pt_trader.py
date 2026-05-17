@@ -149,7 +149,7 @@ from typing import Any, Dict, List, Optional
 import colorama
 import pt_errors
 from exchange_api import Exchange, OrderResult, load_exchange
-from pt_env import PTEnv as _PTEnv
+from pt_env import PTEnv
 from pt_log import get_logger
 
 # Initialize colorama
@@ -160,7 +160,7 @@ colorama.init(autoreset=True)
 # Config + paths (via PTEnv)
 # -----------------------------
 _PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-_pt_env = _PTEnv(_PROJECT_DIR)
+_pt_env = PTEnv(_PROJECT_DIR)
 
 _parser = argparse.ArgumentParser(add_help=False)
 _parser.add_argument("--exchange", default="demo")

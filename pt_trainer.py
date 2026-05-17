@@ -22,7 +22,7 @@ from pt_env import (
     TRAIN_TF_NAMES,
     VALID_DATA_SOURCES,
 )
-from pt_env import PTEnv as _PTEnv
+from pt_env import PTEnv
 
 import argparse
 import getpass
@@ -41,7 +41,7 @@ import pandas as pd
 arctic_path = f"/home/{getpass.getuser()}/dev/data/arcticdb"
 arctic = adb.Arctic(f"lmdb:///{arctic_path}")
 
-_trainer_env = _PTEnv(os.path.dirname(os.path.abspath(__file__)))
+_trainer_env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
 
 TIMEFRAMES = list(TRAIN_TF_NAMES)
 TF_MINUTES = list(TRAIN_TF_MINUTES)
