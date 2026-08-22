@@ -54,6 +54,7 @@ TF_MINUTES = list(TRAIN_TF_MINUTES)
 PATTERN_LENGTH = 2  # number_of_candles[0] — pattern uses N-1 candles to predict 1
 CANDLES_TO_PREDICT = 1
 MIN_CANDLES = 100
+MAX_CANDLES = 75000  # cap per-symbol read; coins under this are unaffected
 ACCURACY_WINDOW = 100
 THRESHOLD_TARGET_MATCHES = 20
 WEIGHT_STEP = 0.25
@@ -190,7 +191,7 @@ def _fetch_from_arctic(
             return None
         symbol = alt
 
-    df = lib.read(symbol).data
+    df = lib.read(symbol, row_range=(-MAX_CANDLES, None)).data
     if df is None or df.empty:
         return None
 
