@@ -292,6 +292,14 @@ class MemoryStore:
     low_weights: list = field(default_factory=list)  # low weights
     dirty: bool = False
 
+    # Incremental cache for get_patterns_matrix(): _matrix holds valid pattern
+    # prefixes in a pre-allocated (possibly oversized) buffer; only the first
+    # _matrix_len rows are populated. Rebuilt on load(), appended to on
+    # add_entry() — avoids re-materializing an ndarray from the full patterns
+    # list on every hot-loop call.
+    _matrix: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
+    _matrix_len: int = field(default=0, repr=False, compare=False)
+
     def load(self):
         """Load from disk. Tolerates missing file (starts empty)."""
         td = _read_training_data()
@@ -309,6 +317,41 @@ class MemoryStore:
                 wlist.append(1.0)
 
         self.dirty = False
+        self._rebuild_matrix()
+
+    def _rebuild_matrix(self):
+        """(Re)build the patterns-matrix cache from self.patterns. O(n); only
+        called once per load(), not from the hot loop."""
+        pat_len = PATTERN_LENGTH - 1
+        valid = [p[:pat_len] for p in self.patterns if len(p) > pat_len]
+        if not valid:
+            self._matrix = None
+            self._matrix_len = 0
+            return
+        self._matrix = np.array(valid, dtype=np.float64)
+        self._matrix_len = len(valid)
+
+    def _append_to_matrix(self, pattern: np.ndarray):
+        """Amortized O(1) append of one pattern's prefix into the matrix cache."""
+        pat_len = PATTERN_LENGTH - 1
+        if len(pattern) <= pat_len:
+            return  # matches the get_patterns_matrix() "too short" filter
+        row = np.asarray(pattern[:pat_len], dtype=np.float64)
+
+        if self._matrix is None:
+            self._matrix = row.reshape(1, -1)
+            self._matrix_len = 1
+            return
+
+        capacity = self._matrix.shape[0]
+        if self._matrix_len >= capacity:
+            new_capacity = max(capacity * 2, capacity + 1)
+            grown = np.empty((new_capacity, self._matrix.shape[1]), dtype=np.float64)
+            grown[: self._matrix_len] = self._matrix[: self._matrix_len]
+            self._matrix = grown
+
+        self._matrix[self._matrix_len] = row
+        self._matrix_len += 1
 
     def _parse_memories(self, blob: str) -> tuple:
         if not blob.strip():
@@ -377,6 +420,7 @@ class MemoryStore:
         self.high_weights.append(1.0)
         self.low_weights.append(1.0)
         self.dirty = True
+        self._append_to_matrix(pattern)
 
     @property
     def count(self) -> int:
@@ -384,14 +428,9 @@ class MemoryStore:
 
     def get_patterns_matrix(self) -> Optional[np.ndarray]:
         """Return Nx(pattern_length-1) matrix of pattern values (excluding outcome)."""
-        if not self.patterns:
+        if self._matrix is None or self._matrix_len == 0:
             return None
-        # Each pattern has pattern_length values; first N-1 are the pattern, last is outcome
-        pat_len = PATTERN_LENGTH - 1  # number of candle changes in the matching part
-        valid = [p for p in self.patterns if len(p) > pat_len]
-        if not valid:
-            return None
-        return np.array([p[:pat_len] for p in valid], dtype=np.float64)
+        return self._matrix[: self._matrix_len]
 
     def get_outcomes(self) -> np.ndarray:
         """Return the outcome (last element) for each pattern."""
