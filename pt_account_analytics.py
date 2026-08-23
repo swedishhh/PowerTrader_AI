@@ -638,13 +638,26 @@ def _get_all_deltas(trade_history_path: Path, cache_path: Path) -> list[TradeDel
     return deltas
 
 
+_price_source_cache: dict[str, PriceSource] = {}
+
+
 def _default_price_source(env) -> PriceSource:
     """ArcticPriceSource pointed at this deployment's actual KuCoin store
     (env.historic_data_dir, i.e. pt_config.json's kucoin_local_data_dir —
     the same store pt_trainer.py reads for training), not
     ArcticPriceSource's own generic ~/dev/data/arcticdb default, which is a
-    different store and typically doesn't hold this project's candles."""
-    return ArcticPriceSource(arctic_url=f"lmdb:///{env.historic_data_dir}")
+    different store and typically doesn't hold this project's candles.
+
+    Cached module-level per store path: constructing ArcticPriceSource opens
+    the LMDB store (adb.Arctic(...)), which is real per-call overhead if
+    rebuilt on every request — this is called from every account-summary/
+    account-history request, including the Accounts tab's 10s poll."""
+    key = str(env.historic_data_dir)
+    src = _price_source_cache.get(key)
+    if src is None:
+        src = ArcticPriceSource(arctic_url=f"lmdb:///{env.historic_data_dir}")
+        _price_source_cache[key] = src
+    return src
 
 
 def build_account_series(

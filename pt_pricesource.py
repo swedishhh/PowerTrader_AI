@@ -88,6 +88,7 @@ class ArcticPriceSource(PriceSource):
         self._denom = denominator
         self._max_candles = max_candles
         self._lib_cache: dict = {}
+        self._symbol_cache: dict = {}  # (lib_name, coin) -> resolved symbol
 
     def _get_lib(self, tf_minutes: int):
         lib_name = f"{self._prefix}{tf_minutes}"
@@ -98,15 +99,26 @@ class ArcticPriceSource(PriceSource):
         return self._lib_cache[lib_name]
 
     def _resolve_symbol(self, lib, coin: str) -> str:
+        # list_symbols() is a real ArcticDB store scan — worth caching since
+        # a coin's resolved symbol never changes for the life of this store.
+        cache_key = (lib.name, coin.upper())
+        cached = self._symbol_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         symbol = f"{coin.upper()}_{self._denom}"
-        if symbol in lib.list_symbols():
-            return symbol
-        # Alternate denominator fallback (mirrors pt_trainer.py._fetch_from_arctic)
         alt_denom = "USD" if self._denom == "USDT" else "USDT"
         alt = f"{coin.upper()}_{alt_denom}"
-        if alt in lib.list_symbols():
-            return alt
-        raise KeyError(f"No symbol for {coin!r} (tried {symbol!r}, {alt!r})")
+        available = set(lib.list_symbols())
+        if symbol in available:
+            resolved = symbol
+        elif alt in available:
+            # Alternate denominator fallback (mirrors pt_trainer.py._fetch_from_arctic)
+            resolved = alt
+        else:
+            raise KeyError(f"No symbol for {coin!r} (tried {symbol!r}, {alt!r})")
+        self._symbol_cache[cache_key] = resolved
+        return resolved
 
     def get_candles(
         self,

@@ -333,7 +333,12 @@ async def api_account_history(tf: str = "1day", coin: str = None, start: int = N
     tf_minutes = TF_NAME_TO_MINUTES.get(tf, 1440)
     result, baselines, warnings = {}, {}, {}
     for xk in _active_accounts():
-        out = pt_account_analytics.build_account_series(env, xk, tf_minutes, coin, start, end)
+        # Ledger reconstruction + ArcticDB reads are blocking I/O; run off
+        # the event loop so a slow account fetch doesn't stall every other
+        # endpoint (this one is also hit by the Accounts tab's 10s poll).
+        out = await asyncio.to_thread(
+            pt_account_analytics.build_account_series, env, xk, tf_minutes, coin, start, end
+        )
         result[xk] = out["points"]
         baselines[xk] = out["baseline"]
         if out.get("warning"):
@@ -352,7 +357,10 @@ async def api_account_summary():
     powers the Accounts tab table."""
     result = {}
     for xk in _active_accounts():
-        result[xk] = pt_account_analytics.build_account_summary(env, xk)
+        # Blocking I/O (ledger reconstruction + per-coin ArcticDB reads) —
+        # see api_account_history's comment for why this must not run
+        # directly on the event loop.
+        result[xk] = await asyncio.to_thread(pt_account_analytics.build_account_summary, env, xk)
     return {"summary": result}
 
 
@@ -1470,4 +1478,11 @@ if __name__ == "__main__":
     parser.add_argument("--config", default=None, help="Path to config JSON (default: pt_config.json)")
     parser.add_argument("--state_dir", default=None, help="Directory containing pt_config.json and state/ (default: directory of pt_web.py)")
     args = parser.parse_args()
-    uvicorn.run(app, host=args.host, port=args.port)
+
+    # Uvicorn's default access-log formatter has no timestamp, which makes
+    # it impossible to tell how long a request actually took from the log
+    # alone — add one to both the access and default loggers.
+    log_config = uvicorn.config.LOGGING_CONFIG
+    log_config["formatters"]["default"]["fmt"] = "%(asctime)s " + log_config["formatters"]["default"]["fmt"]
+    log_config["formatters"]["access"]["fmt"] = "%(asctime)s " + log_config["formatters"]["access"]["fmt"]
+    uvicorn.run(app, host=args.host, port=args.port, log_config=log_config)
