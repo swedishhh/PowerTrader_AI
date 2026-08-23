@@ -128,9 +128,9 @@ docker push swedishhh/powertrader:latest
 To also publish a versioned tag (e.g. `2.0.0`), add `-t` for each tag and push both:
 
 ```bash
-DESC="Fixes BTC trainer segfault — get_patterns_matrix incremental rewrite"
+DESC="Fixes BTC trainer segfault — get_patterns_matrix incremental rewrite. Other fixes."
 REV=$(git ls-remote https://github.com/swedishhh/PowerTrader_AI.git HEAD | cut -f1)
-VERSION="4.0.1"
+VERSION="4.0.2"
 docker build \
 --build-arg CACHEBUST=$(date +%s) \
 --label "org.opencontainers.image.description=$DESC" \
