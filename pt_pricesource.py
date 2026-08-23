@@ -76,6 +76,7 @@ class ArcticPriceSource(PriceSource):
         arctic_url: Optional[str] = None,
         lib_prefix: str = "kucoin",
         denominator: str = "USDT",
+        max_candles: Optional[int] = 75000,
     ):
         import arcticdb as adb
         import getpass
@@ -85,6 +86,7 @@ class ArcticPriceSource(PriceSource):
         self._arctic = adb.Arctic(arctic_url)
         self._prefix = lib_prefix
         self._denom = denominator
+        self._max_candles = max_candles
         self._lib_cache: dict = {}
 
     def _get_lib(self, tf_minutes: int):
@@ -95,6 +97,17 @@ class ArcticPriceSource(PriceSource):
             self._lib_cache[lib_name] = self._arctic.get_library(lib_name)
         return self._lib_cache[lib_name]
 
+    def _resolve_symbol(self, lib, coin: str) -> str:
+        symbol = f"{coin.upper()}_{self._denom}"
+        if symbol in lib.list_symbols():
+            return symbol
+        # Alternate denominator fallback (mirrors pt_trainer.py._fetch_from_arctic)
+        alt_denom = "USD" if self._denom == "USDT" else "USDT"
+        alt = f"{coin.upper()}_{alt_denom}"
+        if alt in lib.list_symbols():
+            return alt
+        raise KeyError(f"No symbol for {coin!r} (tried {symbol!r}, {alt!r})")
+
     def get_candles(
         self,
         coin: str,
@@ -103,13 +116,19 @@ class ArcticPriceSource(PriceSource):
         n_back: Optional[int] = None,
     ) -> pd.DataFrame:
         lib = self._get_lib(tf_minutes)
-        symbol = f"{coin.upper()}_{self._denom}"
+        symbol = self._resolve_symbol(lib, coin)
 
         if asof_ts is not None:
             # Use ArcticDB date_range to push the cutoff to the store layer
-            # (avoids loading post-cutoff rows we'd just drop).
+            # (avoids loading post-cutoff rows we'd just drop). ArcticDB only
+            # accepts one of date_range/row_range per read() call, so the
+            # max_candles cap is re-applied in pandas afterward here.
             cutoff = pd.Timestamp(asof_ts, unit="s", tz="UTC") - pd.Timedelta(microseconds=1)
             df = lib.read(symbol, date_range=(None, cutoff)).data
+            if self._max_candles is not None and df is not None and len(df) > self._max_candles:
+                df = df.tail(self._max_candles)
+        elif self._max_candles is not None:
+            df = lib.read(symbol, row_range=(-self._max_candles, None)).data
         else:
             df = lib.read(symbol).data
 
