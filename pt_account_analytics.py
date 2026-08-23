@@ -39,6 +39,15 @@ from pt_pricesource import ArcticPriceSource, PriceSource
 MAX_LINE_BYTES = 64 * 1024  # generous guard; real trade_history.jsonl lines are ~180B
 _CHUNK_SIZE = 1024 * 1024   # 1MB read chunks — never buffer the whole file
 
+# Always mark-to-market using hourly candles, regardless of a chart's own
+# display granularity (tf_minutes there only controls x-axis bucket spacing).
+# A coarser candle library (e.g. kucoin1440) often doesn't have "today"'s row
+# until the day closes, so pricing directly off the display tf made a 1-day
+# chart's current point stale by up to ~24h relative to what
+# build_account_summary (which always uses 60min) reports for the same
+# instant. 75000 60-minute candles is ~8.5 years — comfortably bounded.
+PRICE_FETCH_TF_MINUTES = 60
+
 
 # ---------------------------------------------------------------------------
 # Streaming / low-level reconstruction — the only file-format-aware code
@@ -163,6 +172,28 @@ def get_trade_history(
     return out
 
 
+def get_coin_realized_pnl(trade_history_path: Path, coin: str) -> dict:
+    """Cumulative realized PnL across every closed round-trip sell for one
+    coin — the sum of each sell's own realized_profit_usd and pnl_pct
+    (already computed and stored per-trade by pt_trader.py's cost-basis
+    ledger, proportionally per partial sell), not a recomputation. Ignores
+    currently-open positions (only sells realize PnL) and LTH-tagged trades
+    (a separate long-term bucket, not part of the active trading strategy's
+    round trips). Returns {"realized_usd", "realized_pct", "trade_count"}."""
+    realized_usd = 0.0
+    realized_pct = 0.0
+    trade_count = 0
+    for row in get_trade_history(trade_history_path, coin=coin):
+        if row.get("side") != "sell":
+            continue
+        if str(row.get("tag") or "").upper() == "LTH":
+            continue
+        realized_usd += float(row.get("realized_profit_usd") or 0.0)
+        realized_pct += float(row.get("pnl_pct") or 0.0)
+        trade_count += 1
+    return {"realized_usd": realized_usd, "realized_pct": realized_pct, "trade_count": trade_count}
+
+
 # ---------------------------------------------------------------------------
 # Ledger reconstruction
 # ---------------------------------------------------------------------------
@@ -231,7 +262,17 @@ def _bucket_grid(start_ts: float, end_ts: float, tf_minutes: int) -> pd.Index:
     ledger (float index) and price data (tz-aware DatetimeIndex)."""
     step = tf_minutes * 60
     n = int((end_ts - start_ts) // step) + 1
-    return pd.Index([start_ts + i * step for i in range(max(n, 0))], dtype="float64", name="ts")
+    points = [start_ts + i * step for i in range(max(n, 0))]
+    # Always include end_ts itself as the final point. Without this, the
+    # last regular grid point can be stale by up to one full bucket width
+    # (e.g. up to 24h at tf=1day) relative to "now" -- which is exactly why
+    # the chart's last point, build_account_summary's Total, and
+    # validate_against_live's live comparison could each land on a
+    # different moment in time and disagree. Forcing the same end_ts
+    # instant as the final point everywhere is what keeps them consistent.
+    if not points or points[-1] < end_ts:
+        points.append(end_ts)
+    return pd.Index(points, dtype="float64", name="ts")
 
 
 def _index_to_float_seconds(series: pd.Series) -> pd.Series:
@@ -482,7 +523,7 @@ def build_account_series(
     # from "we just didn't fetch that far back". _bucket_grid/_asof_into_grid
     # already scope the final output to [range_start, range_end] regardless.
     price_sources = {
-        c: get_price_series(c, tf_minutes, price_source=price_source)
+        c: get_price_series(c, PRICE_FETCH_TF_MINUTES, price_source=price_source)
         for c in coins
     }
 
@@ -531,16 +572,24 @@ def _read_live_total(env, xk: str) -> Optional[float]:
 
 
 def build_account_summary(env, xk: str) -> dict:
-    """{"total": {value, pct}, "coins": {SYM: {value, pct}, ...}} — latest
-    point only, cheap. Powers the Accounts-tab table."""
+    """{"total": {value, pct}, "coins": {SYM: {value, pct, trade_count}, ...}}
+    — latest point only, cheap. Powers the Accounts-tab table.
+
+    Total reflects current account value (cash + open holdings marked to
+    market), same concept as the portfolio chart. Per-coin reflects
+    cumulative REALIZED PnL across closed round-trip sells only (sum of
+    each sell's own realized_profit_usd / pnl_pct) — deliberately NOT the
+    notional currently in play, so an open position doesn't show as "value"
+    until it's actually been sold. See get_coin_realized_pnl."""
     price_source = _default_price_source(env)
     seed = _read_seed(env.account_history_path(xk))
     if seed is None:
         return {"total": None, "coins": {}}
     seed_ts, seed_cash = seed
 
+    trade_history_path = env.trade_history_path(xk)
     cache_path = env.hub_data_xk_dir(xk) / "account_ledger_cache.json"
-    deltas = _get_all_deltas(env.trade_history_path(xk), cache_path)
+    deltas = _get_all_deltas(trade_history_path, cache_path)
     ledger = reconstruct_ledger(seed_ts, seed_cash, deltas)
 
     now_ts = pd.Timestamp.utcnow().timestamp()
@@ -552,21 +601,22 @@ def build_account_summary(env, xk: str) -> dict:
         qty_series = get_coin_position_series(ledger, coin)
         qty = float(qty_series.iloc[-1]) if not qty_series.empty else 0.0
 
-        # A single current point, not a time series: a small recent window is
-        # enough for a current price, no need for get_coin_value_series's
-        # full-history pre-candle-gap machinery here.
-        price_df = get_price_series(coin, 60, now_ts - 86400, now_ts, price_source)
+        # Current notional still needed for the Total row below, even though
+        # the per-coin row itself now shows realized PnL, not this.
+        price_df = get_price_series(coin, PRICE_FETCH_TF_MINUTES, now_ts - 86400, now_ts, price_source)
         if not price_df.empty:
             current_price = float(price_df["close"].iloc[-1])
         else:
             coin_deltas = [d for d in deltas if d.coin == coin]
             current_price = coin_deltas[-1].price if coin_deltas else 0.0
+        holdings_total += qty * current_price
 
-        value = qty * current_price
-        baseline = get_coin_entry_baseline(deltas, coin)
-        pct = float(get_pct_series(pd.Series([value]), baseline).iloc[0]) if baseline else None
-        result_coins[coin] = {"value": value, "pct": pct}
-        holdings_total += value
+        pnl = get_coin_realized_pnl(trade_history_path, coin)
+        result_coins[coin] = {
+            "value": pnl["realized_usd"],
+            "pct": pnl["realized_pct"] if pnl["trade_count"] > 0 else None,
+            "trade_count": pnl["trade_count"],
+        }
 
     cash = float(ledger["cash"].iloc[-1]) if not ledger.empty else seed_cash
     total_value = cash + holdings_total

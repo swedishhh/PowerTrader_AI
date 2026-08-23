@@ -179,6 +179,58 @@ def test_get_trade_history_filters_skip_and_by_coin(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# get_coin_realized_pnl
+# ---------------------------------------------------------------------------
+
+
+def _sell_line(ts, symbol, realized_profit_usd, pnl_pct, tag=None):
+    return json.dumps({
+        "ts": ts, "side": "sell", "tag": tag, "symbol": symbol, "qty": 1.0, "price": 1.0,
+        "notional_usd": 1.0, "net_usd": 1.0, "avg_cost_basis": 1.0,
+        "pnl_pct": pnl_pct, "fees_usd": 0.0, "fees_missing": False,
+        "fees_fallback_applied_usd": 0.0, "realized_profit_usd": realized_profit_usd,
+        "order_id": "x", "position_cost_used_usd": None, "position_cost_after_usd": None,
+    })
+
+
+def test_get_coin_realized_pnl_sums_across_round_trips(tmp_path):
+    # Matches the user-described scenario: 3 closed round trips at 4.5%, 5.5%, 3.6%.
+    path = tmp_path / "trade_history.jsonl"
+    path.write_text("\n".join([
+        _trade_line("2026-01-01T00:00:00Z", "buy", "ADA_USD", 100.0, 0.25),
+        _sell_line("2026-01-01T01:00:00Z", "ADA_USD", 4.50, 4.5),
+        _trade_line("2026-01-02T00:00:00Z", "buy", "ADA_USD", 100.0, 0.25),
+        _sell_line("2026-01-02T01:00:00Z", "ADA_USD", 5.50, 5.5),
+        _trade_line("2026-01-03T00:00:00Z", "buy", "ADA_USD", 100.0, 0.25),
+        _sell_line("2026-01-03T01:00:00Z", "ADA_USD", 3.60, 3.6),
+    ]) + "\n")
+
+    result = a.get_coin_realized_pnl(path, "ADA")
+    assert result["realized_usd"] == pytest.approx(4.50 + 5.50 + 3.60)
+    assert result["realized_pct"] == pytest.approx(4.5 + 5.5 + 3.6)
+    assert result["trade_count"] == 3
+
+
+def test_get_coin_realized_pnl_ignores_open_position_no_sell(tmp_path):
+    path = tmp_path / "trade_history.jsonl"
+    path.write_text(_trade_line("2026-01-01T00:00:00Z", "buy", "BTC_USD", 0.1, 100.0) + "\n")
+    result = a.get_coin_realized_pnl(path, "BTC")
+    assert result == {"realized_usd": 0.0, "realized_pct": 0.0, "trade_count": 0}
+
+
+def test_get_coin_realized_pnl_excludes_lth_tagged_sells(tmp_path):
+    path = tmp_path / "trade_history.jsonl"
+    path.write_text("\n".join([
+        _sell_line("2026-01-01T00:00:00Z", "BTC_USD", 100.0, 10.0, tag="LTH"),
+        _sell_line("2026-01-02T00:00:00Z", "BTC_USD", 5.0, 2.0, tag="TRAIL_SELL"),
+    ]) + "\n")
+    result = a.get_coin_realized_pnl(path, "BTC")
+    assert result["realized_usd"] == pytest.approx(5.0)
+    assert result["realized_pct"] == pytest.approx(2.0)
+    assert result["trade_count"] == 1
+
+
+# ---------------------------------------------------------------------------
 # reconstruct_ledger
 # ---------------------------------------------------------------------------
 
@@ -255,6 +307,31 @@ def test_get_coin_value_series_pre_candle_gap_uses_fill_price_and_warns():
     # pre-candle bucket should use the trade's own fill price (50.0), not NaN/0
     first_bucket_price = out["price"].iloc[0]
     assert first_bucket_price == pytest.approx(50.0)
+
+
+def test_bucket_grid_always_includes_end_ts_even_when_not_grid_aligned():
+    # tf=1day (86400s) step; end_ts deliberately NOT a multiple of the step
+    # from start_ts, mirroring the real chart-vs-summary-table discrepancy:
+    # without forcing end_ts onto the grid, the last point could be stale by
+    # almost a full bucket width.
+    start_ts = 1_700_000_000.0
+    end_ts = start_ts + 86400 * 2.5  # 2.5 days later — not grid-aligned
+    grid = a._bucket_grid(start_ts, end_ts, tf_minutes=1440)
+    assert grid[-1] == end_ts
+    assert end_ts - grid[-2] > 1  # the regular grid point before it is earlier
+
+
+def test_get_coin_value_series_last_point_is_current_not_stale(tmp_path):
+    # Same scenario at the get_coin_value_series level: a coarse tf (1day)
+    # shouldn't leave the last point stale relative to end_ts ("now").
+    ledger = a.reconstruct_ledger(1000.0, 1000.0, [
+        a.TradeDelta(ts=1000.0, cash_delta=-100.0, coin="BTC", qty_delta=1.0, price=100.0, notional_usd=100.0),
+    ])
+    end_ts = 1000.0 + 86400 * 2.5
+    price_df = _price_df({1000.0: 100.0, end_ts: 999.0})
+    out, _ = a.get_coin_value_series(ledger, "BTC", price_df, tf_minutes=1440, start_ts=1000.0, end_ts=end_ts)
+    assert out.index[-1] == end_ts
+    assert out["price"].iloc[-1] == pytest.approx(999.0)
 
 
 def test_get_total_value_series_sums_cash_and_holdings():

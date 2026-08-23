@@ -329,14 +329,12 @@ async def api_account_history(tf: str = "1day", coin: str = None, start: int = N
         result[xk] = out["points"]
         baselines[xk] = out["baseline"]
         if out.get("warning"):
-            msg = out["warning"]["message"]
-            warnings[xk] = msg
-            pt_errors.emit(
-                f"trader-{xk}",
-                level="warning",
-                message=f"Account reconstruction warning ({xk}{f'/{coin}' if coin else ''}): {msg}",
-                detail="The reconstructed account chart may be inaccurate for this period. This does not affect live trading.",
-            )
+            # Returned in the response only — NOT routed through pt_errors.emit().
+            # emit() unconditionally forwards to ntfy with no throttling, and
+            # this endpoint gets hit on every page load/refresh/zoom, which
+            # flooded notifications. Revisit with proper dedup/throttling
+            # before wiring this back into the error panel.
+            warnings[xk] = out["warning"]["message"]
     return {"history": result, "baselines": baselines, "warnings": warnings}
 
 
