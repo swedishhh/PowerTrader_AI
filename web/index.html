@@ -71,8 +71,8 @@
           <button class="actions-item" id="btn-clear-history">
             <span class="actions-item-dot" style="background:var(--text-muted)"></span>
             <span class="actions-item-body">
-              <span class="actions-item-label">Clear History</span>
-              <span class="actions-item-desc">Wipe account value chart data</span>
+              <span class="actions-item-label">Rebuild Account Chart</span>
+              <span class="actions-item-desc">Reset the reconstructed chart cache and rebuild from trade history</span>
             </span>
           </button>
           <div class="actions-sep"></div>
@@ -95,7 +95,6 @@
   <section id="panel-signals" class="panel">
     <div class="panel-header">
       <h2>Coins</h2>
-      <button class="btn-portfolio" id="acct-block-portfolio" title="View portfolio chart">Portfolio ◈</button>
       <div class="view-toggle" id="view-toggle" title="Toggle simple / detailed view">
         <button class="vtog-btn active" data-mode="simple">◇</button>
         <button class="vtog-btn" data-mode="detail">◈</button>
@@ -129,7 +128,8 @@
   <section id="panel-trades" class="panel">
     <div class="panel-header">
       <div class="tab-bar" id="trades-tabs">
-        <button class="tab-btn active" data-tab="history">Trades</button>
+        <button class="tab-btn active" data-tab="accounts">Accounts</button>
+        <button class="tab-btn" data-tab="history">Trades</button>
         <button class="tab-btn" data-tab="compare">Positions</button>
         <button class="tab-btn" data-tab="lth">LTH</button>
         <button class="tab-btn" data-tab="training">Training</button>
@@ -139,7 +139,10 @@
         <button class="tab-btn" data-tab="settings">Settings</button>
       </div>
     </div>
-    <div class="tab-content active" id="tab-history">
+    <div class="tab-content active" id="tab-accounts">
+      <div id="accounts-table-container" class="accounts-table-container"></div>
+    </div>
+    <div class="tab-content" id="tab-history">
       <div id="history-list" class="history-list"></div>
     </div>
     <div class="tab-content" id="tab-compare">

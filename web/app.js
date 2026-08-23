@@ -46,7 +46,8 @@ const state = {
   chartRefreshTimer: null,
   chartMarkersTimer: null,
   chartMode: 'candle',
-  accountRange: 0,
+  accountTf: '1day',
+  accountScope: 'total',
   logRefreshTimer: null,
   cfg: {},
   cfgSchema: {},
@@ -68,10 +69,10 @@ const TF_SECONDS = {
   '1hour': 3600, '2hour': 7200, '4hour': 14400,
   '8hour': 28800, '12hour': 43200, '1day': 86400, '1week': 604800,
 };
-const ACCT_RANGES = [
-  {label: '1D', hours: 24}, {label: '3D', hours: 72}, {label: '1W', hours: 168},
-  {label: '2W', hours: 336}, {label: '1M', hours: 720}, {label: 'ALL', hours: 0},
-];
+// Matches the coin-chart timeframes (excludes the sub-hour ones, which
+// aren't meaningful granularity for account reconstruction) and the
+// server's TF_NAME_TO_MINUTES mapping in pt_web.py.
+const ACCT_TF_LIST = ['1hour', '2hour', '4hour', '8hour', '12hour', '1day', '1week'];
 const CHART_COLORS = {
   bg: '#0B0B14',
   text: '#555570',
@@ -247,6 +248,7 @@ async function init() {
   }
 
   await refreshAll();
+  loadAndRenderAccountsTab();
   connectWS();
 
   _refreshInterval = setInterval(refreshAll, 10000);
@@ -306,6 +308,7 @@ async function refreshAll() {
     populateLogSourceDropdown();
 
     if ($('#tab-compare').classList.contains('active')) loadCompare();
+    if ($('#tab-accounts').classList.contains('active')) loadAndRenderAccountsTab();
     if (coinsData.coins) {
       if (!$('#training-list').querySelector('.train-row')) renderTraining(coinsData.coins);
       else updateTrainingBadges(coinsData.coins);
@@ -740,8 +743,7 @@ function selectCoin(coin) {
   }
 
   $$('.coin-card').forEach(c => c.classList.toggle('active', c.dataset.coin === coin));
-  const pb = $('#acct-block-portfolio');
-  if (pb) pb.classList.remove('active');
+  _setAccountsTabRowActive(null);
 
   $('#chart-coin-label').textContent = coin;
   $('#tf-selector').style.display = '';
@@ -771,9 +773,10 @@ function _replaceCard(grid, oldCard, coin, mode) {
   grid.replaceChild(newCard, oldCard);
 }
 
-function selectAccountChart(hours) {
+function selectAccountChart(tf, scope) {
   state.chartMode = 'account';
-  state.accountRange = hours != null ? hours : state.accountRange;
+  state.accountTf = tf != null ? tf : state.accountTf;
+  state.accountScope = scope != null ? scope : state.accountScope;
   if (!state.acctDisplayMode) state.acctDisplayMode = 'usd';
 
   if (state.cardMode === 'simple' && state._expandedCoin) {
@@ -785,16 +788,15 @@ function selectAccountChart(hours) {
   state.selectedCoin = null;
 
   $$('.coin-card').forEach(c => c.classList.remove('active'));
-  const pb = $('#acct-block-portfolio');
-  if (pb) pb.classList.add('active');
+  _setAccountsTabRowActive(state.accountScope);
 
-  $('#chart-coin-label').textContent = 'PORTFOLIO';
+  $('#chart-coin-label').textContent = state.accountScope === 'total' ? 'PORTFOLIO' : `${state.accountScope} ACCOUNT`;
   $('#tf-selector').style.display = 'none';
   _setChartResetVisible(false);
   $('#coin-position').classList.add('hidden');
   $('#panel-chart').classList.add('mobile-active');
 
-  loadAccountChart(state.accountRange);
+  loadAccountChart(state.accountTf, state.accountScope);
 }
 
 function _setChartResetVisible(v) {
@@ -828,8 +830,7 @@ async function showHistoricChart(coin, tfMinutes) {
   }
 
   $$('.coin-card').forEach(c => c.classList.remove('active'));
-  const pb = $('#acct-block-portfolio');
-  if (pb) pb.classList.remove('active');
+  _setAccountsTabRowActive(null);
 
   const tfLabel = TF_MINUTES_LABEL[tfMinutes] || `${tfMinutes}m`;
   $('#chart-coin-label').textContent = `${coin} · ${tfLabel} (Historic)`;
@@ -1051,7 +1052,7 @@ async function loadChart(coin, tf) {
   resizeObserver.observe(container);
 }
 
-async function loadAccountChart(hours) {
+async function loadAccountChart(tf, scope) {
   const container = $('#chart-container');
   const diffContainer = $('#chart-diff-container');
 
@@ -1069,7 +1070,9 @@ async function loadAccountChart(hours) {
   state._diffSeries = null;
 
   const isPct = state.acctDisplayMode === 'pct';
-  const hasMulti = state.exchangeList.length >= 2;
+  // Diff series (real vs. shadow) is a portfolio-total concept — skip it for
+  // per-coin scope rather than invent per-coin diff semantics.
+  const hasMulti = scope === 'total' && state.exchangeList.length >= 2;
 
   const _fmtUsd     = v => ('$' + v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})).padStart(10);
   const _fmtPct     = v => ((v >= 0 ? '+' : '') + v.toFixed(2) + '%').padStart(8);
@@ -1127,7 +1130,7 @@ async function loadAccountChart(hours) {
   }
 
   // Initial load
-  await _acctApplyData(hours, null, null, null);
+  await _acctApplyData(tf, scope, null, null, null);
   state.chart.timeScale().fitContent();
 
   // Adaptive zoom handler. setData fires visibleTimeRangeChange asynchronously
@@ -1146,7 +1149,7 @@ async function loadAccountChart(hours) {
       const span = range.to - range.from;
       const visibleRange = state.chart?.timeScale().getVisibleRange();
       _unsub();
-      await _acctApplyData(0, Math.floor(range.from - span), Math.ceil(range.to + span), state._acctRangeAbort.signal);
+      await _acctApplyData(tf, scope, Math.floor(range.from - span), Math.ceil(range.to + span), state._acctRangeAbort.signal);
       if (visibleRange && state.chartMode === 'account' && state.chart) state.chart.timeScale().setVisibleRange(visibleRange);
       _resub();
     }, 300);
@@ -1165,15 +1168,15 @@ async function loadAccountChart(hours) {
   });
   resizeObserver.observe(container);
 
-  // Controls: range buttons + $/% toggle
+  // Controls: timeframe buttons (matching the coin-chart granularities) + $/% toggle
   const tfContainer = $('#tf-selector');
   tfContainer.style.display = '';
   tfContainer.innerHTML = '';
-  ACCT_RANGES.forEach(r => {
+  ACCT_TF_LIST.forEach(t => {
     const btn = document.createElement('button');
-    btn.className = 'tf-btn' + (r.hours === hours ? ' active' : '');
-    btn.textContent = r.label;
-    btn.addEventListener('click', () => selectAccountChart(r.hours));
+    btn.className = 'tf-btn' + (t === tf ? ' active' : '');
+    btn.textContent = TF_MINUTES_LABEL[TF_SECONDS[t] / 60] || t;
+    btn.addEventListener('click', () => selectAccountChart(t, scope));
     tfContainer.appendChild(btn);
   });
   const sep = document.createElement('span');
@@ -1183,7 +1186,7 @@ async function loadAccountChart(hours) {
     const btn = document.createElement('button');
     btn.className = 'tf-btn' + (state.acctDisplayMode === mode ? ' active' : '');
     btn.textContent = mode === 'usd' ? '$' : '%';
-    btn.addEventListener('click', () => { state.acctDisplayMode = mode; loadAccountChart(state.accountRange); });
+    btn.addEventListener('click', () => { state.acctDisplayMode = mode; loadAccountChart(state.accountTf, state.accountScope); });
     tfContainer.appendChild(btn);
   });
 
@@ -1194,7 +1197,7 @@ async function loadAccountChart(hours) {
     if (state.chartMode !== 'account' || !state.chart) return;
     const r = state.chart.timeScale().getVisibleRange();
     _unsub();
-    await _acctApplyData(state.accountRange, null, null, null);
+    await _acctApplyData(state.accountTf, state.accountScope, null, null, null);
     if (r && state.chart) state.chart.timeScale().setVisibleRange(r);
     _resub();
   }, (state.cfg.chart_refresh_seconds && state.cfg.chart_refresh_seconds * 1000) || 300_000);
@@ -1229,9 +1232,12 @@ function _buildAccountLegend() {
   }
 }
 
-async function _acctApplyData(hours, start, end, signal) {
+async function _acctApplyData(tf, scope, start, end, signal) {
   try {
-    const qs = (start !== null && end !== null) ? `?start=${start}&end=${end}` : hours > 0 ? `?hours=${hours}` : '';
+    const coin = scope && scope !== 'total' ? scope : null;
+    let qs = `?tf=${encodeURIComponent(tf)}`;
+    if (coin) qs += `&coin=${encodeURIComponent(coin)}`;
+    if (start !== null && end !== null) qs += `&start=${start}&end=${end}`;
     const opts = signal ? {signal} : {};
     const [histData, tradeData] = await Promise.all([
       api('account-history' + qs, opts),
@@ -1239,6 +1245,7 @@ async function _acctApplyData(hours, start, end, signal) {
     ]);
     if (!histData.history || state.chartMode !== 'account') return;
     const histByXk = histData.history;
+    const baselines = histData.baselines || {};
     const pct = state.acctDisplayMode === 'pct';
 
     const pointsByXk = {};
@@ -1246,10 +1253,13 @@ async function _acctApplyData(hours, start, end, signal) {
       const series = state.acctSeries[xk];
       const raw = histByXk[xk] || [];
       if (!series || !raw.length) return;
-      const base = raw[0].total_account_value;
+      // Fixed baseline (account inception for the total view, this coin's
+      // own first-trade notional for a per-coin view) — server-computed so
+      // it stays the same regardless of the currently visible zoom window.
+      const base = baselines[xk];
       const pts = raw.map(h => ({
         time: Math.floor(h.ts),
-        value: pct ? (h.total_account_value - base) / base * 100 : h.total_account_value,
+        value: pct && base ? (h.value - base) / base * 100 : h.value,
       }));
       series.setData(pts);
       pointsByXk[xk] = pts;
@@ -1271,15 +1281,17 @@ async function _acctApplyData(hours, start, end, signal) {
     if (state._acctMarkerSeries && realXk) {
       const refRaw = histByXk[realXk] || [];
       if (refRaw.length) {
-        const base = refRaw[0].total_account_value;
+        const base = baselines[realXk];
         state._acctMarkerSeries.setData(refRaw.map(h => ({
           time: Math.floor(h.ts),
-          value: pct ? (h.total_account_value - base) / base * 100 : h.total_account_value,
+          value: pct && base ? (h.value - base) / base * 100 : h.value,
         })));
         const markers = [];
         state.exchangeList.forEach(xk => {
           if (xk === 'shadow') return;
           ((tradeData.trades || {})[xk] || []).forEach(t => {
+            // Scoped to one coin: only show that coin's own trade markers.
+            if (coin && !(t.symbol || '').toUpperCase().startsWith(`${coin.toUpperCase()}_`)) return;
             const side = (t.side || '').toLowerCase();
             markers.push({
               time: Math.floor(t.ts),
@@ -1584,6 +1596,69 @@ function cmpPct(v) {
   if (v == null || isNaN(v)) return '—';
   const n = Number(v);
   return (n >= 0 ? '+' : '') + n.toFixed(2);
+}
+
+// ── Accounts Tab ──
+
+function _setAccountsTabRowActive(scope) {
+  $$('#accounts-table-container tr.accounts-row').forEach(tr => {
+    tr.classList.toggle('active', tr.dataset.scope === scope);
+  });
+}
+
+async function loadAndRenderAccountsTab() {
+  const container = $('#accounts-table-container');
+  try {
+    const data = await api('account-summary');
+    const summary = data.summary || {};
+    const xks = state.exchangeList.length ? state.exchangeList : Object.keys(summary);
+    if (!xks.length) { container.innerHTML = '<div class="empty-state">No account data</div>'; return; }
+
+    const multi = xks.length >= 2;
+    const c0 = xkColor(xks[0]);
+    const c1 = multi ? xkColor(xks[1]) : c0;
+
+    // Union of every coin that has a position on any exchange, sorted by
+    // largest absolute value (across exchanges) first.
+    const coinSet = new Set();
+    xks.forEach(xk => Object.keys((summary[xk] || {}).coins || {}).forEach(c => coinSet.add(c)));
+    const coins = [...coinSet].sort((a, b) => {
+      const va = Math.max(...xks.map(xk => Math.abs((summary[xk]?.coins?.[a]?.value) || 0)));
+      const vb = Math.max(...xks.map(xk => Math.abs((summary[xk]?.coins?.[b]?.value) || 0)));
+      return vb - va;
+    });
+
+    let html = '<table class="compare-table accounts-table"><thead>';
+    html += '<tr class="compare-hdr-top"><th rowspan="2">Account</th>';
+    html += '<th colspan="2">Value $</th><th colspan="2">%</th></tr><tr class="compare-hdr-sub">';
+    html += `<th style="color:${c0}">${xks[0]}</th><th style="color:${c1}">${multi ? xks[1] : ''}</th>`;
+    html += `<th style="color:${c0}">${xks[0]}</th><th style="color:${c1}">${multi ? xks[1] : ''}</th>`;
+    html += '</tr></thead><tbody>';
+
+    const row = (label, scope, getEntry) => {
+      let r = `<tr class="accounts-row" data-scope="${scope}"><td class="compare-coin">${label}</td>`;
+      xks.forEach(xk => { const e = getEntry(xk); r += `<td>${e ? fmtUSD(e.value) : '—'}</td>`; });
+      xks.forEach(xk => {
+        const e = getEntry(xk);
+        const cls = e && e.pct != null ? (e.pct >= 0 ? 'positive' : 'negative') : '';
+        r += `<td class="${cls}">${e && e.pct != null ? fmtPct(e.pct) : '—'}</td>`;
+      });
+      return r + '</tr>';
+    };
+
+    html += row('TOTAL', 'total', xk => summary[xk]?.total).replace('accounts-row', 'accounts-row compare-totals');
+    coins.forEach(coin => { html += row(coin, coin, xk => summary[xk]?.coins?.[coin]); });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+
+    container.querySelectorAll('tr.accounts-row').forEach(tr => {
+      tr.addEventListener('click', () => selectAccountChart(state.accountTf, tr.dataset.scope));
+    });
+    _setAccountsTabRowActive(state.chartMode === 'account' ? state.accountScope : null);
+  } catch (e) {
+    container.innerHTML = '<div class="empty-state">Failed to load accounts</div>';
+  }
 }
 
 async function loadCompare() {
@@ -2591,6 +2666,7 @@ function setupTabs() {
       $$('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-' + tab));
 
       if (state.logRefreshTimer) { clearInterval(state.logRefreshTimer); state.logRefreshTimer = null; }
+      if (tab === 'accounts') loadAndRenderAccountsTab();
       if (tab === 'history') { state.historyFilterCoin = null; _updateHistoryTabLabel(); loadTradeHistory(); }
       if (tab === 'compare') loadCompare();
       if (tab === 'lth') renderLTH();
@@ -2717,8 +2793,6 @@ function setupButtons() {
   });
   $('#errors-filter-level').addEventListener('change', loadErrors);
   $('#errors-filter-component').addEventListener('change', loadErrors);
-
-  $('#acct-block-portfolio').addEventListener('click', () => selectAccountChart(0));
 }
 
 // ── Timeframes ──

@@ -1821,6 +1821,14 @@ body {
 .compare-table .negative { color: var(--red); }
 
 /* ═══════════════════════════════════════════════════════════
+   Accounts Tab
+   ═══════════════════════════════════════════════════════════ */
+
+.accounts-table tr.accounts-row { cursor: pointer; }
+.accounts-table tr.accounts-row.active td { background: var(--bg-surface); }
+.accounts-table tr.accounts-row.active .compare-coin { color: var(--cyan); }
+
+/* ═══════════════════════════════════════════════════════════
    Data Manager Tab
    ═══════════════════════════════════════════════════════════ */
 

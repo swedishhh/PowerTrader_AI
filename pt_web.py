@@ -23,13 +23,16 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pandas as pd
+import pt_account_analytics
 import pt_errors
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pt_controller import ProcessController
-from pt_env import TRAIN_TF_MINUTES, PTEnv, utcnow, utc_to_ts
+from pt_env import TRAIN_TF_MINUTES, TRAIN_TF_NAMES, PTEnv, utcnow, utc_to_ts
 from pt_models import AccountModel, CoinModel, SystemModel
+
+TF_NAME_TO_MINUTES = dict(zip(TRAIN_TF_NAMES, TRAIN_TF_MINUTES))
 
 PROJECT_DIR = Path(__file__).resolve().parent
 WEB_DIR = PROJECT_DIR / "web"
@@ -173,33 +176,6 @@ def _account_for_exchange(xk: str) -> dict:
     }
 
 
-def _resample(raw: list[dict], interval_s: int = 600) -> list[dict]:
-    """Resample irregular account history to fixed time intervals via linear interpolation."""
-    if len(raw) < 2:
-        return raw
-    t0 = raw[0]["ts"]
-    t1 = raw[-1]["ts"]
-    first_bin = int(t0 // interval_s) * interval_s + interval_s
-    if first_bin > t1:
-        return raw
-    out = []
-    j = 0
-    t = first_bin
-    while t <= t1:
-        while j < len(raw) - 1 and raw[j + 1]["ts"] < t:
-            j += 1
-        a, b = raw[j], raw[j + 1] if j + 1 < len(raw) else raw[j]
-        dt = b["ts"] - a["ts"]
-        if dt > 0:
-            frac = (t - a["ts"]) / dt
-            val = a["total_account_value"] + frac * (b["total_account_value"] - a["total_account_value"])
-        else:
-            val = a["total_account_value"]
-        out.append({"ts": t, "total_account_value": val})
-        t += interval_s
-    return out
-
-
 # ── REST API ──
 
 @app.get("/api/status")
@@ -339,43 +315,39 @@ async def api_trades(limit: int = 250, exchange: str = ""):
 
 
 @app.get("/api/account-history")
-async def api_account_history(hours: float = 0, start: int = None, end: int = None):
-    """Return account value history for all exchanges, resampled to regular intervals."""
+async def api_account_history(tf: str = "1day", coin: str = None, start: int = None, end: int = None):
+    """Reconstructed account value: forward-walked from account inception
+    through trade history, marked to KuCoin candle prices
+    (pt_account_analytics) — continuous across the whole account history,
+    not the old gap-prone periodic-snapshot jsonl. coin=None returns the
+    portfolio total; coin='BTC' returns that coin's own $ position series.
+    tf matches the coin-chart timeframe buttons (1hour..1week)."""
+    tf_minutes = TF_NAME_TO_MINUTES.get(tf, 1440)
+    result, baselines, warnings = {}, {}, {}
+    for xk in _active_accounts():
+        out = pt_account_analytics.build_account_series(env, xk, tf_minutes, coin, start, end)
+        result[xk] = out["points"]
+        baselines[xk] = out["baseline"]
+        if out.get("warning"):
+            msg = out["warning"]["message"]
+            warnings[xk] = msg
+            pt_errors.emit(
+                f"trader-{xk}",
+                level="warning",
+                message=f"Account reconstruction warning ({xk}{f'/{coin}' if coin else ''}): {msg}",
+                detail="The reconstructed account chart may be inaccurate for this period. This does not affect live trading.",
+            )
+    return {"history": result, "baselines": baselines, "warnings": warnings}
+
+
+@app.get("/api/account-summary")
+async def api_account_summary():
+    """Total + per-coin latest $ value and % for every active exchange —
+    powers the Accounts tab table."""
     result = {}
     for xk in _active_accounts():
-        acct = AccountModel(env, xk)
-        raw = acct.account_value_history(limit=0)
-
-        if start and end:
-            # Windowed fetch for adaptive zoom: resample to ~400 points in the window
-            raw = [r for r in raw if start <= r.get("ts", 0) <= end]
-            if len(raw) >= 2:
-                span = raw[-1]["ts"] - raw[0]["ts"]
-                interval = max(60, int(span / 400))
-            else:
-                interval = 600
-        elif hours > 0:
-            cutoff = time.time() - hours * 3600
-            raw = [r for r in raw if r.get("ts", 0) >= cutoff]
-            if hours <= 24:
-                interval = 600
-            elif hours <= 168:
-                interval = 3600
-            else:
-                interval = 14400
-        else:
-            # ALL: target ~400 points across full span
-            if len(raw) >= 2:
-                span = raw[-1]["ts"] - raw[0]["ts"]
-                interval = max(900, int(span / 400))
-            else:
-                interval = 900
-
-        resampled = _resample(raw, interval) if raw else []
-        if raw and resampled and raw[-1]["ts"] > resampled[-1]["ts"]:
-            resampled.append(raw[-1])
-        result[xk] = resampled
-    return {"history": result}
+        result[xk] = pt_account_analytics.build_account_summary(env, xk)
+    return {"summary": result}
 
 
 @app.get("/api/comparison")
@@ -781,12 +753,14 @@ def _refresh_exchange_balance(xk: str, write_history: bool = True):
 
 @app.post("/api/clear-account-history")
 async def api_clear_account_history():
-    """Delete account value history files for all exchanges."""
+    """Reset the reconstructed-ledger cache for all exchanges, forcing a
+    full rebuild on next read. Does NOT touch account_value_history.jsonl —
+    its first entry is the reconstruction's seed anchor (account inception
+    balance) and must never be deleted."""
     for xk in _active_accounts():
-        path = env.account_history_path(xk)
+        cache_path = env.hub_data_xk_dir(xk) / "account_ledger_cache.json"
         try:
-            if path.exists():
-                path.write_text("")
+            cache_path.unlink(missing_ok=True)
         except Exception:
             pass
     return {"ok": True}
