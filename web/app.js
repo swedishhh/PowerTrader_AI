@@ -1654,12 +1654,36 @@ async function loadAndRenderAccountsTab() {
     };
 
     html += row('TOTAL', 'total', xk => summary[xk]?.total).replace('accounts-row', 'accounts-row compare-totals');
+    html += `<tr class="accounts-separator"><td colspan="${1 + xks.length * 2}"></td></tr>`;
     coins.forEach(coin => { html += row(coin, coin, xk => summary[xk]?.coins?.[coin]); });
+
+    // Cross-check: sum of every coin's mark-to-market $/% against the TOTAL
+    // row above. Coin PnL excludes buy-side fees from cost basis (matching
+    // pt_trader.py's own realized_profit_usd convention) while TOTAL is a
+    // pure cash+value reconstruction, so a small residual here (roughly the
+    // account's cumulative trading fees) is expected, not a bug.
+    const sumEntry = xk => {
+      const coinsForXk = summary[xk]?.coins || {};
+      const vals = coins.map(c => coinsForXk[c]).filter(Boolean);
+      if (!vals.length) return null;
+      return {
+        value: vals.reduce((s, e) => s + (e.value || 0), 0),
+        pct: vals.reduce((s, e) => s + (e.pct || 0), 0),
+      };
+    };
+    html += row('Σ Coins', null, sumEntry).replace('accounts-row', 'accounts-row accounts-static');
+
+    // Fees Paid: all-time cumulative trading fees, for reference only — it
+    // runs somewhat higher than the Σ Coins/TOTAL gap above (only buy-side
+    // fees are excluded from per-coin cost basis, sell-side fees are
+    // already netted into both), not an exact reconciling figure.
+    const feesEntry = xk => (summary[xk]?.fees_paid != null ? { value: summary[xk].fees_paid, pct: null } : null);
+    html += row('Fees Paid', null, feesEntry).replace('accounts-row', 'accounts-row accounts-static');
 
     html += '</tbody></table>';
     container.innerHTML = html;
 
-    container.querySelectorAll('tr.accounts-row').forEach(tr => {
+    container.querySelectorAll('tr.accounts-row:not(.accounts-static)').forEach(tr => {
       tr.addEventListener('click', () => selectAccountChart(state.accountTf, tr.dataset.scope));
     });
     _setAccountsTabRowActive(state.chartMode === 'account' ? state.accountScope : null);

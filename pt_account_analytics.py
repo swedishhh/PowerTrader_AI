@@ -62,6 +62,7 @@ class TradeDelta:
     qty_delta: float
     price: float
     notional_usd: float
+    tag: Optional[str] = None
 
 
 def apply_fee_fallback_adjustment(row: dict) -> float:
@@ -134,6 +135,7 @@ def stream_trade_deltas(path: Path, start_offset: int = 0) -> Iterator[tuple[Tra
             qty_delta=qty if side == "buy" else -qty,
             price=price,
             notional_usd=notional,
+            tag=row.get("tag"),
         ), offset
 
 
@@ -172,6 +174,21 @@ def get_trade_history(
     return out
 
 
+def get_total_fees_paid(trade_history_path: Path) -> float:
+    """Cumulative fees_usd (+ any fees_fallback_applied_usd) across every
+    trade — every side, every coin, LTH included, since it's a real cost
+    regardless of which bucket a trade belongs to. Plain context for why
+    Σ Coins doesn't reconcile to TOTAL to the penny: only buy-side fees are
+    excluded from the per-coin cost basis (see reconstruct_ledger's
+    docstring), so this figure runs somewhat higher than that gap, not
+    equal to it — it's not meant to be an exact reconciling term."""
+    total = 0.0
+    for row in get_trade_history(trade_history_path):
+        total += float(row.get("fees_usd") or 0.0)
+        total += float(row.get("fees_fallback_applied_usd") or 0.0)
+    return total
+
+
 def get_coin_realized_pnl(trade_history_path: Path, coin: str) -> dict:
     """Cumulative realized PnL across every closed round-trip sell for one
     coin — the sum of each sell's own realized_profit_usd and pnl_pct
@@ -201,43 +218,74 @@ def get_coin_realized_pnl(trade_history_path: Path, coin: str) -> dict:
 
 def reconstruct_ledger(seed_ts: float, seed_cash: float, deltas: list[TradeDelta]) -> pd.DataFrame:
     """Pure forward cumulative fold, seeded at account inception (cash =
-    seed_cash, every coin qty = 0, every coin cost-basis = 0). Event-level
-    output (one row per trade, plus the seed row), wide-format:
-    index=ts, columns=[cash, qty_<COIN>..., cost_<COIN>...]. Small
-    regardless of raw file size.
+    seed_cash, every coin qty/cost = 0). Event-level output (one row per
+    trade, plus the seed row), wide-format: index=ts, columns=[cash,
+    qty_<COIN>..., bot_qty_<COIN>..., bot_cost_<COIN>...]. Small regardless
+    of raw file size.
 
-    cost_<COIN> is the running $ cost-basis for that coin's open position,
-    mirroring pt_trader.py's own open_positions ledger rules exactly (buy:
-    add the cash spent including fees; sell: reduce proportionally to the
-    fraction of qty sold, snap to zero on a full close) — this is what lets
-    get_coin_mtm_pnl_series mark an open position's unrealized PnL using
-    the same cost-basis the live bot itself would show."""
+    Two quantity tracks per coin, because pt_trader.py itself treats LTH
+    holdings as a walled-off bucket the bot's own accounting never sees:
+    - qty_<COIN>: every buy/sell, LTH included — the real total held on
+      the exchange, needed for get_total_value_series (account net worth
+      must include LTH holdings' value).
+    - bot_qty_<COIN> / bot_cost_<COIN>: LTH-tagged trades excluded
+      entirely, mirroring pt_trader.py's _record_trade exactly (`if tag_u
+      != "LTH":` gates its whole open_positions update) — this is what
+      get_coin_mtm_pnl_series marks unrealized PnL against, matching how
+      get_coin_realized_pnl already excludes LTH sells from realized PnL.
+      Without this split, LTH buys would inflate the per-coin cost basis
+      the bot never actually carries, and per-coin PnL would drift even
+      further from the portfolio's total PnL.
+
+    Note bot_cost_<COIN> accumulates buys' gross notional_usd, not the
+    fee-inclusive cash_delta — this matches pt_trader.py's own cost-basis
+    ledger (confirmed against real trade records' position_cost_used_usd),
+    which excludes buy-side fees from cost. One consequence: summing every
+    coin's realized+unrealized PnL will still run a bit above the
+    portfolio's true cash-based total PnL, by roughly the account's
+    cumulative buy-side trading fees — that gap is real and expected, not
+    a reconstruction bug, since it's inherited from how pt_trader.py itself
+    has always computed realized_profit_usd."""
     ordered = sorted(deltas, key=lambda d: d.ts)
     cash = seed_cash
     qty: dict[str, float] = {}
-    cost: dict[str, float] = {}
+    bot_qty: dict[str, float] = {}
+    bot_cost: dict[str, float] = {}
     rows = [{"ts": seed_ts, "cash": cash}]
     for d in ordered:
         cash += d.cash_delta
-        prev_qty = qty.get(d.coin, 0.0)
-        prev_cost = cost.get(d.coin, 0.0)
-        if d.qty_delta > 0:  # buy: cash spent (incl. fees) adds to cost-basis
-            cost[d.coin] = prev_cost + (-d.cash_delta)
-            qty[d.coin] = prev_qty + d.qty_delta
-        else:  # sell: reduce cost-basis proportionally to qty sold
-            sell_qty = -d.qty_delta
-            frac = min(1.0, sell_qty / prev_qty) if prev_qty > 0 else 1.0
-            remaining_qty = prev_qty + d.qty_delta
-            if remaining_qty <= 1e-8:
-                cost[d.coin] = 0.0
-                qty[d.coin] = 0.0
-            else:
-                cost[d.coin] = prev_cost - (prev_cost * frac)
-                qty[d.coin] = remaining_qty
+        qty[d.coin] = qty.get(d.coin, 0.0) + d.qty_delta
+
+        if str(d.tag or "").upper() != "LTH":
+            prev_qty = bot_qty.get(d.coin, 0.0)
+            prev_cost = bot_cost.get(d.coin, 0.0)
+            if d.qty_delta > 0:  # buy: gross notional (excl. fees) adds to cost-basis
+                # pt_trader.py's own open_positions ledger accumulates usd_cost
+                # from notional_usd, not the fee-inclusive net_usd/cash_delta —
+                # confirmed against real trade records' position_cost_used_usd
+                # (e.g. buy notional_usd=10.62174 -> next sell's
+                # position_cost_used_usd=10.62, not net_usd's 10.66426).
+                # Must match exactly so unrealized PnL (marked against this
+                # cost) is on the same basis as realized_profit_usd (which
+                # also excludes buy-side fees from cost_used).
+                bot_cost[d.coin] = prev_cost + d.notional_usd
+                bot_qty[d.coin] = prev_qty + d.qty_delta
+            else:  # sell: reduce cost-basis proportionally to qty sold
+                sell_qty = -d.qty_delta
+                frac = min(1.0, sell_qty / prev_qty) if prev_qty > 0 else 1.0
+                remaining_qty = prev_qty + d.qty_delta
+                if remaining_qty <= 1e-8:
+                    bot_cost[d.coin] = 0.0
+                    bot_qty[d.coin] = 0.0
+                else:
+                    bot_cost[d.coin] = prev_cost - (prev_cost * frac)
+                    bot_qty[d.coin] = remaining_qty
+
         rows.append({
             "ts": d.ts, "cash": cash,
             **{f"qty_{c}": v for c, v in qty.items()},
-            **{f"cost_{c}": v for c, v in cost.items()},
+            **{f"bot_qty_{c}": v for c, v in bot_qty.items()},
+            **{f"bot_cost_{c}": v for c, v in bot_cost.items()},
         })
     df = pd.DataFrame(rows).set_index("ts").sort_index()
     return df.fillna(0.0)
@@ -415,13 +463,23 @@ def get_coin_mtm_pnl_series(
     round trips (matching get_coin_realized_pnl's semantics — the user's
     own definition: 3 trades at 4.5/5.5/3.6% sum to 13.6%, not compounded),
     plus the open position's own current % on top, uncompounded with the
-    rest. Returns (DataFrame[pnl_usd, pnl_pct], warning|None)."""
+    rest. Unrealized PnL is marked against the bot-only qty/cost-basis
+    (bot_qty_<COIN>/bot_cost_<COIN>, LTH excluded) — not the LTH-inclusive
+    qty_<COIN> get_coin_value_series itself reports — so that summing this
+    across every coin tracks the portfolio's total $ PnL closely (not
+    exactly — see reconstruct_ledger's docstring for the small residual
+    from buy-side fees excluded from cost basis); see
+    reconstruct_ledger's docstring for why the two qty tracks exist.
+    Returns (DataFrame[pnl_usd, pnl_pct], warning|None)."""
     value_out, warning = get_coin_value_series(
         ledger, coin, price_df, tf_minutes, start_ts, end_ts, entry_deltas
     )
     grid = value_out.index
-    qty = value_out["qty"]
     price = value_out["price"]
+
+    bot_qty_col = f"bot_qty_{coin}"
+    bot_qty_series = ledger[bot_qty_col] if bot_qty_col in ledger.columns else pd.Series(dtype=float)
+    qty = _asof_into_grid(grid, bot_qty_series, fill=0.0)
 
     sells = [
         r for r in get_trade_history(trade_history_path, coin=coin)
@@ -445,7 +503,7 @@ def get_coin_mtm_pnl_series(
     realized_usd = _asof_into_grid(grid, realized_usd_series, fill=0.0)
     realized_pct = _asof_into_grid(grid, realized_pct_series, fill=0.0)
 
-    cost_col = f"cost_{coin}"
+    cost_col = f"bot_cost_{coin}"
     cost_series = ledger[cost_col] if cost_col in ledger.columns else pd.Series(dtype=float)
     cost = _asof_into_grid(grid, cost_series, fill=0.0)
 
@@ -674,8 +732,9 @@ def _read_live_total(env, xk: str) -> Optional[float]:
 
 
 def build_account_summary(env, xk: str) -> dict:
-    """{"total": {value, pct}, "coins": {SYM: {value, pct, trade_count}, ...}}
-    — latest point only, cheap. Powers the Accounts-tab table.
+    """{"total": {value, pct}, "coins": {SYM: {value, pct, trade_count}, ...},
+    "fees_paid": float} — latest point only, cheap. Powers the Accounts-tab
+    table. fees_paid is all-time cumulative, see get_total_fees_paid.
 
     Total reflects current account value (cash + open holdings marked to
     market), same concept as the portfolio chart. Per-coin reflects
@@ -733,4 +792,10 @@ def build_account_summary(env, xk: str) -> dict:
     total_value = cash + holdings_total
     total_pct = float(get_pct_series(pd.Series([total_value]), seed_cash).iloc[0])
 
-    return {"total": {"value": total_value, "pct": total_pct}, "coins": result_coins}
+    fees_paid = get_total_fees_paid(trade_history_path)
+
+    return {
+        "total": {"value": total_value, "pct": total_pct},
+        "coins": result_coins,
+        "fees_paid": fees_paid,
+    }

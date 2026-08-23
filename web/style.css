@@ -1828,6 +1828,18 @@ body {
 .accounts-table tr.accounts-row.active td { background: var(--bg-surface); }
 .accounts-table tr.accounts-row.active .compare-coin { color: var(--cyan); }
 
+.accounts-table tr.accounts-separator td {
+  padding: 0;
+  height: 1px;
+  background: var(--border);
+}
+.accounts-table tr.accounts-static {
+  cursor: default;
+  font-style: italic;
+  opacity: 0.75;
+}
+.accounts-table tr.accounts-static td { border-top: 1px dashed var(--border); }
+
 /* ═══════════════════════════════════════════════════════════
    Data Manager Tab
    ═══════════════════════════════════════════════════════════ */

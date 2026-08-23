@@ -211,6 +211,31 @@ def test_get_coin_realized_pnl_sums_across_round_trips(tmp_path):
     assert result["trade_count"] == 3
 
 
+def test_get_total_fees_paid_sums_fees_and_fallback_across_all_trades(tmp_path):
+    # All-time cumulative fees_usd + fees_fallback_applied_usd, every side,
+    # every coin, LTH included — a real cost regardless of bucket.
+    path = tmp_path / "trade_history.jsonl"
+
+    def _line(side, symbol, fees_usd, fees_fallback=0.0, tag=None):
+        return json.dumps({
+            "ts": "2026-01-01T00:00:00Z", "side": side, "tag": tag, "symbol": symbol,
+            "qty": 1.0, "price": 1.0, "notional_usd": 1.0, "net_usd": 1.0,
+            "avg_cost_basis": None, "pnl_pct": None, "fees_usd": fees_usd,
+            "fees_missing": fees_fallback > 0.0, "fees_fallback_applied_usd": fees_fallback,
+            "realized_profit_usd": None, "order_id": "x",
+            "position_cost_used_usd": None, "position_cost_after_usd": None,
+        })
+
+    path.write_text("\n".join([
+        _line("buy", "BTC_USD", 0.04),
+        _line("sell", "BTC_USD", 0.05),
+        _line("buy", "ETH_USD", 0.02, tag="LTH"),  # LTH fees still counted
+        _line("sell", "ADA_USD", 0.0, fees_fallback=0.02),  # fees_missing fallback
+    ]) + "\n")
+
+    assert a.get_total_fees_paid(path) == pytest.approx(0.04 + 0.05 + 0.02 + 0.02)
+
+
 def test_get_coin_realized_pnl_ignores_open_position_no_sell(tmp_path):
     path = tmp_path / "trade_history.jsonl"
     path.write_text(_trade_line("2026-01-01T00:00:00Z", "buy", "BTC_USD", 0.1, 100.0) + "\n")
@@ -266,23 +291,67 @@ def test_reconstruct_ledger_tracks_cost_basis_like_pt_trader():
         a.TradeDelta(ts=1040.0, cash_delta=14.0, coin="BTC", qty_delta=-0.1, price=140.0, notional_usd=14.0),
     ]
     ledger = a.reconstruct_ledger(seed_ts, 0.0, deltas)
-    assert ledger["cost_BTC"].iloc[1] == pytest.approx(10.0)
-    assert ledger["cost_BTC"].iloc[2] == pytest.approx(22.0)
-    assert ledger["cost_BTC"].iloc[3] == pytest.approx(11.0)
-    assert ledger["qty_BTC"].iloc[3] == pytest.approx(0.1)
-    assert ledger["cost_BTC"].iloc[4] == 0.0  # snapped to zero on full close
+    assert ledger["bot_cost_BTC"].iloc[1] == pytest.approx(10.0)
+    assert ledger["bot_cost_BTC"].iloc[2] == pytest.approx(22.0)
+    assert ledger["bot_cost_BTC"].iloc[3] == pytest.approx(11.0)
+    assert ledger["bot_qty_BTC"].iloc[3] == pytest.approx(0.1)
+    assert ledger["bot_cost_BTC"].iloc[4] == 0.0  # snapped to zero on full close
+    assert ledger["bot_qty_BTC"].iloc[4] == 0.0
+    # qty_BTC (LTH-inclusive, used for Total) tracks identically here since
+    # none of these trades are LTH-tagged
     assert ledger["qty_BTC"].iloc[4] == 0.0
 
 
-def test_reconstruct_ledger_ignores_tag_field_entirely():
-    # LTH-tagged trades must contribute identically to untagged ones —
-    # tag only gates the separate P&L ledger in pt_trader.py, not the
-    # trade record itself, and TradeDelta doesn't even carry tag.
+def test_reconstruct_ledger_cost_basis_uses_gross_notional_not_fee_inclusive_cash():
+    # pt_trader.py's own open_positions ledger accumulates usd_cost from a
+    # buy's gross notional_usd, not the fee-inclusive net_usd/cash_delta —
+    # confirmed against real trade records' position_cost_used_usd on the
+    # following sell (e.g. buy notional_usd=10.62 -> next sell's
+    # position_cost_used_usd=10.62, not the fee-inclusive net_usd=10.66).
+    # bot_cost_<COIN> must match this exactly so unrealized PnL is computed
+    # on the same basis as realized_profit_usd (which also excludes
+    # buy-side fees from cost_used) — otherwise the two would silently use
+    # different cost conventions within the same per-coin PnL series.
     seed_ts = 1000.0
-    lth_delta = a.TradeDelta(ts=1010.0, cash_delta=-500.0, coin="BTC", qty_delta=1.0, price=500.0, notional_usd=500.0)
-    ledger = a.reconstruct_ledger(seed_ts, 1000.0, [lth_delta])
+    deltas = [
+        # buy 1 BTC: notional=100, but $0.40 fee makes cash_delta=-100.40
+        a.TradeDelta(ts=1010.0, cash_delta=-100.40, coin="BTC", qty_delta=1.0, price=100.0, notional_usd=100.0),
+    ]
+    ledger = a.reconstruct_ledger(seed_ts, 0.0, deltas)
+    assert ledger["bot_cost_BTC"].iloc[-1] == pytest.approx(100.0)
+    assert ledger["cash"].iloc[-1] == pytest.approx(-100.40)
+
+
+def test_reconstruct_ledger_lth_trades_excluded_from_bot_qty_and_cost():
+    # LTH trades are a walled-off bucket pt_trader.py's own bot ledger never
+    # sees (_record_trade's whole open_positions update is skipped for
+    # tag=="LTH") — qty_<COIN> (used for Total/net-worth) still includes
+    # them since they're real exchange holdings, but bot_qty_/bot_cost_
+    # (used for per-coin unrealized PnL) must not.
+    seed_ts = 1000.0
+    lth_buy = a.TradeDelta(
+        ts=1010.0, cash_delta=-500.0, coin="BTC", qty_delta=1.0,
+        price=500.0, notional_usd=500.0, tag="LTH",
+    )
+    ledger = a.reconstruct_ledger(seed_ts, 1000.0, [lth_buy])
     assert ledger["qty_BTC"].iloc[-1] == pytest.approx(1.0)
     assert ledger["cash"].iloc[-1] == pytest.approx(500.0)
+    assert "bot_qty_BTC" not in ledger.columns or ledger["bot_qty_BTC"].iloc[-1] == 0.0
+    assert "bot_cost_BTC" not in ledger.columns or ledger["bot_cost_BTC"].iloc[-1] == 0.0
+
+
+def test_reconstruct_ledger_mixed_lth_and_bot_trades_track_separately():
+    seed_ts = 1000.0
+    deltas = [
+        a.TradeDelta(ts=1010.0, cash_delta=-100.0, coin="BTC", qty_delta=1.0, price=100.0, notional_usd=100.0),
+        a.TradeDelta(ts=1020.0, cash_delta=-50.0, coin="BTC", qty_delta=0.5, price=100.0, notional_usd=50.0, tag="LTH"),
+    ]
+    ledger = a.reconstruct_ledger(seed_ts, 1000.0, deltas)
+    # qty_BTC includes both bot and LTH: 1.0 + 0.5 = 1.5
+    assert ledger["qty_BTC"].iloc[-1] == pytest.approx(1.5)
+    # bot_qty_BTC / bot_cost_BTC reflect only the non-LTH buy
+    assert ledger["bot_qty_BTC"].iloc[-1] == pytest.approx(1.0)
+    assert ledger["bot_cost_BTC"].iloc[-1] == pytest.approx(100.0)
 
 
 def test_get_coin_entry_baseline():
@@ -411,6 +480,44 @@ def test_get_coin_mtm_pnl_series_open_position_unrealized_only(tmp_path):
     # qty=1, cost_basis=100, mark=150 -> unrealized $=50, %=50; no closed trades -> realized=0
     assert out["pnl_usd"].iloc[-1] == pytest.approx(50.0)
     assert out["pnl_pct"].iloc[-1] == pytest.approx(50.0)
+
+
+def test_sum_of_per_coin_pnl_matches_total_pnl_when_no_lth(tmp_path):
+    # The identity the user asked about: sum(per-coin $ PnL) should equal
+    # total_value - seed_cash, PROVIDED there's no LTH activity (LTH sits
+    # outside the bot's own PnL tracking by design, same as pt_trader.py).
+    path = tmp_path / "trade_history.jsonl"
+    path.write_text("\n".join([
+        _trade_line("2026-01-01T00:00:00Z", "buy", "BTC_USD", 1.0, 100.0),
+        _sell_line("2026-01-01T01:00:00Z", "BTC_USD", 50.0, 50.0),
+        _trade_line("2026-01-01T02:00:00Z", "buy", "ETH_USD", 2.0, 50.0),
+    ]) + "\n")
+    ts0 = a.utc_to_ts("2026-01-01T00:00:00Z")
+    ts1 = a.utc_to_ts("2026-01-01T01:00:00Z")
+    ts2 = a.utc_to_ts("2026-01-01T02:00:00Z")
+    deltas = [
+        a.TradeDelta(ts=ts0, cash_delta=-100.0, coin="BTC", qty_delta=1.0, price=100.0, notional_usd=100.0),
+        a.TradeDelta(ts=ts1, cash_delta=150.0, coin="BTC", qty_delta=-1.0, price=150.0, notional_usd=150.0),
+        a.TradeDelta(ts=ts2, cash_delta=-100.0, coin="ETH", qty_delta=2.0, price=50.0, notional_usd=100.0),
+    ]
+    seed_cash = 1000.0
+    ledger = a.reconstruct_ledger(ts0 - 3600, seed_cash, deltas)
+    end_ts = ts2 + 3600
+
+    btc_prices = _price_df({ts0: 100.0, end_ts: 100.0})  # BTC fully closed, price irrelevant
+    eth_prices = _price_df({ts0: 50.0, end_ts: 60.0})    # ETH open, marked up to 60
+
+    btc_out, _ = a.get_coin_mtm_pnl_series(ledger, "BTC", btc_prices, 60, ts0 - 3600, end_ts, path, deltas)
+    eth_out, _ = a.get_coin_mtm_pnl_series(ledger, "ETH", eth_prices, 60, ts0 - 3600, end_ts, path, deltas)
+    sum_coin_pnl = btc_out["pnl_usd"].iloc[-1] + eth_out["pnl_usd"].iloc[-1]
+
+    total_out, _ = a.get_total_value_series(
+        ledger, {"BTC": btc_prices, "ETH": eth_prices}, 60, ts0 - 3600, end_ts, deltas
+    )
+    total_pnl = total_out["total_account_value"].iloc[-1] - seed_cash
+
+    assert sum_coin_pnl == pytest.approx(total_pnl)
+    assert sum_coin_pnl == pytest.approx(50.0 + 20.0)  # BTC realized +50, ETH unrealized +20
 
 
 def test_get_coin_mtm_pnl_series_sums_realized_and_open_unrealized(tmp_path):
