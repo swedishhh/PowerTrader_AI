@@ -787,7 +787,17 @@ def step_coin(sym: str):
         high_new_price = start_price
         low_new_price = start_price
 
-    if perfects[tf_choice_index] == "inactive":
+    # A weighted-memory aggregate can occasionally produce diff < -1, making
+    # high_new_price/low_new_price non-positive. Besides having no economic
+    # meaning, a non-positive bound can hang the gap-walk further below
+    # (found via backtest replay on TRX/ADA — see backtest/thinker.py's
+    # compute_tf_prices for the root cause). Treat it as inactive for this
+    # bar rather than feed a negative price into the bound rebuild.
+    if (
+        perfects[tf_choice_index] == "inactive"
+        or high_new_price <= 0
+        or low_new_price <= 0
+    ):
         del high_tf_prices[tf_choice_index]
         high_tf_prices.insert(tf_choice_index, start_price)
         del low_tf_prices[tf_choice_index]
