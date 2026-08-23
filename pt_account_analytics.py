@@ -201,17 +201,44 @@ def get_coin_realized_pnl(trade_history_path: Path, coin: str) -> dict:
 
 def reconstruct_ledger(seed_ts: float, seed_cash: float, deltas: list[TradeDelta]) -> pd.DataFrame:
     """Pure forward cumulative fold, seeded at account inception (cash =
-    seed_cash, every coin qty = 0). Event-level output (one row per trade,
-    plus the seed row), wide-format: index=ts, columns=[cash, qty_<COIN>...].
-    Small regardless of raw file size."""
+    seed_cash, every coin qty = 0, every coin cost-basis = 0). Event-level
+    output (one row per trade, plus the seed row), wide-format:
+    index=ts, columns=[cash, qty_<COIN>..., cost_<COIN>...]. Small
+    regardless of raw file size.
+
+    cost_<COIN> is the running $ cost-basis for that coin's open position,
+    mirroring pt_trader.py's own open_positions ledger rules exactly (buy:
+    add the cash spent including fees; sell: reduce proportionally to the
+    fraction of qty sold, snap to zero on a full close) — this is what lets
+    get_coin_mtm_pnl_series mark an open position's unrealized PnL using
+    the same cost-basis the live bot itself would show."""
     ordered = sorted(deltas, key=lambda d: d.ts)
     cash = seed_cash
     qty: dict[str, float] = {}
+    cost: dict[str, float] = {}
     rows = [{"ts": seed_ts, "cash": cash}]
     for d in ordered:
         cash += d.cash_delta
-        qty[d.coin] = qty.get(d.coin, 0.0) + d.qty_delta
-        rows.append({"ts": d.ts, "cash": cash, **{f"qty_{c}": v for c, v in qty.items()}})
+        prev_qty = qty.get(d.coin, 0.0)
+        prev_cost = cost.get(d.coin, 0.0)
+        if d.qty_delta > 0:  # buy: cash spent (incl. fees) adds to cost-basis
+            cost[d.coin] = prev_cost + (-d.cash_delta)
+            qty[d.coin] = prev_qty + d.qty_delta
+        else:  # sell: reduce cost-basis proportionally to qty sold
+            sell_qty = -d.qty_delta
+            frac = min(1.0, sell_qty / prev_qty) if prev_qty > 0 else 1.0
+            remaining_qty = prev_qty + d.qty_delta
+            if remaining_qty <= 1e-8:
+                cost[d.coin] = 0.0
+                qty[d.coin] = 0.0
+            else:
+                cost[d.coin] = prev_cost - (prev_cost * frac)
+                qty[d.coin] = remaining_qty
+        rows.append({
+            "ts": d.ts, "cash": cash,
+            **{f"qty_{c}": v for c, v in qty.items()},
+            **{f"cost_{c}": v for c, v in cost.items()},
+        })
     df = pd.DataFrame(rows).set_index("ts").sort_index()
     return df.fillna(0.0)
 
@@ -363,6 +390,76 @@ def get_coin_value_series(
 
     out = pd.DataFrame({"qty": qty, "price": price})
     out["value"] = out["qty"] * out["price"]
+    return out, warning
+
+
+def get_coin_mtm_pnl_series(
+    ledger: pd.DataFrame,
+    coin: str,
+    price_df: pd.DataFrame,
+    tf_minutes: int,
+    start_ts: float,
+    end_ts: float,
+    trade_history_path: Path,
+    entry_deltas: Optional[list[TradeDelta]] = None,
+) -> tuple[pd.DataFrame, Optional[str]]:
+    """Cumulative mark-to-market PnL(t) for one coin — realized PnL from
+    every closed round trip up to t, PLUS the currently-open position's
+    unrealized PnL at t (marked to price_df using the same cost-basis
+    reconstruct_ledger tracks), if any. This is the "how has my PnL on
+    this coin evolved" view, distinct from get_coin_value_series (raw
+    position value, ignores cost basis) and get_coin_realized_pnl (a
+    single now-snapshot, ignores any currently-open position).
+
+    $ is a plain sum (realized-to-date + unrealized). % is additive across
+    round trips (matching get_coin_realized_pnl's semantics — the user's
+    own definition: 3 trades at 4.5/5.5/3.6% sum to 13.6%, not compounded),
+    plus the open position's own current % on top, uncompounded with the
+    rest. Returns (DataFrame[pnl_usd, pnl_pct], warning|None)."""
+    value_out, warning = get_coin_value_series(
+        ledger, coin, price_df, tf_minutes, start_ts, end_ts, entry_deltas
+    )
+    grid = value_out.index
+    qty = value_out["qty"]
+    price = value_out["price"]
+
+    sells = [
+        r for r in get_trade_history(trade_history_path, coin=coin)
+        if r.get("side") == "sell" and str(r.get("tag") or "").upper() != "LTH"
+    ]
+    sells.sort(key=lambda r: utc_to_ts(r["ts"]))
+    if sells:
+        sell_ts = [utc_to_ts(r["ts"]) for r in sells]
+        realized_usd_series = pd.Series(
+            pd.Series([float(r.get("realized_profit_usd") or 0.0) for r in sells]).cumsum().values,
+            index=sell_ts,
+        )
+        realized_pct_series = pd.Series(
+            pd.Series([float(r.get("pnl_pct") or 0.0) for r in sells]).cumsum().values,
+            index=sell_ts,
+        )
+    else:
+        realized_usd_series = pd.Series(dtype=float)
+        realized_pct_series = pd.Series(dtype=float)
+
+    realized_usd = _asof_into_grid(grid, realized_usd_series, fill=0.0)
+    realized_pct = _asof_into_grid(grid, realized_pct_series, fill=0.0)
+
+    cost_col = f"cost_{coin}"
+    cost_series = ledger[cost_col] if cost_col in ledger.columns else pd.Series(dtype=float)
+    cost = _asof_into_grid(grid, cost_series, fill=0.0)
+
+    is_open = qty > 1e-12
+    avg_cost_basis = (cost / qty).where(is_open, 0.0)
+    unrealized_usd = (qty * (price - avg_cost_basis)).where(is_open, 0.0)
+    unrealized_pct = (
+        (price / avg_cost_basis - 1.0) * 100.0
+    ).where(is_open & (avg_cost_basis > 0), 0.0)
+
+    out = pd.DataFrame({
+        "pnl_usd": realized_usd + unrealized_usd,
+        "pnl_pct": realized_pct + unrealized_pct,
+    }, index=grid)
     return out, warning
 
 
@@ -527,34 +624,39 @@ def build_account_series(
         for c in coins
     }
 
-    warning = None
     if coin is not None:
-        coin_out, w = get_coin_value_series(
+        # Per-coin: mark-to-market PnL (realized-to-date + unrealized on any
+        # currently-open position), not raw position value. $ and % are each
+        # independently meaningful here (% is an additive sum across round
+        # trips, not a baseline-relative fraction of $) so both are returned
+        # per point rather than one value + a client-side baseline division.
+        pnl_out, w = get_coin_mtm_pnl_series(
             ledger, coin, price_sources.get(coin, pd.DataFrame()),
-            tf_minutes, range_start, range_end, deltas,
+            tf_minutes, range_start, range_end, env.trade_history_path(xk), deltas,
         )
-        baseline = get_coin_entry_baseline(deltas, coin)
-        value = coin_out["value"]
-        if w:
-            warning = {"message": w}
-    else:
-        total_out, warnings_list = get_total_value_series(
-            ledger, price_sources, tf_minutes, range_start, range_end, deltas
-        )
-        baseline = seed_cash
-        value = total_out["total_account_value"]
-        if warnings_list:
-            warning = {"message": "; ".join(warnings_list)}
+        warning = {"message": w} if w else None
+        points = [
+            {"ts": int(ts), "value": float(row["pnl_usd"]), "pct": float(row["pnl_pct"])}
+            for ts, row in pnl_out.iterrows() if pd.notna(row["pnl_usd"])
+        ]
+        return {"points": points, "baseline": None, "warning": warning}
 
-        live = _read_live_total(env, xk)
-        if live is not None and not value.empty:
-            check = validate_against_live(float(value.iloc[-1]), live)
-            if not check["ok"]:
-                msg = (
-                    f"Reconstructed total (${value.iloc[-1]:,.2f}) differs from live "
-                    f"snapshot (${live:,.2f}) by {check['diff_pct']:.2f}%"
-                )
-                warning = {"message": msg} if warning is None else {"message": warning["message"] + "; " + msg}
+    total_out, warnings_list = get_total_value_series(
+        ledger, price_sources, tf_minutes, range_start, range_end, deltas
+    )
+    baseline = seed_cash
+    value = total_out["total_account_value"]
+    warning = {"message": "; ".join(warnings_list)} if warnings_list else None
+
+    live = _read_live_total(env, xk)
+    if live is not None and not value.empty:
+        check = validate_against_live(float(value.iloc[-1]), live)
+        if not check["ok"]:
+            msg = (
+                f"Reconstructed total (${value.iloc[-1]:,.2f}) differs from live "
+                f"snapshot (${live:,.2f}) by {check['diff_pct']:.2f}%"
+            )
+            warning = {"message": msg} if warning is None else {"message": warning["message"] + "; " + msg}
 
     points = [{"ts": int(ts), "value": float(v)} for ts, v in value.items() if pd.notna(v)]
     return {"points": points, "baseline": baseline, "warning": warning}
@@ -577,10 +679,11 @@ def build_account_summary(env, xk: str) -> dict:
 
     Total reflects current account value (cash + open holdings marked to
     market), same concept as the portfolio chart. Per-coin reflects
-    cumulative REALIZED PnL across closed round-trip sells only (sum of
-    each sell's own realized_profit_usd / pnl_pct) — deliberately NOT the
-    notional currently in play, so an open position doesn't show as "value"
-    until it's actually been sold. See get_coin_realized_pnl."""
+    mark-to-market PnL: cumulative realized PnL across closed round-trip
+    sells, PLUS the currently-open position's unrealized PnL if any — the
+    same "now" point as get_coin_mtm_pnl_series's chart series, not a
+    separately computed snapshot. pct is None only when there's neither a
+    closed round trip nor an open position (nothing to report yet)."""
     price_source = _default_price_source(env)
     seed = _read_seed(env.account_history_path(xk))
     if seed is None:
@@ -602,7 +705,7 @@ def build_account_summary(env, xk: str) -> dict:
         qty = float(qty_series.iloc[-1]) if not qty_series.empty else 0.0
 
         # Current notional still needed for the Total row below, even though
-        # the per-coin row itself now shows realized PnL, not this.
+        # the per-coin row itself shows mark-to-market PnL, not this.
         price_df = get_price_series(coin, PRICE_FETCH_TF_MINUTES, now_ts - 86400, now_ts, price_source)
         if not price_df.empty:
             current_price = float(price_df["close"].iloc[-1])
@@ -611,11 +714,19 @@ def build_account_summary(env, xk: str) -> dict:
             current_price = coin_deltas[-1].price if coin_deltas else 0.0
         holdings_total += qty * current_price
 
-        pnl = get_coin_realized_pnl(trade_history_path, coin)
+        # Single "now" point of the same mark-to-market series the per-coin
+        # chart shows — deliberately the same function, not a separately
+        # hand-rolled "current" computation, so the table and the chart can
+        # never drift apart the way Total's two paths once did.
+        mtm_out, _ = get_coin_mtm_pnl_series(
+            ledger, coin, price_df, tf_minutes=1, start_ts=now_ts, end_ts=now_ts,
+            trade_history_path=trade_history_path, entry_deltas=deltas,
+        )
+        trade_count = get_coin_realized_pnl(trade_history_path, coin)["trade_count"]
         result_coins[coin] = {
-            "value": pnl["realized_usd"],
-            "pct": pnl["realized_pct"] if pnl["trade_count"] > 0 else None,
-            "trade_count": pnl["trade_count"],
+            "value": float(mtm_out["pnl_usd"].iloc[-1]),
+            "pct": float(mtm_out["pnl_pct"].iloc[-1]) if (trade_count > 0 or qty > 1e-12) else None,
+            "trade_count": trade_count,
         }
 
     cash = float(ledger["cash"].iloc[-1]) if not ledger.empty else seed_cash

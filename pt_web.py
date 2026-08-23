@@ -319,9 +319,17 @@ async def api_account_history(tf: str = "1day", coin: str = None, start: int = N
     """Reconstructed account value: forward-walked from account inception
     through trade history, marked to KuCoin candle prices
     (pt_account_analytics) — continuous across the whole account history,
-    not the old gap-prone periodic-snapshot jsonl. coin=None returns the
-    portfolio total; coin='BTC' returns that coin's own $ position series.
-    tf matches the coin-chart timeframe buttons (1hour..1week)."""
+    not the old gap-prone periodic-snapshot jsonl. tf matches the
+    coin-chart timeframe buttons (1hour..1week).
+
+    coin=None: portfolio total. Each point is {ts, value} in $; convert to
+    % client-side via the returned baseline (account-inception value).
+
+    coin='BTC': that coin's mark-to-market PnL (realized-to-date + any
+    open position's unrealized PnL). Each point already carries both
+    {ts, value ($), pct (%)} since % here is an additive sum across round
+    trips, not a baseline-relative fraction of $ — baseline is null for
+    this case, nothing to derive %. from."""
     tf_minutes = TF_NAME_TO_MINUTES.get(tf, 1440)
     result, baselines, warnings = {}, {}, {}
     for xk in _active_accounts():

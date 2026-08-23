@@ -253,6 +253,27 @@ def test_reconstruct_ledger_cumulative_cash_and_qty():
     assert ledger["qty_ETH"].iloc[0] == 0.0
 
 
+def test_reconstruct_ledger_tracks_cost_basis_like_pt_trader():
+    seed_ts = 1000.0
+    deltas = [
+        # buy 0.1 BTC for $10 (incl fees) -> cost=10, qty=0.1
+        a.TradeDelta(ts=1010.0, cash_delta=-10.0, coin="BTC", qty_delta=0.1, price=100.0, notional_usd=10.0),
+        # buy another 0.1 BTC for $12 -> cost=22, qty=0.2
+        a.TradeDelta(ts=1020.0, cash_delta=-12.0, coin="BTC", qty_delta=0.1, price=120.0, notional_usd=12.0),
+        # sell half (0.1 of 0.2) -> proportional cost reduction: cost -= 22*0.5 = 11 -> cost=11, qty=0.1
+        a.TradeDelta(ts=1030.0, cash_delta=13.0, coin="BTC", qty_delta=-0.1, price=130.0, notional_usd=13.0),
+        # sell the rest -> full close, snap to zero
+        a.TradeDelta(ts=1040.0, cash_delta=14.0, coin="BTC", qty_delta=-0.1, price=140.0, notional_usd=14.0),
+    ]
+    ledger = a.reconstruct_ledger(seed_ts, 0.0, deltas)
+    assert ledger["cost_BTC"].iloc[1] == pytest.approx(10.0)
+    assert ledger["cost_BTC"].iloc[2] == pytest.approx(22.0)
+    assert ledger["cost_BTC"].iloc[3] == pytest.approx(11.0)
+    assert ledger["qty_BTC"].iloc[3] == pytest.approx(0.1)
+    assert ledger["cost_BTC"].iloc[4] == 0.0  # snapped to zero on full close
+    assert ledger["qty_BTC"].iloc[4] == 0.0
+
+
 def test_reconstruct_ledger_ignores_tag_field_entirely():
     # LTH-tagged trades must contribute identically to untagged ones —
     # tag only gates the separate P&L ledger in pt_trader.py, not the
@@ -344,6 +365,80 @@ def test_get_total_value_series_sums_cash_and_holdings():
     assert warnings == []
     # cash = 1000 - 100 = 900, holdings = 1 * 100 = 100 -> total = 1000
     assert out["total_account_value"].iloc[-1] == pytest.approx(1000.0)
+
+
+# ---------------------------------------------------------------------------
+# get_coin_mtm_pnl_series
+# ---------------------------------------------------------------------------
+
+
+def test_get_coin_mtm_pnl_series_fully_closed_matches_realized(tmp_path):
+    path = tmp_path / "trade_history.jsonl"
+    path.write_text("\n".join([
+        _trade_line("2026-01-01T00:00:00Z", "buy", "BTC_USD", 1.0, 100.0),
+        _sell_line("2026-01-01T01:00:00Z", "BTC_USD", 10.0, 10.0),
+    ]) + "\n")
+    buy_ts = a.utc_to_ts("2026-01-01T00:00:00Z")
+    sell_ts = a.utc_to_ts("2026-01-01T01:00:00Z")
+    deltas = [
+        a.TradeDelta(ts=buy_ts, cash_delta=-100.0, coin="BTC", qty_delta=1.0, price=100.0, notional_usd=100.0),
+        a.TradeDelta(ts=sell_ts, cash_delta=110.0, coin="BTC", qty_delta=-1.0, price=110.0, notional_usd=110.0),
+    ]
+    ledger = a.reconstruct_ledger(buy_ts - 3600, 0.0, deltas)
+    end_ts = sell_ts + 3600
+    price_df = _price_df({buy_ts: 100.0, end_ts: 150.0})
+    out, warning = a.get_coin_mtm_pnl_series(
+        ledger, "BTC", price_df, tf_minutes=60, start_ts=buy_ts - 3600, end_ts=end_ts,
+        trade_history_path=path, entry_deltas=deltas,
+    )
+    # fully closed (qty=0) -> no unrealized component, matches the sell's own figures
+    assert out["pnl_usd"].iloc[-1] == pytest.approx(10.0)
+    assert out["pnl_pct"].iloc[-1] == pytest.approx(10.0)
+
+
+def test_get_coin_mtm_pnl_series_open_position_unrealized_only(tmp_path):
+    path = tmp_path / "trade_history.jsonl"
+    path.write_text(_trade_line("2026-01-01T00:00:00Z", "buy", "BTC_USD", 1.0, 100.0) + "\n")
+    buy_ts = a.utc_to_ts("2026-01-01T00:00:00Z")
+    deltas = [a.TradeDelta(ts=buy_ts, cash_delta=-100.0, coin="BTC", qty_delta=1.0, price=100.0, notional_usd=100.0)]
+    ledger = a.reconstruct_ledger(buy_ts - 3600, 0.0, deltas)
+    end_ts = buy_ts + 3600
+    price_df = _price_df({buy_ts: 100.0, end_ts: 150.0})
+    out, _ = a.get_coin_mtm_pnl_series(
+        ledger, "BTC", price_df, tf_minutes=60, start_ts=buy_ts - 3600, end_ts=end_ts,
+        trade_history_path=path, entry_deltas=deltas,
+    )
+    # qty=1, cost_basis=100, mark=150 -> unrealized $=50, %=50; no closed trades -> realized=0
+    assert out["pnl_usd"].iloc[-1] == pytest.approx(50.0)
+    assert out["pnl_pct"].iloc[-1] == pytest.approx(50.0)
+
+
+def test_get_coin_mtm_pnl_series_sums_realized_and_open_unrealized(tmp_path):
+    path = tmp_path / "trade_history.jsonl"
+    path.write_text("\n".join([
+        _trade_line("2026-01-01T00:00:00Z", "buy", "BTC_USD", 1.0, 100.0),
+        _sell_line("2026-01-01T01:00:00Z", "BTC_USD", 10.0, 10.0),
+        _trade_line("2026-01-01T02:00:00Z", "buy", "BTC_USD", 1.0, 200.0),
+    ]) + "\n")
+    buy1_ts = a.utc_to_ts("2026-01-01T00:00:00Z")
+    sell_ts = a.utc_to_ts("2026-01-01T01:00:00Z")
+    buy2_ts = a.utc_to_ts("2026-01-01T02:00:00Z")
+    deltas = [
+        a.TradeDelta(ts=buy1_ts, cash_delta=-100.0, coin="BTC", qty_delta=1.0, price=100.0, notional_usd=100.0),
+        a.TradeDelta(ts=sell_ts, cash_delta=110.0, coin="BTC", qty_delta=-1.0, price=110.0, notional_usd=110.0),
+        a.TradeDelta(ts=buy2_ts, cash_delta=-200.0, coin="BTC", qty_delta=1.0, price=200.0, notional_usd=200.0),
+    ]
+    ledger = a.reconstruct_ledger(buy1_ts - 3600, 0.0, deltas)
+    end_ts = buy2_ts + 3600
+    price_df = _price_df({buy1_ts: 100.0, end_ts: 220.0})
+    out, _ = a.get_coin_mtm_pnl_series(
+        ledger, "BTC", price_df, tf_minutes=60, start_ts=buy1_ts - 3600, end_ts=end_ts,
+        trade_history_path=path, entry_deltas=deltas,
+    )
+    # realized +10 (+10%) from the closed round trip, plus the reopened
+    # position's own unrealized: qty=1 cost=200 mark=220 -> +$20 (+10%)
+    assert out["pnl_usd"].iloc[-1] == pytest.approx(10.0 + 20.0)
+    assert out["pnl_pct"].iloc[-1] == pytest.approx(10.0 + 10.0)
 
 
 # ---------------------------------------------------------------------------

@@ -1253,14 +1253,21 @@ async function _acctApplyData(tf, scope, start, end, signal) {
       const series = state.acctSeries[xk];
       const raw = histByXk[xk] || [];
       if (!series || !raw.length) return;
-      // Fixed baseline (account inception for the total view, this coin's
-      // own first-trade notional for a per-coin view) — server-computed so
-      // it stays the same regardless of the currently visible zoom window.
-      const base = baselines[xk];
-      const pts = raw.map(h => ({
-        time: Math.floor(h.ts),
-        value: pct && base ? (h.value - base) / base * 100 : h.value,
-      }));
+      let pts;
+      if (coin) {
+        // Per-coin: mark-to-market PnL. % is an additive sum across round
+        // trips (not a fraction of $), so the server sends both fields
+        // directly per point rather than one value + a baseline to divide by.
+        pts = raw.map(h => ({time: Math.floor(h.ts), value: pct ? h.pct : h.value}));
+      } else {
+        // Total: fixed baseline (account inception), server-computed so it
+        // stays the same regardless of the currently visible zoom window.
+        const base = baselines[xk];
+        pts = raw.map(h => ({
+          time: Math.floor(h.ts),
+          value: pct && base ? (h.value - base) / base * 100 : h.value,
+        }));
+      }
       series.setData(pts);
       pointsByXk[xk] = pts;
     });
@@ -1284,7 +1291,7 @@ async function _acctApplyData(tf, scope, start, end, signal) {
         const base = baselines[realXk];
         state._acctMarkerSeries.setData(refRaw.map(h => ({
           time: Math.floor(h.ts),
-          value: pct && base ? (h.value - base) / base * 100 : h.value,
+          value: coin ? (pct ? h.pct : h.value) : (pct && base ? (h.value - base) / base * 100 : h.value),
         })));
         const markers = [];
         state.exchangeList.forEach(xk => {
