@@ -1052,6 +1052,15 @@ async function loadChart(coin, tf) {
 }
 
 async function loadAccountChart(tf, scope) {
+  // Generation token: if this call is superseded by a newer one (user
+  // switched charts again while our own fetch below was still in flight),
+  // the older call must stop dead after its await rather than continuing
+  // to subscribe its own range handler / set its own refresh timer on top
+  // of the newer call's — that race is what let two coins' chart-refresh
+  // timers end up alive simultaneously with no click able to stop either.
+  state._acctChartGen = (state._acctChartGen || 0) + 1;
+  const myGen = state._acctChartGen;
+
   const container = $('#chart-container');
   const diffContainer = $('#chart-diff-container');
 
@@ -1128,8 +1137,11 @@ async function loadAccountChart(tf, scope) {
     diffContainer.classList.add('hidden');
   }
 
-  // Initial load
-  await _acctApplyData(tf, scope, null, null, null);
+  // Initial load — abortable so switching charts again before this lands
+  // actually cancels it, instead of leaving it to finish and be discarded.
+  state._acctRangeAbort = new AbortController();
+  await _acctApplyData(tf, scope, null, null, state._acctRangeAbort.signal);
+  if (myGen !== state._acctChartGen) return; // superseded — don't touch shared state below
   state.chart.timeScale().fitContent();
 
   // Adaptive zoom handler. setData fires visibleTimeRangeChange asynchronously
@@ -1242,7 +1254,13 @@ async function _acctApplyData(tf, scope, start, end, signal) {
       api('account-history' + qs, opts),
       api('trades?limit=500', opts),
     ]);
+    // Discard stale responses: state.chart/acctSeries are looked up fresh
+    // below (not captured when this call started), so a slow fetch for a
+    // since-abandoned selection (e.g. a coin the user already clicked away
+    // from) would otherwise render its data into whatever chart is now
+    // current — showing the right label with another coin's numbers.
     if (!histData.history || state.chartMode !== 'account') return;
+    if (tf !== state.accountTf || scope !== state.accountScope) return;
     const histByXk = histData.history;
     const baselines = histData.baselines || {};
     const pct = state.acctDisplayMode === 'pct';

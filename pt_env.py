@@ -98,8 +98,8 @@ CONFIG_DEFAULTS: dict[str, Any] = {
     "default_timeframe": "1hour",
 
     # UI preferences
-    "ui_refresh_seconds": 10,
-    "chart_refresh_seconds": 4,
+    "ui_refresh_seconds": 60,
+    "chart_refresh_seconds": 60,
     "candles_limit": 300,
     "ui_font_size": 16,
     "ui_log_font_size": 11,
