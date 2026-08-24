@@ -245,13 +245,12 @@ async function init() {
     renderConfig(cfgData);
   } catch (e) {
     console.warn('Could not load startup config:', e);
+    _applyUiPrefs(state.cfg || {});
   }
 
   await refreshAll();
   loadAndRenderAccountsTab();
   connectWS();
-
-  _refreshInterval = setInterval(refreshAll, 10000);
 }
 
 function _applyUiPrefs(cfg) {
