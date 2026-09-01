@@ -120,9 +120,8 @@ Your data folder is never touched by updates.
 
 ```bash
 # From the repo root — CACHEBUST forces a fresh git clone every build
-docker build --build-arg CACHEBUST=$(date +%s) -t swedishhh/powertrader:latest .
-docker login
-docker push swedishhh/powertrader:latest
+docker build --build-arg CACHEBUST=$(date +%s) -t swedishhh/powertrader:latest . \
+&& docker push swedishhh/powertrader:latest
 ```
 
 To also publish a versioned tag (e.g. `2.0.0`), add `-t` for each tag and push both:
