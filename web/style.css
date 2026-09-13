@@ -1102,6 +1102,17 @@ body {
   gap: 8px;
 }
 
+.lth-trades-heading {
+  margin-top: 8px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.lth-trades-table { width: 100%; }
+
 .pos-card {
   padding: 12px;
   border-radius: var(--radius);
@@ -1840,7 +1851,21 @@ body {
 }
 .accounts-table tr.accounts-static td { border-top: 1px dashed var(--border); }
 
-.accounts-tables-gap { height: 18px; }
+.accounts-table tr.accounts-section-hdr td {
+  padding-top: 10px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: none;
+  text-align: left;
+}
+.accounts-table tr.accounts-section-hdr:first-child td { padding-top: 0; }
+.accounts-table .compare-coin[title] { cursor: help; }
+
+.acct-subtabs { margin-bottom: 12px; }
 
 .accounts-table .accounts-sort-th {
   cursor: pointer;
@@ -1848,6 +1873,7 @@ body {
 }
 .accounts-table .accounts-sort-th:hover { color: var(--text-secondary); }
 .accounts-table .accounts-sort-th.active { color: var(--cyan); }
+.accounts-table .accounts-sort-th-coin { text-align: left; }
 
 /* ═══════════════════════════════════════════════════════════
    Data Manager Tab

@@ -234,6 +234,12 @@ class AccountModel:
             c["trades"] += 1
         return {k: v for k, v in coins.items() if v["qty"] > 1e-12}
 
+    def lth_trades(self) -> list[dict]:
+        """Every tag='LTH' trade, chronological — the raw rows lth_holdings()
+        aggregates, for an audit-trail view."""
+        trades = self.trade_history(limit=0)
+        return [tr for tr in trades if (tr.get("tag") or "").upper() == "LTH"]
+
     def dca_24h_by_coin(self) -> dict[str, int]:
         trades = self.trade_history(limit=0)
         now = time.time()

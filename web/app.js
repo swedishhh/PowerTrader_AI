@@ -27,10 +27,11 @@ function xkShortLabel(xk) {
 const state = {
   coins: [],
   exchangeList: [],
-  exchangeData: {},
   positions: {},
   dca24h: {},
   lth: {},
+  lthTrades: {},
+  accountsSubtab: 'total',
   tradingMode: 'demo',
   discoveredExchanges: [],
   tradeStartLevel: 1,
@@ -85,9 +86,7 @@ const CHART_COLORS = {
 function fmtUSD(v) {
   if (v == null || isNaN(v)) return '—';
   const n = Number(v);
-  if (Math.abs(n) >= 1000) return '$' + n.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
-  if (Math.abs(n) >= 1) return '$' + n.toFixed(2);
-  return '$' + n.toPrecision(4);
+  return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2});
 }
 function fmtSignedUSD2(v) {
   const n = Number(v || 0);
@@ -195,7 +194,9 @@ function handleWSMessage(msg) {
       updateSignals(msg.data);
       break;
     case 'pnl':
-      updatePnl(msg.exchange, msg.data);
+      // No longer drives the topbar directly — see renderTopbarAccounts's
+      // comment for why it now reads from the same breakdown data as the
+      // Accounts tab instead of this per-tick push.
       break;
     case 'system':
       updateSystemStatus(msg.data);
@@ -220,6 +221,7 @@ let _lastExchangeListJson = null;
 
 async function init() {
   setupTabs();
+  setupAccountsSubtabs();
   setupMobileNav();
   setupButtons();
   setupTimeframes();
@@ -280,10 +282,6 @@ async function refreshAll() {
     state.exchangeList = statusData.exchange_list || ['shadow'];
     state.tradingMode = statusData.trading_mode || 'demo';
 
-    if (statusData.exchanges) {
-      state.exchangeData = statusData.exchanges;
-    }
-
     updateSystemStatus(statusData.system);
 
     const exchangeListJson = JSON.stringify(state.exchangeList);
@@ -300,6 +298,7 @@ async function refreshAll() {
       state.positions = posData.positions;
       state.dca24h = posData.dca_24h || {};
       state.lth = posData.lth || {};
+      state.lthTrades = posData.lth_trades || {};
     }
 
     mergePositionsIntoCoins();
@@ -307,7 +306,10 @@ async function refreshAll() {
     populateLogSourceDropdown();
 
     if ($('#tab-compare').classList.contains('active')) loadCompare();
-    if ($('#tab-accounts').classList.contains('active')) loadAndRenderAccountsTab();
+    // Always fetched (not gated on the Accounts tab being visible) since the
+    // topbar summary now reads from this same breakdown data — see
+    // loadAndRenderAccountsTab's call to renderTopbarAccounts().
+    loadAndRenderAccountsTab();
     if (coinsData.coins) {
       if (!$('#training-list').querySelector('.train-row')) renderTraining(coinsData.coins);
       else updateTrainingBadges(coinsData.coins);
@@ -394,49 +396,58 @@ function updateSystemStatus(sys) {
 }
 
 // ── Topbar Account Display ──
+//
+// Sourced from the exact same /api/account-breakdown data as the Accounts
+// tab (via _lastAccountsBreakdown, refreshed every cycle in refreshAll —
+// see loadAndRenderAccountsTab), not the older trader_status.json/
+// pnl_ledger.json WebSocket push that used to drive this independently.
+// That's a deliberate trade-off: the topbar update cadence is now the
+// same ui_refresh_seconds poll as everywhere else instead of real-time
+// per-tick pushes, in exchange for every number in the UI actually
+// agreeing with every other.
 
 function renderTopbarAccounts() {
   const container = $('#topbar-account');
   if (!container) return;
   const xks = state.exchangeList;
+  const cols = (_lastAccountsBreakdown && _lastAccountsBreakdown.columns) || {};
 
-  let html = '<table class="xk-table"><thead><tr><th></th><th>Portfolio</th><th>Buying Power</th><th>Holdings</th><th>Inv %</th><th>Realized</th><th>Unrealized</th>';
+  let html = '<table class="xk-table"><thead><tr><th></th><th>Total</th><th>Cash</th><th>Holdings</th><th>LTH</th><th>Realized</th><th>Floating</th><th>Fees</th>';
   if (xks.length >= 2) html += '<th>Δ</th>';
   html += '</tr></thead><tbody>';
 
+  const totalOf = xk => (cols[xk] ? cols[xk]['TOTAL'] : null) || 0;
+
   xks.forEach((xk, i) => {
-    const xd = state.exchangeData[xk] || {};
-    const acct = xd.account || {};
-    const pnl = xd.pnl || {};
-    const total = acct.total_account_value || 0;
-    const bp = acct.buying_power || 0;
-    const holdings = acct.holdings_sell_value || 0;
-    const pctInv = acct.percent_in_trade || 0;
-    const realized = pnl.total_realized_profit_usd || 0;
-    const unrealized = pnl.unrealized_profit_usd || 0;
-    const rClass = realized >= 0 ? 'positive' : 'negative';
-    const uClass = unrealized >= 0 ? 'positive' : 'negative';
+    const col = cols[xk] || null;
+    const total = col ? col['TOTAL'] : null;
+    const cash = col ? col['Cash'] : null;
+    const holdings = col ? col['Holdings (Tradable)'] : null;
+    const lth = col ? col['Holdings (LTH)'] : null;
+    const realized = col ? col['Realized PnL'] : null;
+    const floating = col ? col['Floating PnL'] : null;
+    const fees = col ? (col['Buy Fees Paid'] || 0) + (col['Sell Fees Paid'] || 0) : null;
+    const rClass = realized != null ? (realized >= 0 ? 'positive' : 'negative') : '';
+    const fClass = floating != null ? (floating >= 0 ? 'positive' : 'negative') : '';
     const color = xkColor(xk);
 
     html += `<tr>
       <td class="xk-table-name"><span class="xk-dot" style="background:${color}"></span>${xkDisplayName(xk)}</td>
-      <td class="xk-table-val" data-xk-total="${xk}">${fmtUSD(total)}</td>
-      <td class="xk-table-val" data-xk-bp="${xk}">${fmtUSD(bp)}</td>
-      <td class="xk-table-val" data-xk-hold="${xk}">${fmtUSD(holdings)}</td>
-      <td class="xk-table-val" data-xk-inv="${xk}">${pctInv.toFixed(1)}%</td>
-      <td class="xk-table-val ${rClass}" data-xk-pnl="${xk}">${fmtSignedUSD2(realized)}</td>
-      <td class="xk-table-val ${uClass}" data-xk-upnl="${xk}">${fmtSignedUSD2(unrealized)}</td>`;
+      <td class="xk-table-val">${total != null ? fmtUSD(total) : '—'}</td>
+      <td class="xk-table-val">${cash != null ? fmtUSD(cash) : '—'}</td>
+      <td class="xk-table-val">${holdings != null ? fmtUSD(holdings) : '—'}</td>
+      <td class="xk-table-val">${lth != null ? fmtUSD(lth) : '—'}</td>
+      <td class="xk-table-val ${rClass}">${realized != null ? fmtSignedUSD2(realized) : '—'}</td>
+      <td class="xk-table-val ${fClass}">${floating != null ? fmtSignedUSD2(floating) : '—'}</td>
+      <td class="xk-table-val">${fees != null ? fmtUSD(fees) : '—'}</td>`;
 
     if (xks.length >= 2) {
       if (i === 0) {
         html += '<td class="xk-table-val xk-table-dash">—</td>';
       } else {
-        const t0 = (state.exchangeData[xks[0]]?.account?.total_account_value || 0);
-        const t1 = (state.exchangeData[xks[1]]?.account?.total_account_value || 0);
-        const delta = t1 - t0;
-        const dPct = t0 > 0 ? (delta / t0) * 100 : 0;
+        const delta = totalOf(xks[1]) - totalOf(xks[0]);
         const dClass = delta >= 0 ? 'positive' : 'negative';
-        html += `<td class="xk-table-val ${dClass}" id="acct-delta">${fmtSignedUSD2(delta)}</td>`;
+        html += `<td class="xk-table-val ${dClass}">${fmtSignedUSD2(delta)}</td>`;
       }
     }
     html += '</tr>';
@@ -446,54 +457,10 @@ function renderTopbarAccounts() {
   container.innerHTML = html;
 }
 
-function updateTopbarExchange(xk, account, pnl) {
-  if (account) {
-    if (state.exchangeData[xk]) state.exchangeData[xk].account = account;
-    const setEl = (attr, val) => { const el = $(`[${attr}="${xk}"]`); if (el) el.textContent = val; };
-    setEl('data-xk-total', fmtUSD(account.total_account_value || 0));
-    setEl('data-xk-bp', fmtUSD(account.buying_power || 0));
-    setEl('data-xk-hold', fmtUSD(account.holdings_sell_value || 0));
-    setEl('data-xk-inv', (account.percent_in_trade || 0).toFixed(1) + '%');
-  }
-  if (pnl) {
-    if (state.exchangeData[xk]) state.exchangeData[xk].pnl = pnl;
-    const v = pnl.total_realized_profit_usd || 0;
-    const el = $(`[data-xk-pnl="${xk}"]`);
-    if (el) {
-      el.textContent = fmtSignedUSD2(v);
-      el.className = 'xk-table-val ' + (v >= 0 ? 'positive' : 'negative');
-    }
-    const u = pnl.unrealized_profit_usd || 0;
-    const uel = $(`[data-xk-upnl="${xk}"]`);
-    if (uel) {
-      uel.textContent = fmtSignedUSD2(u);
-      uel.className = 'xk-table-val ' + (u >= 0 ? 'positive' : 'negative');
-    }
-  }
-
-  if (state.exchangeList.length >= 2) {
-    const xks = state.exchangeList;
-    const t0 = (state.exchangeData[xks[0]]?.account?.total_account_value || 0);
-    const t1 = (state.exchangeData[xks[1]]?.account?.total_account_value || 0);
-    const delta = t1 - t0;
-    const el = $('#acct-delta');
-    if (el) {
-      el.textContent = fmtSignedUSD2(delta);
-      el.className = 'xk-table-val ' + (delta >= 0 ? 'positive' : 'negative');
-    }
-  }
-}
-
-function updatePnl(xk, pnl) {
-  if (!pnl || !xk) return;
-  updateTopbarExchange(xk, null, pnl);
-}
-
 // ── Trader Status (from WS) ──
 
 function updateTraderStatus(xk, data) {
   if (!data || !xk) return;
-  if (data.account) updateTopbarExchange(xk, data.account, null);
   if (data.positions) {
     if (!state.positions[xk]) state.positions[xk] = {};
     state.positions[xk] = data.positions;
@@ -1644,8 +1611,10 @@ const ACCOUNT_METRIC_COLS = [
   { key: 'fees_paid', label: 'Fees', fmt: fmtUSD, signed: false },
 ];
 
-let _acctSortXk = null;   // which exchange's column is driving the sort (null = default)
-let _acctSortKey = null;  // one of ACCOUNT_METRIC_COLS[].key
+const ACCOUNT_COIN_SORT_XK = '__coin__'; // sentinel _acctSortXk value: sort by coin name, not a metric
+
+let _acctSortXk = null;   // which exchange's column is driving the sort (null = default), or ACCOUNT_COIN_SORT_XK
+let _acctSortKey = null;  // one of ACCOUNT_METRIC_COLS[].key, or 'coin' when _acctSortXk is the coin sentinel
 let _acctSortAsc = false;
 
 function _acctEntryWithMeans(e) {
@@ -1658,26 +1627,45 @@ function _acctEntryWithMeans(e) {
   };
 }
 
-// Row labels from /api/account-breakdown, in display order, with a
-// separator inserted after the row named as the 'sep' key. TOTAL is the
-// only clickable row (opens the portfolio chart, scope 'total'). Fees
-// Paid and Unallocated are both memo/reconciling figures rather than
-// independent components (Fees Paid is already netted into Cash/Realized
-// PnL; Unallocated is defined as whatever Seed+Realized+Floating falls
-// short of TOTAL by, mostly buy-side fees excluded from cost basis — see
-// pt_account_analytics._build_account_breakdown_row's docstring) — styled
-// like the old table's static rows rather than looking like a peer of
-// Cash/Holdings/Seed/etc.
+// Row labels from /api/account-breakdown, in display order, grouped under
+// section headers with a separator after the row named as the 'sep' key.
+// TOTAL is the only clickable row (opens the portfolio chart, scope
+// 'total'). Realized PnL and Floating PnL are both fully fee-adjusted
+// (not pt_trader.py's raw cost-basis figures, which exclude buy-side
+// fees) — each nets out the buy-side fees embedded in it, so the two
+// labels mean exactly what they say. A currently-open position's
+// eventual sell fee is unknown until it actually sells, at which point
+// it flows into Realized PnL normally — Floating PnL was never adjusted
+// for it since there's nothing yet to adjust. Rounding, Buy Fees Paid and
+// Sell Fees Paid are all memo/reference figures rather than independent
+// components: Rounding is the *exact* residual TOTAL − (Seed + Realized
+// + Floating), unrelated to fees now that both PnL figures are already
+// fee-accurate; Buy Fees Paid and Sell Fees Paid are shown for context
+// only — both are already folded into Realized/Floating PnL above, so
+// they don't participate in the reconciliation arithmetic a second time.
+// See pt_account_analytics._build_account_breakdown_row's docstring for
+// the full derivation. Styled like the old table's static rows rather
+// than looking like a peer of Cash/Holdings/Seed/etc. `tip` is a
+// plain-English explanation with a small formula, shown as a native
+// title-attribute tooltip on hover.
 const ACCOUNT_BREAKDOWN_LAYOUT = [
-  { row: 'Cash' },
-  { row: 'Holdings (Tradable)' },
-  { row: 'Holdings (LTH)', sep: true },
-  { row: 'TOTAL', total: true, sep: true },
-  { row: 'Seed' },
-  { row: 'Realized PnL' },
-  { row: 'Floating PnL' },
-  { row: 'Unallocated', memo: true, sep: true },
-  { row: 'Fees Paid', memo: true },
+  { section: 'Balance sheet' },
+  { row: 'Cash', tip: 'USD sitting uninvested right now — not tied up in any coin holding.' },
+  { row: 'Holdings (Tradable)', tip: 'Current market value of coins the bot is actively trading.\nHoldings (Tradable) = Σ (quantity × current price) over active positions.' },
+  { row: 'Holdings (LTH)', sep: true, tip: 'Current market value of coins set aside long-term, outside active trading.\nHoldings (LTH) = Σ (quantity × current price) over reserved positions.' },
+  { row: 'TOTAL', total: true, sep: true, tip: 'Total account value right now.\nTOTAL = Cash + Holdings (Tradable) + Holdings (LTH).' },
+  { section: 'Attribution' },
+  { row: 'Seed', tip: 'Starting cash balance when this account began being tracked.' },
+  { row: 'Realized PnL', tip: 'Cumulative profit/loss already banked from closed (sold) trades, fully net of both buy- and sell-side fees.' },
+  { row: 'Floating PnL', tip: 'Unrealized profit/loss on positions still open, marked to the current price and net of the buy-side fees paid to open them (their eventual sell fee isn\'t known yet).\nFloating PnL = Σ (current price − avg. cost) × quantity, over open positions, minus buy fees on those positions.' },
+  { row: 'Rounding', memo: true, sep: true, tip: 'Exact leftover after Realized + Floating PnL above (both already fee-accurate) — real, but not yet traced to one cause; likely accumulated precision effects across many trades.\nRounding = TOTAL − (Seed + Realized PnL + Floating PnL).' },
+  { row: 'Buy Fees Paid', memo: true, tip: 'All-time buy-side trading fees, for reference — already netted into Realized/Floating PnL above, not an additional deduction.' },
+  { row: 'Sell Fees Paid', memo: true, tip: 'All-time sell-side trading fees, for reference — already netted into Realized PnL above, not an additional deduction.' },
+  {
+    row: 'Total', total: true,
+    compute: col => col['Seed'] + col['Realized PnL'] + col['Floating PnL'] + col['Rounding'],
+    tip: 'Same figure as TOTAL above, recomputed from this section\'s own rows as a visual cross-check.\nTotal = Seed + Realized PnL + Floating PnL + Rounding.',
+  },
 ];
 
 function renderAccountsTotalsTable(breakdown, xks) {
@@ -1685,15 +1673,20 @@ function renderAccountsTotalsTable(breakdown, xks) {
 
   let html = '<table class="compare-table accounts-table accounts-totals-table"><thead><tr>';
   html += '<th>Account</th>';
-  xks.forEach(xk => { html += `<th style="color:${xkColor(xk)}">${xk}</th>`; });
+  xks.forEach(xk => { html += `<th style="color:${xkColor(xk)};text-align:right">${xk}</th>`; });
   html += '</tr></thead><tbody>';
 
-  ACCOUNT_BREAKDOWN_LAYOUT.forEach(({ row: label, total, memo, sep }) => {
+  ACCOUNT_BREAKDOWN_LAYOUT.forEach(({ row: label, total, memo, sep, tip, section, compute }) => {
+    if (section) {
+      html += `<tr class="accounts-section-hdr"><td colspan="${1 + xks.length}">${section}</td></tr>`;
+      return;
+    }
     const classes = total ? 'accounts-row compare-totals' : (memo ? 'accounts-static' : '');
     const scopeAttr = total ? ' data-scope="total"' : '';
-    html += `<tr class="${classes}"${scopeAttr}><td class="compare-coin">${label}</td>`;
+    const tipAttr = tip ? ` title="${tip.replace(/"/g, '&quot;')}"` : '';
+    html += `<tr class="${classes}"${scopeAttr}><td class="compare-coin"${tipAttr}>${label}</td>`;
     xks.forEach(xk => {
-      const v = cols[xk] ? cols[xk][label] : null;
+      const v = cols[xk] ? (compute ? compute(cols[xk]) : cols[xk][label]) : null;
       const cls = (v != null && !memo) ? (v >= 0 ? 'positive' : 'negative') : '';
       html += `<td class="${cls}">${v != null ? fmtUSD(v) : '—'}</td>`;
     });
@@ -1712,7 +1705,9 @@ function renderAccountsCoinsTable(summary, xks) {
 
   const entryFor = (coin, xk) => _acctEntryWithMeans(summary[xk]?.coins?.[coin]);
 
-  if (_acctSortXk != null) {
+  if (_acctSortXk === ACCOUNT_COIN_SORT_XK) {
+    coins.sort((a, b) => _acctSortAsc ? a.localeCompare(b) : b.localeCompare(a));
+  } else if (_acctSortXk != null) {
     coins.sort((a, b) => {
       const va = entryFor(a, _acctSortXk)?.[_acctSortKey];
       const vb = entryFor(b, _acctSortXk)?.[_acctSortKey];
@@ -1731,9 +1726,12 @@ function renderAccountsCoinsTable(summary, xks) {
   }
 
   let html = '<table class="compare-table accounts-table accounts-coins-table"><thead>';
-  html += '<tr class="compare-hdr-top"><th rowspan="2">Coin</th>';
+  html += '<tr class="compare-hdr-top"><th></th>';
   xks.forEach(xk => { html += `<th colspan="${ACCOUNT_METRIC_COLS.length}" style="color:${xkColor(xk)}">${xk}</th>`; });
   html += '</tr><tr class="compare-hdr-sub">';
+  const coinActive = _acctSortXk === ACCOUNT_COIN_SORT_XK;
+  const coinArrow = coinActive ? (_acctSortAsc ? ' ▲' : ' ▼') : '';
+  html += `<th class="accounts-sort-th accounts-sort-th-coin${coinActive ? ' active' : ''}" data-xk="${ACCOUNT_COIN_SORT_XK}" data-key="coin">Coin${coinArrow}</th>`;
   xks.forEach(xk => {
     ACCOUNT_METRIC_COLS.forEach(col => {
       const active = _acctSortXk === xk && _acctSortKey === col.key;
@@ -1780,6 +1778,39 @@ function _bindAccountsCoinsTableHandlers(container, summary, xks) {
   });
 }
 
+// Cached from the last successful load, so switching between the Total
+// and Coins sub-tabs re-renders instantly instead of re-fetching.
+let _lastAccountsSummary = null;
+let _lastAccountsBreakdown = null;
+let _lastAccountsXks = null;
+
+function _renderActiveAccountsSubtab() {
+  const container = $('#accounts-table-container');
+  if (!_lastAccountsXks) return;
+  const xks = _lastAccountsXks;
+
+  if (state.accountsSubtab === 'coins') {
+    container.innerHTML = renderAccountsCoinsTable(_lastAccountsSummary, xks);
+    _bindAccountsCoinsTableHandlers(container, _lastAccountsSummary, xks);
+  } else {
+    container.innerHTML = renderAccountsTotalsTable(_lastAccountsBreakdown, xks);
+    container.querySelectorAll('.accounts-totals-table tr.accounts-row').forEach(tr => {
+      tr.onclick = () => selectAccountChart(state.accountTf, tr.dataset.scope);
+    });
+  }
+  _setAccountsTabRowActive(state.chartMode === 'account' ? state.accountScope : null);
+}
+
+function setupAccountsSubtabs() {
+  $$('#accounts-subtabs .tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.accountsSubtab = btn.dataset.subtab;
+      $$('#accounts-subtabs .tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+      _renderActiveAccountsSubtab();
+    });
+  });
+}
+
 async function loadAndRenderAccountsTab() {
   const container = $('#accounts-table-container');
   try {
@@ -1791,16 +1822,11 @@ async function loadAndRenderAccountsTab() {
     const xks = state.exchangeList.length ? state.exchangeList : Object.keys(summary);
     if (!xks.length) { container.innerHTML = '<div class="empty-state">No account data</div>'; return; }
 
-    container.innerHTML =
-      renderAccountsTotalsTable(breakdownData, xks) +
-      '<div class="accounts-tables-gap"></div>' +
-      renderAccountsCoinsTable(summary, xks);
-
-    container.querySelectorAll('.accounts-totals-table tr.accounts-row').forEach(tr => {
-      tr.onclick = () => selectAccountChart(state.accountTf, tr.dataset.scope);
-    });
-    _bindAccountsCoinsTableHandlers(container, summary, xks);
-    _setAccountsTabRowActive(state.chartMode === 'account' ? state.accountScope : null);
+    _lastAccountsSummary = summary;
+    _lastAccountsBreakdown = breakdownData;
+    _lastAccountsXks = xks;
+    _renderActiveAccountsSubtab();
+    renderTopbarAccounts();
   } catch (e) {
     container.innerHTML = '<div class="empty-state">Failed to load accounts</div>';
   }
@@ -1912,7 +1938,7 @@ function renderLTH() {
 
   const lthCoins = Object.entries(merged);
   if (lthCoins.length === 0) {
-    container.innerHTML = '<div class="empty-state">No long-term holdings</div>';
+    container.innerHTML = '<div class="empty-state">No long-term holdings</div>' + renderLTHTradesTable();
     return;
   }
 
@@ -1949,6 +1975,46 @@ function renderLTH() {
       </div>
     `;
   }).join('');
+
+  container.innerHTML += renderLTHTradesTable();
+}
+
+function renderLTHTradesTable() {
+  const rows = [];
+  for (const xk of state.exchangeList) {
+    for (const t of (state.lthTrades || {})[xk] || []) rows.push({...t, _xk: xk});
+  }
+  if (!rows.length) return '';
+
+  rows.sort((a, b) => b.ts - a.ts);
+
+  const body = rows.map(t => {
+    const coin = (t.symbol || '').split('_')[0];
+    const pair = (t.symbol || '').replace('_', '/');
+    return `<tr class="trades-row">
+      <td class="trades-td hist-time">${fmtDateTime(t.ts)}</td>
+      <td class="trades-td"><span class="hist-xk" style="color:${xkColor(t._xk)}">${xkShortLabel(t._xk)}</span></td>
+      <td class="trades-td"><span class="hist-side ${t.side}">${t.side}</span></td>
+      <td class="trades-td">${pair} ${fmtQty(t.qty, coin)} @ ${fmtPrice(t.price)}</td>
+      <td class="trades-td hist-amount">${fmtUSD(t.notional_usd)}</td>
+      <td class="trades-td hist-amount">${fmtUSD(t.fees_usd)}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="lth-trades-heading">LTH Trades</div>
+    <table class="trades-table lth-trades-table">
+      <thead><tr>
+        <th class="trades-th">Time</th>
+        <th class="trades-th">Exchange</th>
+        <th class="trades-th">Side</th>
+        <th class="trades-th">Trade</th>
+        <th class="trades-th">Notional</th>
+        <th class="trades-th">Fees</th>
+      </tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+  `;
 }
 
 // ── Training Tab ──

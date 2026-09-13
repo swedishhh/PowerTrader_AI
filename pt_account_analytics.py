@@ -63,6 +63,7 @@ class TradeDelta:
     price: float
     notional_usd: float
     tag: Optional[str] = None
+    fees_usd: float = 0.0
 
 
 def apply_fee_fallback_adjustment(row: dict) -> float:
@@ -136,6 +137,7 @@ def stream_trade_deltas(path: Path, start_offset: int = 0) -> Iterator[tuple[Tra
             price=price,
             notional_usd=notional,
             tag=row.get("tag"),
+            fees_usd=float(row.get("fees_usd") or 0.0),
         ), offset
 
 
@@ -246,9 +248,10 @@ def _apply_cost_basis(cost_before: float, qty_before: float, qty_delta: float, n
 
 def reconstruct_ledger(seed_ts: float, seed_cash: float, deltas: list[TradeDelta]) -> pd.DataFrame:
     """Pure forward cumulative fold, seeded at account inception (cash =
-    seed_cash, every coin qty/cost = 0). Event-level output (one row per
-    trade, plus the seed row), wide-format: index=ts, columns=[cash,
-    qty_<COIN>..., cost_<COIN>..., bot_qty_<COIN>..., bot_cost_<COIN>...].
+    seed_cash, every coin qty/cost/fee_pool = 0, realized_fee_drag = 0).
+    Event-level output (one row per trade, plus the seed row),
+    wide-format: index=ts, columns=[cash, realized_fee_drag, qty_<COIN>...,
+    cost_<COIN>..., fee_pool_<COIN>..., bot_qty_<COIN>..., bot_cost_<COIN>...].
     Small regardless of raw file size.
 
     Two quantity/cost tracks per coin, because pt_trader.py itself treats
@@ -269,27 +272,48 @@ def reconstruct_ledger(seed_ts: float, seed_cash: float, deltas: list[TradeDelta
       the bot never actually carries, and per-coin PnL would drift even
       further from the portfolio's total PnL.
 
-    Note cost_<COIN>/bot_cost_<COIN> accumulate buys' gross notional_usd,
-    not the fee-inclusive cash_delta — this matches pt_trader.py's own
+    cost_<COIN>/bot_cost_<COIN> accumulate buys' gross notional_usd, not
+    the fee-inclusive cash_delta — this matches pt_trader.py's own
     cost-basis ledger (confirmed against real trade records'
     position_cost_used_usd), which excludes buy-side fees from cost. One
-    consequence: summing every coin's realized+unrealized PnL will still
-    run a bit above the portfolio's true cash-based total PnL, by roughly
-    the account's cumulative buy-side trading fees — that gap is real and
-    expected, not a reconstruction bug, since it's inherited from how
-    pt_trader.py itself has always computed realized_profit_usd."""
+    consequence: summing every coin's realized+unrealized PnL runs above
+    the portfolio's true cash-based total PnL, by exactly the account's
+    cumulative buy-side trading fees, inherited from how pt_trader.py
+    itself has always computed realized_profit_usd.
+
+    fee_pool_<COIN> / realized_fee_drag exist to locate exactly how much
+    of that gap sits in still-open positions versus already-closed ones —
+    the same average-cost accounting as cost_<COIN>, run on each buy's fee
+    instead of its notional: a buy adds its own fee to fee_pool_<COIN>; a
+    sell consumes a share of that coin's pool proportional to the fraction
+    of the position being sold (via _apply_cost_basis, reused directly —
+    its sell branch already computes exactly this fraction and ignores
+    the 4th argument it's not using notional_usd for here), and whatever
+    is consumed accumulates into realized_fee_drag. So at any point,
+    fee_pool_<COIN> is the buy-side fee still embedded in that coin's open
+    position (the portion inflating Floating PnL), and realized_fee_drag
+    is the buy-side fee already consumed by past sells (the portion that
+    inflated Realized PnL for trades already closed) — the two always sum
+    to the account's cumulative buy-side fees paid so far."""
     ordered = sorted(deltas, key=lambda d: d.ts)
     cash = seed_cash
+    realized_fee_drag = 0.0
     qty: dict[str, float] = {}
     cost: dict[str, float] = {}
+    fee_pool: dict[str, float] = {}
     bot_qty: dict[str, float] = {}
     bot_cost: dict[str, float] = {}
-    rows = [{"ts": seed_ts, "cash": cash}]
+    rows = [{"ts": seed_ts, "cash": cash, "realized_fee_drag": realized_fee_drag}]
     for d in ordered:
         cash += d.cash_delta
         prev_qty = qty.get(d.coin, 0.0)
         qty[d.coin] = prev_qty + d.qty_delta
         cost[d.coin] = _apply_cost_basis(cost.get(d.coin, 0.0), prev_qty, d.qty_delta, d.notional_usd)
+
+        prev_fee_pool = fee_pool.get(d.coin, 0.0)
+        fee_pool[d.coin] = _apply_cost_basis(prev_fee_pool, prev_qty, d.qty_delta, d.fees_usd)
+        if d.qty_delta < 0:
+            realized_fee_drag += prev_fee_pool - fee_pool[d.coin]
 
         if str(d.tag or "").upper() != "LTH":
             prev_bot_qty = bot_qty.get(d.coin, 0.0)
@@ -298,9 +322,10 @@ def reconstruct_ledger(seed_ts: float, seed_cash: float, deltas: list[TradeDelta
             bot_qty[d.coin] = remaining_bot_qty if remaining_bot_qty > 1e-8 else 0.0
 
         rows.append({
-            "ts": d.ts, "cash": cash,
+            "ts": d.ts, "cash": cash, "realized_fee_drag": realized_fee_drag,
             **{f"qty_{c}": v for c, v in qty.items()},
             **{f"cost_{c}": v for c, v in cost.items()},
+            **{f"fee_pool_{c}": v for c, v in fee_pool.items()},
             **{f"bot_qty_{c}": v for c, v in bot_qty.items()},
             **{f"bot_cost_{c}": v for c, v in bot_cost.items()},
         })
@@ -620,11 +645,23 @@ def _read_seed(account_history_path: Path) -> Optional[tuple[float, float]]:
     return None
 
 
+# Bump whenever TradeDelta gains/renames/removes a field. A cache written
+# under an older version is discarded and fully reparsed rather than being
+# loaded via TradeDelta(**d) — which would otherwise silently fall back to
+# a field's dataclass default (e.g. tag=None) for every already-cached
+# delta, permanently misclassifying it (confirmed live: kraken's cache
+# predated `tag` being tracked, so 12 of BTC's 14 real LTH-tagged buys were
+# cached as tag=None and wrongly excluded from the LTH bucket).
+_LEDGER_CACHE_SCHEMA_VERSION = 3
+
+
 def _load_ledger_cache(cache_path: Path) -> tuple[int, list[TradeDelta]]:
     if not cache_path.exists():
         return 0, []
     try:
         data = json.loads(cache_path.read_text())
+        if data.get("schema_version") != _LEDGER_CACHE_SCHEMA_VERSION:
+            return 0, []
         deltas = [TradeDelta(**d) for d in data.get("deltas", [])]
         return int(data.get("byte_offset", 0)), deltas
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
@@ -633,7 +670,11 @@ def _load_ledger_cache(cache_path: Path) -> tuple[int, list[TradeDelta]]:
 
 def _save_ledger_cache(cache_path: Path, byte_offset: int, deltas: list[TradeDelta]) -> None:
     tmp = cache_path.with_suffix(".tmp")
-    payload = {"byte_offset": byte_offset, "deltas": [d.__dict__ for d in deltas]}
+    payload = {
+        "schema_version": _LEDGER_CACHE_SCHEMA_VERSION,
+        "byte_offset": byte_offset,
+        "deltas": [d.__dict__ for d in deltas],
+    }
     tmp.write_text(json.dumps(payload))
     tmp.replace(cache_path)
 
@@ -851,22 +892,36 @@ def build_account_summary(env, xk: str) -> dict:
 def _build_account_breakdown_row(env, xk: str) -> Optional[dict]:
     """One exchange's current TOTAL, decomposed two ways:
       Balance sheet: Cash + Holdings (Tradable) + Holdings (LTH) = TOTAL
-      Attribution:   Seed + Realized PnL + Floating PnL + Unallocated = TOTAL
+      Attribution:   Seed + Realized PnL + Floating PnL + Rounding = TOTAL
 
-    Both sides are made to reconcile to TOTAL exactly, by construction —
-    Unallocated is whatever Seed + Realized + Floating falls short of
-    TOTAL by, not an independently-derived figure. It exists because
-    cost basis excludes buy-side fees everywhere (see
-    reconstruct_ledger's docstring), which inflates both Realized PnL (on
-    already-closed lots) and Floating PnL (on still-open ones) relative
-    to Cash, which is fully fee-accurate. Verified against Kraken's live
-    data: cumulative buy-side fees there ($15.13) are the dominant part
-    of Unallocated but don't account for all of it — a few dollars of
-    residual remain even after simulating fully fee-inclusive cost basis,
-    most likely ordinary floating-point accumulation across hundreds of
-    trades rather than one identifiable cause. For a zero-fee shadow
-    account Unallocated should be ~$0 (confirmed: $0.01, pure float
-    noise).
+    Both sides reconcile to TOTAL exactly, by construction. Realized PnL
+    and Floating PnL are both fully fee-adjusted, not pt_trader.py's raw
+    cost-basis figures (which exclude buy-side fees from cost — see
+    reconstruct_ledger's docstring): each is reduced by the buy-side fees
+    embedded in it, via reconstruct_ledger's fee_pool_<COIN>/
+    realized_fee_drag tracking, which knows exactly how much of the
+    account's cumulative buy-side fees sits in still-open positions
+    (deducted from Floating PnL) versus already-closed ones (deducted
+    from Realized PnL). Sell-side fees need no equivalent adjustment here:
+    they're already subtracted from proceeds before realized_profit_usd
+    is computed (pt_trader.py's _record_trade), so Realized PnL only ever
+    needed the buy-side correction to be fully fee-accurate. A currently
+    open position's eventual sell fee is unknown until it actually sells,
+    at which point it flows into Realized PnL the normal way — Floating
+    PnL was never adjusted for it, since there's nothing yet to adjust.
+
+    Rounding is whatever's left: TOTAL − (Seed + Realized + Floating).
+    Since both PnL figures are now exact (not estimates), Rounding is
+    exact too — a genuine reconciliation residual unrelated to fees, most
+    likely accumulated floating-point precision effects across many
+    trades rather than one identifiable source.
+
+    Buy Fees Paid and Sell Fees Paid are shown separately as reference
+    figures only — both are already folded into Realized/Floating PnL
+    above (buy fees via the adjustment described above, sell fees via
+    realized_profit_usd itself), so they don't participate in the
+    reconciliation arithmetic a second time. For a zero-fee account (e.g.
+    shadow) every fee-related figure reduces to ~0.
 
     Returns None if the account has no seed yet (nothing traded)."""
     price_source = _default_price_source(env)
@@ -885,27 +940,51 @@ def _build_account_breakdown_row(env, xk: str) -> Optional[dict]:
 
     holdings_tradable = 0.0
     holdings_lth = 0.0
-    floating_pnl = 0.0
+    floating_pnl_raw = 0.0
+    floating_fee_drag = 0.0
     for coin in coins:
         qty = float(ledger[f"qty_{coin}"].iloc[-1])
         cost = float(ledger[f"cost_{coin}"].iloc[-1])
         bot_qty = float(ledger.get(f"bot_qty_{coin}", pd.Series([0.0])).iloc[-1])
+        fee_pool = float(ledger.get(f"fee_pool_{coin}", pd.Series([0.0])).iloc[-1])
 
         _, price = _get_price_df_and_current(coin, deltas, price_source, now_ts)
 
         holdings_tradable += bot_qty * price
         holdings_lth += (qty - bot_qty) * price
-        floating_pnl += qty * price - cost
+        floating_pnl_raw += qty * price - cost
+        floating_fee_drag += fee_pool
 
     cash = float(ledger["cash"].iloc[-1]) if not ledger.empty else seed_cash
     total = cash + holdings_tradable + holdings_lth
 
-    realized_pnl = sum(
+    all_trades = get_trade_history(trade_history_path)
+    realized_pnl_raw = sum(
         float(row.get("realized_profit_usd") or 0.0)
-        for row in get_trade_history(trade_history_path)
-        if row.get("side") == "sell"
+        for row in all_trades if row.get("side") == "sell"
     )
-    unallocated = total - (seed_cash + realized_pnl + floating_pnl)
+    realized_fee_drag = float(ledger["realized_fee_drag"].iloc[-1]) if not ledger.empty else 0.0
+
+    # Both fully fee-adjusted: Realized PnL nets out the buy-side fees on
+    # lots that have actually sold (sell-side fees are already netted into
+    # realized_profit_usd itself); Floating PnL nets out the buy-side fees
+    # still sitting in open positions — see this function's docstring.
+    realized_pnl = realized_pnl_raw - realized_fee_drag
+    floating_pnl = floating_pnl_raw - floating_fee_drag
+    rounding = total - (seed_cash + realized_pnl + floating_pnl)
+
+    buy_fees_paid = sum(
+        float(row.get("fees_usd") or 0.0)
+        for row in all_trades if row.get("side") == "buy"
+    )
+    # fees_fallback_applied_usd only ever applies to sells (pt_trader.py's
+    # _record_trade gates it on side == "sell"), so it's omitted for buys
+    # above but included here — this is the same total get_total_fees_paid
+    # would report for sells, just isolated to one side.
+    sell_fees_paid = sum(
+        float(row.get("fees_usd") or 0.0) + float(row.get("fees_fallback_applied_usd") or 0.0)
+        for row in all_trades if row.get("side") == "sell"
+    )
 
     return {
         "Cash": cash,
@@ -915,25 +994,30 @@ def _build_account_breakdown_row(env, xk: str) -> Optional[dict]:
         "Seed": seed_cash,
         "Realized PnL": realized_pnl,
         "Floating PnL": floating_pnl,
-        "Unallocated": unallocated,
-        "Fees Paid": get_total_fees_paid(trade_history_path),
+        "Rounding": rounding,
+        "Buy Fees Paid": buy_fees_paid,
+        "Sell Fees Paid": sell_fees_paid,
     }
 
 
 _ACCOUNT_BREAKDOWN_ROWS = [
     "Cash", "Holdings (Tradable)", "Holdings (LTH)", "TOTAL",
-    "Seed", "Realized PnL", "Floating PnL", "Unallocated", "Fees Paid",
+    "Seed", "Realized PnL", "Floating PnL", "Rounding",
+    "Buy Fees Paid", "Sell Fees Paid",
 ]
 
 
 def build_account_breakdown_table(env, xks: list[str]) -> pd.DataFrame:
     """Kraken-vs-shadow (or any set of accounts) breakdown of current total
     account value — see _build_account_breakdown_row's docstring for the
-    two decompositions (both reconcile to TOTAL exactly, Unallocated is
-    the plug). Rows: Cash, Holdings (Tradable), Holdings (LTH), TOTAL,
-    Seed, Realized PnL, Floating PnL, Unallocated, Fees Paid. One column
-    per xk; an un-seeded account gets an all-NaN column rather than being
-    dropped, so callers can rely on every requested xk appearing.
+    two decompositions (both reconcile to TOTAL exactly; Realized PnL and
+    Floating PnL are both fully fee-adjusted, not raw cost-basis figures,
+    and Rounding is an exact residual, not an estimate — see that
+    docstring for how). Rows: Cash, Holdings (Tradable), Holdings (LTH),
+    TOTAL, Seed, Realized PnL, Floating PnL, Rounding, Buy Fees Paid, Sell
+    Fees Paid. One column per xk; an un-seeded account gets an all-NaN
+    column rather than being dropped, so callers can rely on every
+    requested xk appearing.
 
     Handy standalone (prints cleanly in a REPL/notebook) as well as being
     what the Accounts tab's totals table is built from.

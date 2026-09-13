@@ -296,12 +296,14 @@ async def api_positions():
     out = {}
     dca = {}
     lth = {}
+    lth_trades = {}
     for xk in _active_accounts():
         acct = AccountModel(env, xk)
         out[xk] = acct.all_positions()
         dca[xk] = acct.dca_24h_by_coin()
         lth[xk] = acct.lth_holdings()
-    return {"positions": out, "dca_24h": dca, "lth": lth}
+        lth_trades[xk] = acct.lth_trades()
+    return {"positions": out, "dca_24h": dca, "lth": lth, "lth_trades": lth_trades}
 
 
 @app.get("/api/trades")
