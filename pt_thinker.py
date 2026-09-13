@@ -508,6 +508,9 @@ log.info(
 # Track which coins have had their state saved this session (for first-save logging).
 _state_saved_coins: set = set()
 
+# Throttle for per-coin price-fetch-failure reporting in step_coin (once per 10 min per coin).
+_price_fail_throttle: dict = {}
+
 
 wallet_addr_list = []
 wallet_addr_users = []
@@ -817,13 +820,18 @@ def step_coin(sym: str):
         # reset tf_update for this coin (but DO NOT block-wait; just detect updates and return)
         tf_update = ["no"] * len(tf_choices)
 
-        while True:
-            try:
-                current = kucoin_current_price(f"{sym}_USD")
-                break
-            except Exception as e:
-                log.warning(str(e))
-                continue
+        # Bounded, backed-off retry instead of an unbounded zero-delay spin —
+        # raises on exhaustion (pt_errors.RetryExhausted or the last fetch
+        # error) rather than hanging forever; the per-coin loop that calls
+        # step_coin() catches it, reports it, and skips this coin for this
+        # sweep rather than letting one coin's price outage take down the
+        # whole thinker.
+        current = pt_errors.retry(
+            lambda: kucoin_current_price(f"{sym}_USD"),
+            timeout=30.0,
+            start_interval=1.0,
+            interval_ramp=1.5,
+        )
 
         # IMPORTANT: messages printed below use the bounds currently in state.
         # We only allow "ready" once messages are generated using a non-startup bounds_version.
@@ -1290,7 +1298,21 @@ try:
         _write_lth_ema200_snapshot()
 
         for _sym in CURRENT_COINS:
-            step_coin(_sym)
+            try:
+                step_coin(_sym)
+            except Exception as e:
+                now = time.time()
+                if now - _price_fail_throttle.get(_sym, 0.0) >= 600:
+                    _price_fail_throttle[_sym] = now
+                    pt_errors.emit(
+                        "thinker", level="warning",
+                        message=f"step_coin failed for {_sym}: {e}",
+                        detail=(
+                            f"Signal generation for {_sym} was skipped this sweep — likely a "
+                            "sustained price feed outage. Other coins are unaffected and this "
+                            "coin will retry on its next TF sweep."
+                        ),
+                    )
 
         # clear + re-print one combined screen (so you don't see old output above new)
         os.system("cls" if os.name == "nt" else "clear")

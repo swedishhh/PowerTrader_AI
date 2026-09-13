@@ -42,6 +42,7 @@ class KrakenExchange(Exchange):
         })
         self._last_good_bid_ask: Dict[str, dict] = {}
         self._quote_map: Dict[str, str] = {}
+        self._price_fail_throttle: Dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Symbol conversion — ccxt normalises Kraken's XBT → BTC internally
@@ -169,7 +170,7 @@ class KrakenExchange(Exchange):
                     }
                 else:
                     raise ValueError("zero price")
-            except Exception:
+            except Exception as e:
                 cached = self._last_good_bid_ask.get(canonical)
                 if cached:
                     ask = float(cached.get("ask", 0) or 0)
@@ -178,8 +179,29 @@ class KrakenExchange(Exchange):
                         buy_prices[canonical] = ask
                         sell_prices[canonical] = bid
                         valid.append(canonical)
+                if canonical not in valid:
+                    self._report_price_failure(canonical, e, had_cache=bool(cached))
 
         return buy_prices, sell_prices, valid
+
+    def _report_price_failure(self, canonical: str, exc: Exception, had_cache: bool) -> None:
+        """Surface a per-symbol price fetch failure (throttled to once per 10 min)."""
+        now = time.time()
+        if now - self._price_fail_throttle.get(canonical, 0.0) < 600:
+            return
+        self._price_fail_throttle[canonical] = now
+        pt_errors.emit(
+            "exchange-kraken", level="warning",
+            message=f"Failed to fetch price for {canonical} from Kraken: {exc}",
+            detail=(
+                "No cached fallback price was available either, so this coin was dropped "
+                "from this cycle's price set entirely — trading decisions for it will be "
+                "skipped until the next successful fetch."
+                if not had_cache else
+                "A stale cached price was used as fallback this cycle, so the trade decision "
+                "may be based on an out-of-date price."
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Order placement
@@ -190,6 +212,14 @@ class KrakenExchange(Exchange):
 
         buy_prices, _, _ = self.get_price([symbol])
         if symbol not in buy_prices:
+            pt_errors.emit(
+                "exchange-kraken", level="error",
+                message=f"Cannot place buy for {symbol}: no live price available",
+                detail=(
+                    "The buy was skipped because a current price could not be fetched "
+                    "(and no cached fallback was available). No order was submitted."
+                ),
+            )
             return None
         current_price = buy_prices[symbol]
         qty = amount_usd / current_price
@@ -201,7 +231,15 @@ class KrakenExchange(Exchange):
 
         try:
             order = self._exchange.create_market_buy_order(exchange_sym, qty)
-        except (ccxt.InvalidOrder, ccxt.InsufficientFunds):
+        except (ccxt.InvalidOrder, ccxt.InsufficientFunds) as e:
+            pt_errors.emit(
+                "exchange-kraken", level="warning",
+                message=f"Buy order for {symbol} rejected by Kraken: {e}",
+                detail=(
+                    "The exchange refused the order (invalid order parameters or "
+                    "insufficient funds). No funds were spent; the trade opportunity was missed."
+                ),
+            )
             return None
         except Exception as e:
             pt_errors.emit(
@@ -216,9 +254,30 @@ class KrakenExchange(Exchange):
 
         order_id = str(order.get("id", ""))
         if not order_id:
+            pt_errors.emit(
+                "exchange-kraken", level="error",
+                message=f"Buy order for {symbol} returned no order id",
+                detail=(
+                    f"Kraken accepted the create-order call but returned no id, so this order "
+                    f"cannot be tracked or reconciled. It may or may not have filled on the "
+                    f"exchange — check the Kraken order history/trade log manually for {symbol}."
+                ),
+            )
             return None
 
-        order = self._wait_for_order_terminal(exchange_sym, order_id) or order
+        try:
+            order = self._wait_for_order_terminal(exchange_sym, order_id)
+        except Exception as e:
+            pt_errors.emit(
+                "exchange-kraken", level="warning",
+                message=f"Buy order {order_id} for {symbol} never reached a terminal state: {e}",
+                detail=(
+                    "Kraken accepted the order but its fill status could not be confirmed "
+                    "within the poll window. It may still be open or may already have "
+                    "filled — check Kraken directly. Proceeding with the order's last known "
+                    "(possibly non-terminal) state."
+                ),
+            )
         return self._order_to_result(order_id, order, exchange_sym, "BUY")
 
     def place_sell(self, symbol: str, qty: float) -> Optional[OrderResult]:
@@ -231,7 +290,16 @@ class KrakenExchange(Exchange):
 
         try:
             order = self._exchange.create_market_sell_order(exchange_sym, qty)
-        except (ccxt.InvalidOrder, ccxt.InsufficientFunds):
+        except (ccxt.InvalidOrder, ccxt.InsufficientFunds) as e:
+            pt_errors.emit(
+                "exchange-kraken", level="warning",
+                message=f"Sell order for {symbol} rejected by Kraken: {e}",
+                detail=(
+                    "The exchange refused the order (invalid order parameters or "
+                    "insufficient balance). The position remains open; the trader may "
+                    "attempt to sell again on the next cycle."
+                ),
+            )
             return None
         except Exception as e:
             pt_errors.emit(
@@ -247,9 +315,30 @@ class KrakenExchange(Exchange):
 
         order_id = str(order.get("id", ""))
         if not order_id:
+            pt_errors.emit(
+                "exchange-kraken", level="error",
+                message=f"Sell order for {symbol} returned no order id",
+                detail=(
+                    f"Kraken accepted the create-order call but returned no id, so this order "
+                    f"cannot be tracked or reconciled. It may or may not have filled on the "
+                    f"exchange — check the Kraken order history/trade log manually for {symbol}."
+                ),
+            )
             return None
 
-        order = self._wait_for_order_terminal(exchange_sym, order_id) or order
+        try:
+            order = self._wait_for_order_terminal(exchange_sym, order_id)
+        except Exception as e:
+            pt_errors.emit(
+                "exchange-kraken", level="warning",
+                message=f"Sell order {order_id} for {symbol} never reached a terminal state: {e}",
+                detail=(
+                    "Kraken accepted the order but its fill status could not be confirmed "
+                    "within the poll window. It may still be open or may already have "
+                    "filled — check Kraken directly. Proceeding with the order's last known "
+                    "(possibly non-terminal) state."
+                ),
+            )
         return self._order_to_result(order_id, order, exchange_sym, "SELL")
 
     def get_orders(self, symbol: str) -> dict:
@@ -456,18 +545,22 @@ class KrakenExchange(Exchange):
 
     def _wait_for_order_terminal(
         self, exchange_sym: str, order_id: str, timeout: float = 60.0,
-    ) -> Optional[dict]:
+    ) -> dict:
+        """Poll until the order reaches a terminal state, ~1x/sec up to timeout.
+
+        Raises (the last fetch_order exception, or pt_errors.RetryExhausted
+        if fetch_order kept succeeding but the order never went terminal)
+        instead of returning None on timeout — callers must catch this and
+        report it via pt_errors.emit() with order/symbol context.
+        """
         terminal = {"closed", "canceled", "cancelled", "expired", "rejected"}
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                order = self._exchange.fetch_order(order_id, exchange_sym)
-                if str(order.get("status", "")).lower() in terminal:
-                    return order
-            except Exception:
-                pass
-            time.sleep(1)
-        return None
+        return pt_errors.retry(
+            lambda: self._exchange.fetch_order(order_id, exchange_sym),
+            is_success=lambda order: str(order.get("status", "")).lower() in terminal,
+            timeout=timeout,
+            start_interval=1.0,
+            interval_ramp=1.0,
+        )
 
     def _write_debug_dump(
         self, exchange_sym: str, side: str, order_id: str, order: dict,
