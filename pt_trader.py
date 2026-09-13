@@ -215,6 +215,7 @@ class CryptoAPITrading:
 
         self._skipped_coins: set = set()
         self._skip_throttle: dict = {}  # key -> last emit timestamp
+        self._price_write_throttle: dict = {}  # symbol -> last emit timestamp
         self.dca_levels_triggered = {}  # Track DCA levels for each crypto
         self.dca_levels = list(DCA_LEVELS)  # Hard DCA triggers (percent PnL)
 
@@ -1630,6 +1631,20 @@ class CryptoAPITrading:
         self._skip_throttle[key] = now
         pt_errors.emit("trader", f"{symbol}: {reason}", level="warning")
 
+    def _report_price_write_failure(self, symbol: str, exc: Exception) -> None:
+        """Surface a failure to write {symbol}_current_price.txt (throttled to once per 10 min)."""
+        now = self._now()
+        if now - self._price_write_throttle.get(symbol, 0.0) < 600:
+            return
+        self._price_write_throttle[symbol] = now
+        log.warning(f"failed to write current price file for {symbol}: {exc}")
+        pt_errors.emit(
+            f"trader-{EXCHANGE_KEY}",
+            level="warning",
+            message=f"Could not update {symbol} current price file",
+            detail=f"{exc}. GUI price display for {symbol} may be stale; trading logic is unaffected.",
+        )
+
     def _record_trade(
         self,
         side: str,
@@ -2682,8 +2697,8 @@ class CryptoAPITrading:
                     )
                     with open(_cpf, "w") as _f:
                         _f.write(str(current_buy_price))
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._report_price_write_failure(symbol, e)
 
                 positions[symbol] = {
                     "quantity": 0.0,
@@ -2881,12 +2896,15 @@ class CryptoAPITrading:
                         (current_sell_price - trail_line_disp) / trail_line_disp
                     ) * 100.0
 
-            _cpf = os.path.join(
-                str(_pt_env.coin_dir(symbol)),
-                f"{symbol}_current_price.txt",
-            )
-            with open(_cpf, "w") as _f:
-                _f.write(str(current_buy_price))
+            try:
+                _cpf = os.path.join(
+                    str(_pt_env.coin_dir(symbol)),
+                    f"{symbol}_current_price.txt",
+                )
+                with open(_cpf, "w") as _f:
+                    _f.write(str(current_buy_price))
+            except Exception as e:
+                self._report_price_write_failure(symbol, e)
             positions[symbol] = {
                 "quantity": quantity,
                 "avg_cost_basis": avg_cost_basis,
@@ -3139,8 +3157,8 @@ class CryptoAPITrading:
                     )
                     with open(_cpf, "w") as _f:
                         _f.write(str(current_buy_price))
-                except Exception:
-                    pass
+                except Exception as e:
+                    self._report_price_write_failure(sym, e)
 
                 # Not currently held (or not in holdings payload this tick) => no leftover qty to reserve.
                 reserved_qty = 0.0
