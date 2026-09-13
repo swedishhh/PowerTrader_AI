@@ -364,6 +364,22 @@ async def api_account_summary():
     return {"summary": result}
 
 
+@app.get("/api/account-breakdown")
+async def api_account_breakdown():
+    """Cash/Holdings/Seed/Realized/Floating/Fees breakdown of each active
+    exchange's current TOTAL — powers the Accounts tab's totals table."""
+    xks = _active_accounts()
+    # Same blocking-I/O reasoning as api_account_summary above.
+    df = await asyncio.to_thread(pt_account_analytics.build_account_breakdown_table, env, xks)
+    # NaN (un-seeded account) -> None, since JS's JSON.parse rejects a
+    # literal NaN even though Python's json module happily emits one.
+    columns = {
+        xk: {k: (None if pd.isna(v) else v) for k, v in df[xk].to_dict().items()}
+        for xk in xks
+    }
+    return {"rows": list(df.index), "columns": columns}
+
+
 @app.get("/api/comparison")
 async def api_comparison():
     """Per-coin comparison across exchanges."""

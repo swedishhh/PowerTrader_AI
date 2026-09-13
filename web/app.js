@@ -1658,51 +1658,48 @@ function _acctEntryWithMeans(e) {
   };
 }
 
-function renderAccountsTotalsTable(summary, xks) {
-  const multi = xks.length >= 2;
-  const c0 = xkColor(xks[0]);
-  const c1 = multi ? xkColor(xks[1]) : c0;
+// Row labels from /api/account-breakdown, in display order, with a
+// separator inserted after the row named as the 'sep' key. TOTAL is the
+// only clickable row (opens the portfolio chart, scope 'total'). Fees
+// Paid and Unallocated are both memo/reconciling figures rather than
+// independent components (Fees Paid is already netted into Cash/Realized
+// PnL; Unallocated is defined as whatever Seed+Realized+Floating falls
+// short of TOTAL by, mostly buy-side fees excluded from cost basis — see
+// pt_account_analytics._build_account_breakdown_row's docstring) — styled
+// like the old table's static rows rather than looking like a peer of
+// Cash/Holdings/Seed/etc.
+const ACCOUNT_BREAKDOWN_LAYOUT = [
+  { row: 'Cash' },
+  { row: 'Holdings (Tradable)' },
+  { row: 'Holdings (LTH)', sep: true },
+  { row: 'TOTAL', total: true, sep: true },
+  { row: 'Seed' },
+  { row: 'Realized PnL' },
+  { row: 'Floating PnL' },
+  { row: 'Unallocated', memo: true, sep: true },
+  { row: 'Fees Paid', memo: true },
+];
 
-  let html = '<table class="compare-table accounts-table accounts-totals-table"><thead>';
-  html += '<tr class="compare-hdr-top"><th rowspan="2">Account</th>';
-  html += '<th colspan="2">Value $</th><th colspan="2">%</th></tr><tr class="compare-hdr-sub">';
-  html += `<th style="color:${c0}">${xks[0]}</th><th style="color:${c1}">${multi ? xks[1] : ''}</th>`;
-  html += `<th style="color:${c0}">${xks[0]}</th><th style="color:${c1}">${multi ? xks[1] : ''}</th>`;
+function renderAccountsTotalsTable(breakdown, xks) {
+  const cols = breakdown.columns || {};
+
+  let html = '<table class="compare-table accounts-table accounts-totals-table"><thead><tr>';
+  html += '<th>Account</th>';
+  xks.forEach(xk => { html += `<th style="color:${xkColor(xk)}">${xk}</th>`; });
   html += '</tr></thead><tbody>';
 
-  const row = (label, scope, getEntry) => {
-    let r = `<tr class="accounts-row" data-scope="${scope}"><td class="compare-coin">${label}</td>`;
-    xks.forEach(xk => { const e = getEntry(xk); r += `<td>${e ? fmtUSD(e.value) : '—'}</td>`; });
+  ACCOUNT_BREAKDOWN_LAYOUT.forEach(({ row: label, total, memo, sep }) => {
+    const classes = total ? 'accounts-row compare-totals' : (memo ? 'accounts-static' : '');
+    const scopeAttr = total ? ' data-scope="total"' : '';
+    html += `<tr class="${classes}"${scopeAttr}><td class="compare-coin">${label}</td>`;
     xks.forEach(xk => {
-      const e = getEntry(xk);
-      const cls = e && e.pct != null ? (e.pct >= 0 ? 'positive' : 'negative') : '';
-      r += `<td class="${cls}">${e && e.pct != null ? fmtPct(e.pct) : '—'}</td>`;
+      const v = cols[xk] ? cols[xk][label] : null;
+      const cls = (v != null && !memo) ? (v >= 0 ? 'positive' : 'negative') : '';
+      html += `<td class="${cls}">${v != null ? fmtUSD(v) : '—'}</td>`;
     });
-    return r + '</tr>';
-  };
-
-  // Total account chart — label stays scope-sensitive so clicking it always
-  // opens the portfolio-total chart, same as before.
-  html += row('TOTAL', 'total', xk => summary[xk]?.total).replace('accounts-row', 'accounts-row compare-totals');
-
-  // Cross-check: sum of every coin's mark-to-market $/% against TOTAL above.
-  // Coin PnL excludes buy-side fees from cost basis (matching pt_trader.py's
-  // own realized_profit_usd convention) while TOTAL is a pure cash+value
-  // reconstruction, so a small residual here (roughly cumulative fees) is
-  // expected, not a bug.
-  const sumEntry = xk => {
-    const coinsForXk = summary[xk]?.coins || {};
-    const vals = Object.values(coinsForXk);
-    if (!vals.length) return null;
-    return {
-      value: vals.reduce((s, e) => s + (e.value || 0), 0),
-      pct: vals.reduce((s, e) => s + (e.pct || 0), 0),
-    };
-  };
-  html += row('Σ Coins', null, sumEntry).replace('accounts-row', 'accounts-row accounts-static');
-
-  const feesEntry = xk => (summary[xk]?.fees_paid != null ? { value: summary[xk].fees_paid, pct: null } : null);
-  html += row('Fees Paid', null, feesEntry).replace('accounts-row', 'accounts-row accounts-static');
+    html += '</tr>';
+    if (sep) html += `<tr class="accounts-separator"><td colspan="${1 + xks.length}"></td></tr>`;
+  });
 
   html += '</tbody></table>';
   return html;
@@ -1786,17 +1783,20 @@ function _bindAccountsCoinsTableHandlers(container, summary, xks) {
 async function loadAndRenderAccountsTab() {
   const container = $('#accounts-table-container');
   try {
-    const data = await api('account-summary');
-    const summary = data.summary || {};
+    const [summaryData, breakdownData] = await Promise.all([
+      api('account-summary'),
+      api('account-breakdown'),
+    ]);
+    const summary = summaryData.summary || {};
     const xks = state.exchangeList.length ? state.exchangeList : Object.keys(summary);
     if (!xks.length) { container.innerHTML = '<div class="empty-state">No account data</div>'; return; }
 
     container.innerHTML =
-      renderAccountsTotalsTable(summary, xks) +
+      renderAccountsTotalsTable(breakdownData, xks) +
       '<div class="accounts-tables-gap"></div>' +
       renderAccountsCoinsTable(summary, xks);
 
-    container.querySelectorAll('.accounts-totals-table tr.accounts-row:not(.accounts-static)').forEach(tr => {
+    container.querySelectorAll('.accounts-totals-table tr.accounts-row').forEach(tr => {
       tr.onclick = () => selectAccountChart(state.accountTf, tr.dataset.scope);
     });
     _bindAccountsCoinsTableHandlers(container, summary, xks);
