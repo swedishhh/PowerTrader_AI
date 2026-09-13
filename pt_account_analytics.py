@@ -189,6 +189,17 @@ def get_total_fees_paid(trade_history_path: Path) -> float:
     return total
 
 
+def get_coin_fees_paid(trade_history_path: Path, coin: str) -> float:
+    """Cumulative fees_usd (+ fees_fallback_applied_usd) for one coin, all
+    sides, LTH included — same convention as get_total_fees_paid, scoped to
+    a single coin."""
+    total = 0.0
+    for row in get_trade_history(trade_history_path, coin=coin):
+        total += float(row.get("fees_usd") or 0.0)
+        total += float(row.get("fees_fallback_applied_usd") or 0.0)
+    return total
+
+
 def get_coin_realized_pnl(trade_history_path: Path, coin: str) -> dict:
     """Cumulative realized PnL across every closed round-trip sell for one
     coin — the sum of each sell's own realized_profit_usd and pnl_pct
@@ -745,9 +756,11 @@ def _read_live_total(env, xk: str) -> Optional[float]:
 
 
 def build_account_summary(env, xk: str) -> dict:
-    """{"total": {value, pct}, "coins": {SYM: {value, pct, trade_count}, ...},
-    "fees_paid": float} — latest point only, cheap. Powers the Accounts-tab
-    table. fees_paid is all-time cumulative, see get_total_fees_paid.
+    """{"total": {value, pct}, "coins": {SYM: {value, pct, trade_count,
+    fees_paid}, ...}, "fees_paid": float} — latest point only, cheap. Powers
+    the Accounts-tab table. Both fees_paid fields are all-time cumulative;
+    the top-level one is the whole account (see get_total_fees_paid), the
+    per-coin one is scoped to that coin (see get_coin_fees_paid).
 
     Total reflects current account value (cash + open holdings marked to
     market), same concept as the portfolio chart. Per-coin reflects
@@ -799,6 +812,7 @@ def build_account_summary(env, xk: str) -> dict:
             "value": float(mtm_out["pnl_usd"].iloc[-1]),
             "pct": float(mtm_out["pnl_pct"].iloc[-1]) if (trade_count > 0 or qty > 1e-12) else None,
             "trade_count": trade_count,
+            "fees_paid": get_coin_fees_paid(trade_history_path, coin),
         }
 
     cash = float(ledger["cash"].iloc[-1]) if not ledger.empty else seed_cash

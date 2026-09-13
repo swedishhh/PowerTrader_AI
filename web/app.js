@@ -1630,6 +1630,159 @@ function _setAccountsTabRowActive(scope) {
   });
 }
 
+// Per-exchange metrics shown for each coin. "Mean" columns are the
+// cumulative value/pct divided by trade_count — a rough per-trade
+// normalization, not a pure realized-only average (value/pct both include
+// the current open position's unrealized contribution alongside the
+// trade_count closed round trips), but useful for comparing coins/
+// exchanges with very different trade counts at a glance.
+const ACCOUNT_METRIC_COLS = [
+  { key: 'value', label: '$ PnL', fmt: fmtUSD, signed: true },
+  { key: 'trade_count', label: '#Trades', fmt: v => (v == null ? '—' : String(v)), signed: false },
+  { key: 'mean_value', label: 'Mean $', fmt: fmtUSD, signed: true },
+  { key: 'mean_pct', label: 'Mean %', fmt: fmtPct, signed: true },
+  { key: 'fees_paid', label: 'Fees', fmt: fmtUSD, signed: false },
+];
+
+let _acctSortXk = null;   // which exchange's column is driving the sort (null = default)
+let _acctSortKey = null;  // one of ACCOUNT_METRIC_COLS[].key
+let _acctSortAsc = false;
+
+function _acctEntryWithMeans(e) {
+  if (!e) return null;
+  const tc = e.trade_count || 0;
+  return {
+    ...e,
+    mean_value: tc > 0 ? e.value / tc : null,
+    mean_pct: tc > 0 ? e.pct / tc : null,
+  };
+}
+
+function renderAccountsTotalsTable(summary, xks) {
+  const multi = xks.length >= 2;
+  const c0 = xkColor(xks[0]);
+  const c1 = multi ? xkColor(xks[1]) : c0;
+
+  let html = '<table class="compare-table accounts-table accounts-totals-table"><thead>';
+  html += '<tr class="compare-hdr-top"><th rowspan="2">Account</th>';
+  html += '<th colspan="2">Value $</th><th colspan="2">%</th></tr><tr class="compare-hdr-sub">';
+  html += `<th style="color:${c0}">${xks[0]}</th><th style="color:${c1}">${multi ? xks[1] : ''}</th>`;
+  html += `<th style="color:${c0}">${xks[0]}</th><th style="color:${c1}">${multi ? xks[1] : ''}</th>`;
+  html += '</tr></thead><tbody>';
+
+  const row = (label, scope, getEntry) => {
+    let r = `<tr class="accounts-row" data-scope="${scope}"><td class="compare-coin">${label}</td>`;
+    xks.forEach(xk => { const e = getEntry(xk); r += `<td>${e ? fmtUSD(e.value) : '—'}</td>`; });
+    xks.forEach(xk => {
+      const e = getEntry(xk);
+      const cls = e && e.pct != null ? (e.pct >= 0 ? 'positive' : 'negative') : '';
+      r += `<td class="${cls}">${e && e.pct != null ? fmtPct(e.pct) : '—'}</td>`;
+    });
+    return r + '</tr>';
+  };
+
+  // Total account chart — label stays scope-sensitive so clicking it always
+  // opens the portfolio-total chart, same as before.
+  html += row('TOTAL', 'total', xk => summary[xk]?.total).replace('accounts-row', 'accounts-row compare-totals');
+
+  // Cross-check: sum of every coin's mark-to-market $/% against TOTAL above.
+  // Coin PnL excludes buy-side fees from cost basis (matching pt_trader.py's
+  // own realized_profit_usd convention) while TOTAL is a pure cash+value
+  // reconstruction, so a small residual here (roughly cumulative fees) is
+  // expected, not a bug.
+  const sumEntry = xk => {
+    const coinsForXk = summary[xk]?.coins || {};
+    const vals = Object.values(coinsForXk);
+    if (!vals.length) return null;
+    return {
+      value: vals.reduce((s, e) => s + (e.value || 0), 0),
+      pct: vals.reduce((s, e) => s + (e.pct || 0), 0),
+    };
+  };
+  html += row('Σ Coins', null, sumEntry).replace('accounts-row', 'accounts-row accounts-static');
+
+  const feesEntry = xk => (summary[xk]?.fees_paid != null ? { value: summary[xk].fees_paid, pct: null } : null);
+  html += row('Fees Paid', null, feesEntry).replace('accounts-row', 'accounts-row accounts-static');
+
+  html += '</tbody></table>';
+  return html;
+}
+
+function renderAccountsCoinsTable(summary, xks) {
+  const coinSet = new Set();
+  xks.forEach(xk => Object.keys((summary[xk] || {}).coins || {}).forEach(c => coinSet.add(c)));
+  let coins = [...coinSet];
+
+  const entryFor = (coin, xk) => _acctEntryWithMeans(summary[xk]?.coins?.[coin]);
+
+  if (_acctSortXk != null) {
+    coins.sort((a, b) => {
+      const va = entryFor(a, _acctSortXk)?.[_acctSortKey];
+      const vb = entryFor(b, _acctSortXk)?.[_acctSortKey];
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1;
+      if (vb == null) return -1;
+      return _acctSortAsc ? va - vb : vb - va;
+    });
+  } else {
+    // Default: largest absolute $ PnL across exchanges first.
+    coins.sort((a, b) => {
+      const va = Math.max(...xks.map(xk => Math.abs(entryFor(a, xk)?.value || 0)));
+      const vb = Math.max(...xks.map(xk => Math.abs(entryFor(b, xk)?.value || 0)));
+      return vb - va;
+    });
+  }
+
+  let html = '<table class="compare-table accounts-table accounts-coins-table"><thead>';
+  html += '<tr class="compare-hdr-top"><th rowspan="2">Coin</th>';
+  xks.forEach(xk => { html += `<th colspan="${ACCOUNT_METRIC_COLS.length}" style="color:${xkColor(xk)}">${xk}</th>`; });
+  html += '</tr><tr class="compare-hdr-sub">';
+  xks.forEach(xk => {
+    ACCOUNT_METRIC_COLS.forEach(col => {
+      const active = _acctSortXk === xk && _acctSortKey === col.key;
+      const arrow = active ? (_acctSortAsc ? ' ▲' : ' ▼') : '';
+      html += `<th class="accounts-sort-th${active ? ' active' : ''}" data-xk="${xk}" data-key="${col.key}">${col.label}${arrow}</th>`;
+    });
+  });
+  html += '</tr></thead><tbody>';
+
+  coins.forEach(coin => {
+    let r = `<tr class="accounts-row" data-scope="${coin}"><td class="compare-coin">${coin}</td>`;
+    xks.forEach(xk => {
+      const e = entryFor(coin, xk);
+      ACCOUNT_METRIC_COLS.forEach(col => {
+        const v = e ? e[col.key] : null;
+        const cls = col.signed && v != null ? (v >= 0 ? 'positive' : 'negative') : '';
+        r += `<td class="${cls}">${v != null ? col.fmt(v) : '—'}</td>`;
+      });
+    });
+    html += r + '</tr>';
+  });
+
+  html += '</tbody></table>';
+  return html;
+}
+
+function _bindAccountsCoinsTableHandlers(container, summary, xks) {
+  container.querySelectorAll('.accounts-coins-table tr.accounts-row').forEach(tr => {
+    tr.onclick = () => selectAccountChart(state.accountTf, tr.dataset.scope);
+  });
+  container.querySelectorAll('.accounts-coins-table .accounts-sort-th').forEach(th => {
+    th.onclick = () => {
+      const xk = th.dataset.xk, key = th.dataset.key;
+      if (_acctSortXk === xk && _acctSortKey === key) {
+        _acctSortAsc = !_acctSortAsc;
+      } else {
+        _acctSortXk = xk; _acctSortKey = key; _acctSortAsc = false;
+      }
+      const coinsTable = container.querySelector('.accounts-coins-table');
+      if (coinsTable) coinsTable.outerHTML = renderAccountsCoinsTable(summary, xks);
+      _bindAccountsCoinsTableHandlers(container, summary, xks);
+      _setAccountsTabRowActive(state.chartMode === 'account' ? state.accountScope : null);
+    };
+  });
+}
+
 async function loadAndRenderAccountsTab() {
   const container = $('#accounts-table-container');
   try {
@@ -1638,71 +1791,15 @@ async function loadAndRenderAccountsTab() {
     const xks = state.exchangeList.length ? state.exchangeList : Object.keys(summary);
     if (!xks.length) { container.innerHTML = '<div class="empty-state">No account data</div>'; return; }
 
-    const multi = xks.length >= 2;
-    const c0 = xkColor(xks[0]);
-    const c1 = multi ? xkColor(xks[1]) : c0;
+    container.innerHTML =
+      renderAccountsTotalsTable(summary, xks) +
+      '<div class="accounts-tables-gap"></div>' +
+      renderAccountsCoinsTable(summary, xks);
 
-    // Union of every coin that has a position on any exchange, sorted by
-    // largest absolute value (across exchanges) first.
-    const coinSet = new Set();
-    xks.forEach(xk => Object.keys((summary[xk] || {}).coins || {}).forEach(c => coinSet.add(c)));
-    const coins = [...coinSet].sort((a, b) => {
-      const va = Math.max(...xks.map(xk => Math.abs((summary[xk]?.coins?.[a]?.value) || 0)));
-      const vb = Math.max(...xks.map(xk => Math.abs((summary[xk]?.coins?.[b]?.value) || 0)));
-      return vb - va;
+    container.querySelectorAll('.accounts-totals-table tr.accounts-row:not(.accounts-static)').forEach(tr => {
+      tr.onclick = () => selectAccountChart(state.accountTf, tr.dataset.scope);
     });
-
-    let html = '<table class="compare-table accounts-table"><thead>';
-    html += '<tr class="compare-hdr-top"><th rowspan="2">Account</th>';
-    html += '<th colspan="2">Value $</th><th colspan="2">%</th></tr><tr class="compare-hdr-sub">';
-    html += `<th style="color:${c0}">${xks[0]}</th><th style="color:${c1}">${multi ? xks[1] : ''}</th>`;
-    html += `<th style="color:${c0}">${xks[0]}</th><th style="color:${c1}">${multi ? xks[1] : ''}</th>`;
-    html += '</tr></thead><tbody>';
-
-    const row = (label, scope, getEntry) => {
-      let r = `<tr class="accounts-row" data-scope="${scope}"><td class="compare-coin">${label}</td>`;
-      xks.forEach(xk => { const e = getEntry(xk); r += `<td>${e ? fmtUSD(e.value) : '—'}</td>`; });
-      xks.forEach(xk => {
-        const e = getEntry(xk);
-        const cls = e && e.pct != null ? (e.pct >= 0 ? 'positive' : 'negative') : '';
-        r += `<td class="${cls}">${e && e.pct != null ? fmtPct(e.pct) : '—'}</td>`;
-      });
-      return r + '</tr>';
-    };
-
-    html += row('TOTAL', 'total', xk => summary[xk]?.total).replace('accounts-row', 'accounts-row compare-totals');
-    html += `<tr class="accounts-separator"><td colspan="${1 + xks.length * 2}"></td></tr>`;
-    coins.forEach(coin => { html += row(coin, coin, xk => summary[xk]?.coins?.[coin]); });
-
-    // Cross-check: sum of every coin's mark-to-market $/% against the TOTAL
-    // row above. Coin PnL excludes buy-side fees from cost basis (matching
-    // pt_trader.py's own realized_profit_usd convention) while TOTAL is a
-    // pure cash+value reconstruction, so a small residual here (roughly the
-    // account's cumulative trading fees) is expected, not a bug.
-    const sumEntry = xk => {
-      const coinsForXk = summary[xk]?.coins || {};
-      const vals = coins.map(c => coinsForXk[c]).filter(Boolean);
-      if (!vals.length) return null;
-      return {
-        value: vals.reduce((s, e) => s + (e.value || 0), 0),
-        pct: vals.reduce((s, e) => s + (e.pct || 0), 0),
-      };
-    };
-    html += row('Σ Coins', null, sumEntry).replace('accounts-row', 'accounts-row accounts-static');
-
-    // Fees Paid: all-time cumulative trading fees, for reference only — it
-    // runs somewhat higher than the Σ Coins/TOTAL gap above (only buy-side
-    // fees are excluded from per-coin cost basis, sell-side fees are
-    // already netted into both), not an exact reconciling figure.
-    const feesEntry = xk => (summary[xk]?.fees_paid != null ? { value: summary[xk].fees_paid, pct: null } : null);
-    html += row('Fees Paid', null, feesEntry).replace('accounts-row', 'accounts-row accounts-static');
-
-    html += '</tbody></table>';
-    container.innerHTML = html;
-
-    container.querySelectorAll('tr.accounts-row:not(.accounts-static)').forEach(tr => {
-      tr.addEventListener('click', () => selectAccountChart(state.accountTf, tr.dataset.scope));
-    });
+    _bindAccountsCoinsTableHandlers(container, summary, xks);
     _setAccountsTabRowActive(state.chartMode === 'account' ? state.accountScope : null);
   } catch (e) {
     container.innerHTML = '<div class="empty-state">Failed to load accounts</div>';

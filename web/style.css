@@ -1840,6 +1840,15 @@ body {
 }
 .accounts-table tr.accounts-static td { border-top: 1px dashed var(--border); }
 
+.accounts-tables-gap { height: 18px; }
+
+.accounts-table .accounts-sort-th {
+  cursor: pointer;
+  user-select: none;
+}
+.accounts-table .accounts-sort-th:hover { color: var(--text-secondary); }
+.accounts-table .accounts-sort-th.active { color: var(--cyan); }
+
 /* ═══════════════════════════════════════════════════════════
    Data Manager Tab
    ═══════════════════════════════════════════════════════════ */
