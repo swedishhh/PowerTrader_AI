@@ -117,6 +117,15 @@ class PaperExchange(Exchange):
     def _get_price(self, base: str) -> Optional[float]:
         return get_mid_price(base, self._price_source)
 
+    def get_avg_cost_basis(self, base: str) -> float:
+        """Per-unit cost basis for the currently-open position in *base*, or
+        0.0 if there isn't one. Must be read before place_sell(), which
+        reduces the underlying position_cost as part of the sell."""
+        pos = self._position_cost.get(base, {})
+        qty = float(pos.get("qty", 0) or 0)
+        cost = float(pos.get("usd_cost", 0) or 0)
+        return (cost / qty) if qty > 1e-12 else 0.0
+
     def to_exchange_symbol(self, canonical: str) -> str:
         return canonical
 
@@ -429,6 +438,17 @@ class ShadowedExchange(Exchange):
                         "order_id": shadow_result.order_id,
                         "exchange": "shadow",
                     })
+                else:
+                    pt_errors.emit(
+                        "exchange-shadow", level="error",
+                        message=f"Buy of {symbol} was not mirrored into shadow: no live price available",
+                        detail=(
+                            "The real buy executed successfully but the shadow account could not "
+                            "price the mirror trade. The shadow will show no position in this coin "
+                            "for this buy — the friction comparison (real vs shadow P&L) will be "
+                            "inaccurate until the shadow is re-synced via 'Sync Shadow'."
+                        ),
+                    )
             except Exception as e:
                 pt_errors.emit(
                     "exchange-shadow", level="error",
@@ -448,8 +468,19 @@ class ShadowedExchange(Exchange):
             shadow_qty = self._shadow.get_holdings().get(base, 0)
             if shadow_qty > 1e-12:
                 try:
+                    # Must be read BEFORE place_sell(), which reduces the
+                    # underlying position_cost as part of executing the sell.
+                    avg_cost_basis = self._shadow.get_avg_cost_basis(base)
                     shadow_result = self._shadow.place_sell(symbol, shadow_qty)
                     if shadow_result:
+                        sold_qty = shadow_result.filled_qty or 0.0
+                        notional = shadow_result.notional_usd or 0.0
+                        realized_profit_usd = notional - (avg_cost_basis * sold_qty)
+                        pnl_pct = (
+                            ((shadow_result.avg_price - avg_cost_basis) / avg_cost_basis) * 100.0
+                            if avg_cost_basis > 0 and shadow_result.avg_price is not None
+                            else None
+                        )
                         self._shadow._append_trade_history({
                             "ts": utcnow(),
                             "side": "sell",
@@ -459,13 +490,25 @@ class ShadowedExchange(Exchange):
                             "price": shadow_result.avg_price,
                             "notional_usd": shadow_result.notional_usd,
                             "net_usd": shadow_result.notional_usd or 0,
-                            "avg_cost_basis": None,
-                            "pnl_pct": None,
+                            "avg_cost_basis": avg_cost_basis if avg_cost_basis > 0 else None,
+                            "pnl_pct": pnl_pct,
                             "fees_usd": 0.0,
                             "fees_missing": False,
+                            "realized_profit_usd": realized_profit_usd,
                             "order_id": shadow_result.order_id,
                             "exchange": "shadow",
                         })
+                    else:
+                        pt_errors.emit(
+                            "exchange-shadow", level="error",
+                            message=f"Sell of {symbol} was not mirrored into shadow: no live price available",
+                            detail=(
+                                "The real sell executed successfully but the shadow account could "
+                                "not price the mirror trade. The shadow will keep showing a position "
+                                "in this coin that no longer exists on the real exchange — use "
+                                "'Sync Shadow' to correct once positions are flat."
+                            ),
+                        )
                 except Exception as e:
                     pt_errors.emit(
                         "exchange-shadow", level="error",
