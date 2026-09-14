@@ -2870,10 +2870,17 @@ function setupDataTabDelegation() {
 }
 
 function setupTabs() {
-  $$('.tab-btn').forEach(btn => {
+  // Scoped to the top-level tab bar specifically — a global `.tab-btn`
+  // selector here also catches the Accounts sub-tabs (#accounts-subtabs),
+  // which share the class purely for styling. Those buttons have no
+  // data-tab, so a global handler would run with tab=undefined, matching
+  // no `.tab-content` and stripping .active from all of them — including
+  // #tab-accounts itself, hiding the whole panel until the top-level
+  // Accounts tab was clicked again to restore it.
+  $$('#trades-tabs .tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const tab = btn.dataset.tab;
-      $$('.tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+      $$('#trades-tabs .tab-btn').forEach(b => b.classList.toggle('active', b === btn));
       $$('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-' + tab));
 
       if (state.logRefreshTimer) { clearInterval(state.logRefreshTimer); state.logRefreshTimer = null; }
@@ -2923,7 +2930,7 @@ function setupMobileNav() {
       if (panelSel) $(panelSel).classList.add('mobile-active');
 
       if (view === 'settings') {
-        $$('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === 'settings'));
+        $$('#trades-tabs .tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === 'settings'));
         $$('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-settings'));
       }
     });
