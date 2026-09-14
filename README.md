@@ -43,114 +43,50 @@ For determining when to DCA, it uses either the current price level from the AI 
 For determining when to sell, the bot uses a trailing profit margin to maximize the potential gains. The margin line is set at either 5% gain if no DCA has happened on the trade, or 2.5% gain if any DCA has happened. The trailing margin gap is 0.5% (this is the amount the price has to go over the profit margin to begin raising the profit margin up to TRAIL after the price and maximize how much profit is gained once the price drops below the profit margin again and the bot sells the trade.
 
 
-# Setup & First-Time Use (Windows)
+# Setup & First-Time Use
 
 THESE INSTRUCTIONS WERE WRITTEN BY AI! PLEASE LET ME KNOW IF THERE ARE ANY ERRORS OR ISSUES WITH THIS SETUP PROCESS!
 
-If you have any crypto holdings in Robinhood currently, either transfer them out of your Robinhood account or sell them to dollars BEFORE going through this setup process!
+If you have any crypto holdings on an exchange you don't want the bot trading, either transfer them out or sell them to dollars BEFORE going through this setup process!
 
-This page walks you through installing PowerTrader AI from start to finish, in the exact order a first-time user should do it.  
-No coding knowledge needed.  
-These instructions are Windows-based but PowerTrader AI *should* be able to run on any OS.
+PowerTrader AI runs as a web app (`pt_web.py`), controlled from your browser — no separate desktop app to install. The easiest way to get it running is Docker, which works the same way on Mac, Windows, and Linux. No coding knowledge needed.
 
 IMPORTANT: This software places real trades automatically. You are responsible for everything it does to your money and your account. Keep your API keys private. I am not giving financial advice. I am not responsible for any losses incurred or any security breaches to your computer (the code is entirely open source and can be confirmed non-malicious). You are fully responsible for doing your own due diligence to learn and understand this trading system and to use it properly. You are fully responsible for all of your money and all of the bot's actions, and any gains or losses.
 
 ---
 
-## Step 1 — Install Python
+## Step 1 — Install and start PowerTrader AI
 
-1. Go to **python.org** and download Python for Windows.
-2. Run the installer.
-3. **Check the box** that says: **“Add Python to PATH”**.
-4. Click **Install Now**.
+Follow **[DOCKER.md](DOCKER.md)** — it walks through installing Docker Desktop, setting your exchange API keys, and starting the app. When you're done, you'll have PowerTrader AI open in your browser (e.g. `http://localhost:8080`).
 
 ---
 
-## Step 2 — Download PowerTrader AI
+## Step 2 — Choose your coins
 
-1. Do not download the zip file of the repo! There is an issue I have to fix.
-2. Create a folder on your computer, like: `C:\PowerTraderAI\`
-3. On the PowerTrader_AI repo page, go to the code page for pt_hub.py, click the "Download Raw File" button, save it into the folder you just created.
-4. Repeat that for all files in the repo (except the readme and the license).
+In the web UI, open **Settings** and do this in order:
 
----
-
-## Step 3 — Install PowerTrader AI (one command)
-
-1. Open **Command Prompt** (Windows key → type **cmd** → Enter).
-2. Go into your PowerTrader AI folder. Example:
-
-   `cd C:\PowerTraderAI`
-
-3. If using Python 3.12 or higher (or, later on, if you just run into the pkg_resources error) , run this command:
-
-   `python -m pip install "setuptools==81.0.0"`
-
-v81 is required, pkg_resources is not included with v82. I'll change the code away from it soon.
-
-4. Install everything PowerTrader AI needs:
-
-   `python -m pip install -r requirements.txt`
-
----
-
-## Step 4 — Start PowerTrader AI
-
-From the same Command Prompt window (inside your PowerTrader folder), run:
-
-`python pt_hub.py`
-
-The app that opens is the **PowerTrader Hub**.  
-This is the only thing you need to run day-to-day.
-
----
-
-## Step 5 — Set your folder, coins, and Robinhood keys (inside the Hub)
-
-### Open Settings
-
-In the Hub, open **Settings** and do this in order:
-
-- **Main Neural Folder**: set this to the same folder that contains `pt_hub.py` (recommended easiest).
 - **Choose which coins to trade**: start with **BTC**.
-- **While you are still in Settings**, click **Robinhood API Setup** and do this:
-
-1. Click **Generate Keys**.
-2. Copy the **Public Key** shown in the wizard.
-3. On Robinhood, add a new API key and paste that Public Key.
-4. Set permissions to allow trading (the wizard tells you what to select).
-5. Robinhood will show your API Key (often starts with `rh`). Copy it.
-6. Paste the API Key back into the wizard and click **Save**.
-7. Close the wizard and go back to the **Settings** screen.
-8. **NOW** click **Save** in Settings.
-
-After saving, you will have two files in your PowerTrader AI folder:  
-`r_key.txt` and `r_secret.txt`  
-Keep them private.
-
-PowerTrader AI uses a simple folder style:  
-**BTC uses the main folder**, and other coins use their own subfolders (like `ETH\`).
+- Click **Save**.
 
 ---
 
-## Step 6 — Train (inside the Hub)
+## Step 3 — Train
 
 Training builds the system’s coin “memory” so it can generate signals.
 
-1. In the Hub, click **Train All**.
+1. Click **Train All**.
 2. Wait until training finishes.
 
 ---
 
-## Step 7 — Start the system (inside the Hub)
+## Step 4 — Start the system
 
 When all coins have completed training, click:
 
 1. **Start All**
 
-The Hub will:  
-**start pt_thinker.py**, wait until it is ready, then it will **start pt_trader.py**.  
-You don’t need to manually start separate programs. The hub handles everything!
+This starts **pt_thinker.py**, waits until it is ready, then starts **pt_trader.py**.  
+You don’t need to manually start separate programs. The web app handles everything!
 
 ---
 
