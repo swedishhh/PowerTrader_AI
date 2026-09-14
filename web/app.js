@@ -1188,14 +1188,6 @@ async function loadAccountChart(tf, scope) {
   });
 
   _buildAccountLegend();
-
-  // Timer refresh: preserve zoom/pan
-  state.chartRefreshTimer = setInterval(async () => {
-    if (state.chartMode !== 'account' || !state.chart) return;
-    const r = state.chart.timeScale().getVisibleRange();
-    await _acctApplyData(state.accountTf, state.accountScope, null, null, null);
-    if (r && state.chart) { _lastAppliedRange = r; state.chart.timeScale().setVisibleRange(r); }
-  }, (state.cfg.chart_refresh_seconds && state.cfg.chart_refresh_seconds * 1000) || 300_000);
 }
 
 function _buildAccountLegend() {

@@ -56,6 +56,17 @@ app = FastAPI(title="PowerTrader Web")
 _exchanges: dict = {}  # real-exchange-key → Exchange (PaperExchange or ShadowedExchange)
 _last_mid_price: dict = {}  # coin -> last known good mid price
 
+# Serializes the account-history/summary/breakdown endpoints' heavy
+# reconstruct_ledger + pandas work, each run via asyncio.to_thread on a
+# worker thread. Concurrent calls (e.g. several account-history requests
+# in flight during rapid chart panning) were observed corrupting purely
+# local state inside that call chain — a local dict turning into its own
+# .items() iterator mid-comprehension, a DataFrame row surfacing as a str
+# — impossible through any bug in that code's own logic, so this forces
+# those calls to run one at a time rather than chasing the underlying
+# concurrency/threading fault directly.
+_ledger_compute_lock = asyncio.Lock()
+
 
 def _get_exchange(xk: str):
     """Get or create the top-level Exchange for the given key.
@@ -338,9 +349,12 @@ async def api_account_history(tf: str = "1day", coin: str = None, start: int = N
         # Ledger reconstruction + ArcticDB reads are blocking I/O; run off
         # the event loop so a slow account fetch doesn't stall every other
         # endpoint (this one is also hit by the Accounts tab's 10s poll).
-        out = await asyncio.to_thread(
-            pt_account_analytics.build_account_series, env, xk, tf_minutes, coin, start, end
-        )
+        # _ledger_compute_lock: see its definition — serializes this against
+        # other concurrent callers of the same heavy path.
+        async with _ledger_compute_lock:
+            out = await asyncio.to_thread(
+                pt_account_analytics.build_account_series, env, xk, tf_minutes, coin, start, end
+            )
         result[xk] = out["points"]
         baselines[xk] = out["baseline"]
         if out.get("warning"):
@@ -361,8 +375,9 @@ async def api_account_summary():
     for xk in _active_accounts():
         # Blocking I/O (ledger reconstruction + per-coin ArcticDB reads) —
         # see api_account_history's comment for why this must not run
-        # directly on the event loop.
-        result[xk] = await asyncio.to_thread(pt_account_analytics.build_account_summary, env, xk)
+        # directly on the event loop, and for _ledger_compute_lock.
+        async with _ledger_compute_lock:
+            result[xk] = await asyncio.to_thread(pt_account_analytics.build_account_summary, env, xk)
     return {"summary": result}
 
 
@@ -375,7 +390,8 @@ async def api_account_breakdown():
     every other derived figure — see account_total_delta."""
     xks = _active_accounts()
     # Same blocking-I/O reasoning as api_account_summary above.
-    df = await asyncio.to_thread(pt_account_analytics.build_account_breakdown_table, env, xks)
+    async with _ledger_compute_lock:
+        df = await asyncio.to_thread(pt_account_analytics.build_account_breakdown_table, env, xks)
     delta_total = pt_account_analytics.account_total_delta(df, xks)
     # NaN (un-seeded account) -> None, since JS's JSON.parse rejects a
     # literal NaN even though Python's json module happily emits one.
