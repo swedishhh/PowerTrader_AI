@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM python:3.11-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -6,16 +6,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     MPLBACKEND=Agg
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.11 \
-    python3.11-dev \
-    python3-pip \
     git \
     libfreetype6 \
     libpng16-16 \
     && rm -rf /var/lib/apt/lists/*
-
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
- && update-alternatives --install /usr/bin/python  python  /usr/bin/python3.11 1
 
 WORKDIR /app
 
@@ -23,7 +17,8 @@ WORKDIR /app
 ARG CACHEBUST=1
 RUN git clone https://github.com/swedishhh/PowerTrader_AI.git .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 8080
 
