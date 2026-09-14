@@ -1117,25 +1117,40 @@ async function loadAccountChart(tf, scope) {
   if (myGen !== state._acctChartGen) return; // superseded — don't touch shared state below
   state.chart.timeScale().fitContent();
 
-  // Adaptive zoom handler. setData fires visibleTimeRangeChange asynchronously
-  // (after the await in the timeout), so we unsubscribe before any data write and
-  // re-subscribe after — the only reliable way to stop the event→fetch→event loop.
-  let _rangeHandler = null;
-  const _unsub = () => { if (_rangeHandler && state.chart) try { state.chart.timeScale().unsubscribeVisibleTimeRangeChange(_rangeHandler); } catch {} };
-  const _resub  = () => { if (_rangeHandler && state.chart && state.chartMode === 'account') state.chart.timeScale().subscribeVisibleTimeRangeChange(_rangeHandler); };
+  // Adaptive zoom handler. Re-fetches a padded window around the visible range,
+  // then restores the exact pre-fetch range so setData's implicit viewport
+  // reset is invisible to the user. setData/setVisibleRange fire
+  // visibleTimeRangeChange asynchronously — sometimes after this callback has
+  // already finished — so unsubscribing around the fetch does not reliably
+  // suppress that echo. Instead every restore records the range it applied,
+  // and the handler drops incoming events that match it: without this, the
+  // echo re-triggers the handler, which re-fetches and re-restores, drifting
+  // the window forward by one fetch-span per cycle forever (observed live:
+  // request timestamps ran away to the year 2060+ within minutes).
+  let _lastAppliedRange = null;
+  const _isEcho = range => {
+    if (!_lastAppliedRange) return false;
+    const tol = Math.max(60, (range.to - range.from) * 0.001);
+    return Math.abs(range.from - _lastAppliedRange.from) < tol && Math.abs(range.to - _lastAppliedRange.to) < tol;
+  };
 
-  _rangeHandler = range => {
-    if (!range || state.chartMode !== 'account') return;
+  const _rangeHandler = range => {
+    if (!range || state.chartMode !== 'account' || _isEcho(range)) return;
     clearTimeout(state._acctRangeTimer);
     state._acctRangeTimer = setTimeout(async () => {
       if (state._acctRangeAbort) state._acctRangeAbort.abort();
       state._acctRangeAbort = new AbortController();
       const span = range.to - range.from;
       const visibleRange = state.chart?.timeScale().getVisibleRange();
-      _unsub();
-      await _acctApplyData(tf, scope, Math.floor(range.from - span), Math.ceil(range.to + span), state._acctRangeAbort.signal);
-      if (visibleRange && state.chartMode === 'account' && state.chart) state.chart.timeScale().setVisibleRange(visibleRange);
-      _resub();
+      // Account history can't extend past now — clamping the padded window
+      // is a cheap backstop against any future feedback-loop variant sending
+      // this request run away into the future indefinitely.
+      const nowSec = Math.floor(Date.now() / 1000);
+      await _acctApplyData(tf, scope, Math.floor(range.from - span), Math.min(Math.ceil(range.to + span), nowSec), state._acctRangeAbort.signal);
+      if (visibleRange && state.chartMode === 'account' && state.chart) {
+        _lastAppliedRange = visibleRange;
+        state.chart.timeScale().setVisibleRange(visibleRange);
+      }
     }, 300);
   };
   state.chart.timeScale().subscribeVisibleTimeRangeChange(_rangeHandler);
@@ -1144,11 +1159,9 @@ async function loadAccountChart(tf, scope) {
   const resizeObserver = new ResizeObserver(() => {
     if (!state.chart) return;
     const r = state.chart.timeScale().getVisibleRange();
-    _unsub();
     state.chart.applyOptions({width: container.clientWidth, height: container.clientHeight});
-    if (r) state.chart.timeScale().setVisibleRange(r);
+    if (r) { _lastAppliedRange = r; state.chart.timeScale().setVisibleRange(r); }
     else state.chart.timeScale().fitContent();
-    _resub();
   });
   resizeObserver.observe(container);
 
@@ -1180,10 +1193,8 @@ async function loadAccountChart(tf, scope) {
   state.chartRefreshTimer = setInterval(async () => {
     if (state.chartMode !== 'account' || !state.chart) return;
     const r = state.chart.timeScale().getVisibleRange();
-    _unsub();
     await _acctApplyData(state.accountTf, state.accountScope, null, null, null);
-    if (r && state.chart) state.chart.timeScale().setVisibleRange(r);
-    _resub();
+    if (r && state.chart) { _lastAppliedRange = r; state.chart.timeScale().setVisibleRange(r); }
   }, (state.cfg.chart_refresh_seconds && state.cfg.chart_refresh_seconds * 1000) || 300_000);
 }
 
