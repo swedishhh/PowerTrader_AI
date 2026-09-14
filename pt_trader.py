@@ -2691,10 +2691,9 @@ class CryptoAPITrading:
                 current_sell_price = current_sell_prices.get(full_symbol, 0)
 
                 try:
-                    _cpf = os.path.join(
-                        str(_pt_env.coin_dir(symbol)),
-                        f"{symbol}_current_price.txt",
-                    )
+                    _coin_dir = str(_pt_env.coin_dir(symbol))
+                    os.makedirs(_coin_dir, exist_ok=True)  # e.g. a held-but-unconfigured coin (LTH-only)
+                    _cpf = os.path.join(_coin_dir, f"{symbol}_current_price.txt")
                     with open(_cpf, "w") as _f:
                         _f.write(str(current_buy_price))
                 except Exception as e:
@@ -2897,10 +2896,9 @@ class CryptoAPITrading:
                     ) * 100.0
 
             try:
-                _cpf = os.path.join(
-                    str(_pt_env.coin_dir(symbol)),
-                    f"{symbol}_current_price.txt",
-                )
+                _coin_dir = str(_pt_env.coin_dir(symbol))
+                os.makedirs(_coin_dir, exist_ok=True)  # e.g. a held-but-unconfigured coin (LTH-only)
+                _cpf = os.path.join(_coin_dir, f"{symbol}_current_price.txt")
                 with open(_cpf, "w") as _f:
                     _f.write(str(current_buy_price))
             except Exception as e:
@@ -3151,10 +3149,9 @@ class CryptoAPITrading:
                 current_sell_price = current_sell_prices.get(full_symbol, 0.0)
 
                 try:
-                    _cpf = os.path.join(
-                        str(_pt_env.coin_dir(sym)),
-                        f"{sym}_current_price.txt",
-                    )
+                    _coin_dir = str(_pt_env.coin_dir(sym))
+                    os.makedirs(_coin_dir, exist_ok=True)
+                    _cpf = os.path.join(_coin_dir, f"{sym}_current_price.txt")
                     with open(_cpf, "w") as _f:
                         _f.write(str(current_buy_price))
                 except Exception as e:
