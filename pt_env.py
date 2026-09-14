@@ -1,7 +1,7 @@
 """Centralized environment, path resolution, and config management for PowerTrader_AI.
 
 All file paths used for inter-process communication live here so that
-pt_hub, pt_web, pt_models, and pt_controller share a single source of truth.
+pt_web, pt_models, and pt_controller share a single source of truth.
 
 Config is read from pt_config.json (formerly gui_settings.json).  Callers should
 use get_config() for a cached, mtime-fresh snapshot and set_config() to write changes.

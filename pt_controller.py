@@ -1,6 +1,6 @@
 """Business logic for PowerTrader_AI: subprocess management, training, settings.
 
-Designed to be shared by pt_hub.py (tkinter) and pt_web.py (web app).
+Used by pt_web.py (web app).
 """
 
 import glob

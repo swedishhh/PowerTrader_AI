@@ -85,7 +85,7 @@ Three concrete types exist (exchange_paper.py, exchange_<name>.py):
     Exposes all_accounts() → [self, self._shadow] so pt_web can display
     both accounts without knowing about the wrapper.
 
-  KrakenExchange / BinanceExchange / RobinhoodExchange
+  KrakenExchange / BinanceExchange
     Thin HTTP adapters: auth, wire format, order polling.  No accounting
     or strategy logic.  Each declares key and display_name so callers
     never need to special-case exchange identity by string matching.
