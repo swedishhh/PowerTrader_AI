@@ -452,9 +452,8 @@ function renderTopbarAccounts() {
       if (i === 0) {
         html += '<td class="xk-table-val xk-table-dash">—</td>';
       } else {
-        const delta = totalOf(xks[1]) - totalOf(xks[0]);
-        const dClass = delta >= 0 ? 'positive' : 'negative';
-        html += `<td class="xk-table-val ${dClass}">${fmtSignedUSD2(delta)}</td>`;
+        const dClass = deltaTotal != null ? (deltaTotal >= 0 ? 'positive' : 'negative') : '';
+        html += `<td class="xk-table-val ${dClass}">${deltaTotal != null ? fmtSignedUSD2(deltaTotal) : '—'}</td>`;
       }
     }
     html += '</tr>';
