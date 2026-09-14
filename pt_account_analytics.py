@@ -769,7 +769,14 @@ def build_account_series(
     deltas = _get_all_deltas(env.trade_history_path(xk), cache_path)
     ledger = reconstruct_ledger(seed_ts, seed_cash, deltas)
 
-    range_start = start_ts if start_ts is not None else seed_ts
+    # Clamped to seed_ts even when the caller asks for an earlier window (the
+    # chart's pan/zoom prefetch pads blindly, with no notion of inception):
+    # the bucket grid below fills any point before the ledger's first row
+    # with $0 (nothing to asof backward onto), which drew an ugly flat-zero
+    # lead-in before the account existed. Starting the grid at inception
+    # instead means the series' first point is exactly the seed value, so %
+    # mode's baseline-relative math (0% at that point) stays correct too.
+    range_start = max(start_ts, seed_ts) if start_ts is not None else seed_ts
     range_end = end_ts if end_ts is not None else pd.Timestamp.utcnow().timestamp()
 
     coins = [c[4:] for c in ledger.columns if c.startswith("qty_")]
