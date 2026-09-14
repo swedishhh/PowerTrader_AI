@@ -369,17 +369,21 @@ async def api_account_summary():
 @app.get("/api/account-breakdown")
 async def api_account_breakdown():
     """Cash/Holdings/Seed/Realized/Floating/Fees breakdown of each active
-    exchange's current TOTAL — powers the Accounts tab's totals table."""
+    exchange's current TOTAL — powers the Accounts tab's totals table and
+    the topbar summary. delta_total (second xk's TOTAL minus the
+    first's) is computed here rather than in the web layer, same as
+    every other derived figure — see account_total_delta."""
     xks = _active_accounts()
     # Same blocking-I/O reasoning as api_account_summary above.
     df = await asyncio.to_thread(pt_account_analytics.build_account_breakdown_table, env, xks)
+    delta_total = pt_account_analytics.account_total_delta(df, xks)
     # NaN (un-seeded account) -> None, since JS's JSON.parse rejects a
     # literal NaN even though Python's json module happily emits one.
     columns = {
         xk: {k: (None if pd.isna(v) else v) for k, v in df[xk].to_dict().items()}
         for xk in xks
     }
-    return {"rows": list(df.index), "columns": columns}
+    return {"rows": list(df.index), "columns": columns, "delta_total": delta_total}
 
 
 @app.get("/api/comparison")

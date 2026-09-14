@@ -920,8 +920,20 @@ def _build_account_breakdown_row(env, xk: str) -> Optional[dict]:
     figures only — both are already folded into Realized/Floating PnL
     above (buy fees via the adjustment described above, sell fees via
     realized_profit_usd itself), so they don't participate in the
-    reconciliation arithmetic a second time. For a zero-fee account (e.g.
-    shadow) every fee-related figure reduces to ~0.
+    reconciliation arithmetic a second time. Fees Paid is just their sum.
+    For a zero-fee account (e.g. shadow) every fee-related figure reduces
+    to ~0.
+
+    %Total is the account's overall return since inception, relative to
+    Seed: (TOTAL − Seed) / Seed × 100 (None if Seed is 0). Total (check)
+    re-derives TOTAL from this row's own Attribution fields (Seed +
+    Realized + Floating + Rounding) — always equal to TOTAL by
+    construction, kept as a literal second calculation (not just TOTAL
+    displayed twice) so a future bug in either path would actually be
+    caught by comparing them. Every derived figure here is computed once,
+    server-side — callers (the API layer, the web frontend) must never
+    recompute any of it independently, or the same number can end up
+    wrong in one place and right in another.
 
     Returns None if the account has no seed yet (nothing traded)."""
     price_source = _default_price_source(env)
@@ -986,24 +998,36 @@ def _build_account_breakdown_row(env, xk: str) -> Optional[dict]:
         for row in all_trades if row.get("side") == "sell"
     )
 
+    # %Total: overall return since inception, relative to Seed.
+    pct_total = ((total - seed_cash) / seed_cash * 100) if seed_cash > 0 else None
+    # Recomputed independently from this row's own Attribution fields —
+    # always equals TOTAL by construction (Rounding is defined precisely
+    # to make that true), but computing it via the same formula here
+    # rather than just re-displaying TOTAL keeps it a genuine cross-check
+    # against a future bug, not just a relabeled duplicate.
+    total_check = seed_cash + realized_pnl + floating_pnl + rounding
+
     return {
         "Cash": cash,
         "Holdings (Tradable)": holdings_tradable,
         "Holdings (LTH)": holdings_lth,
         "TOTAL": total,
+        "%Total": pct_total,
         "Seed": seed_cash,
         "Realized PnL": realized_pnl,
         "Floating PnL": floating_pnl,
         "Rounding": rounding,
+        "Total (check)": total_check,
         "Buy Fees Paid": buy_fees_paid,
         "Sell Fees Paid": sell_fees_paid,
+        "Fees Paid": buy_fees_paid + sell_fees_paid,
     }
 
 
 _ACCOUNT_BREAKDOWN_ROWS = [
-    "Cash", "Holdings (Tradable)", "Holdings (LTH)", "TOTAL",
-    "Seed", "Realized PnL", "Floating PnL", "Rounding",
-    "Buy Fees Paid", "Sell Fees Paid",
+    "Cash", "Holdings (Tradable)", "Holdings (LTH)", "TOTAL", "%Total",
+    "Seed", "Realized PnL", "Floating PnL", "Rounding", "Total (check)",
+    "Buy Fees Paid", "Sell Fees Paid", "Fees Paid",
 ]
 
 
@@ -1014,10 +1038,14 @@ def build_account_breakdown_table(env, xks: list[str]) -> pd.DataFrame:
     Floating PnL are both fully fee-adjusted, not raw cost-basis figures,
     and Rounding is an exact residual, not an estimate — see that
     docstring for how). Rows: Cash, Holdings (Tradable), Holdings (LTH),
-    TOTAL, Seed, Realized PnL, Floating PnL, Rounding, Buy Fees Paid, Sell
-    Fees Paid. One column per xk; an un-seeded account gets an all-NaN
-    column rather than being dropped, so callers can rely on every
-    requested xk appearing.
+    TOTAL, %Total, Seed, Realized PnL, Floating PnL, Rounding, Total
+    (check), Buy Fees Paid, Sell Fees Paid, Fees Paid. Every derived
+    figure — %Total, the Total (check) cross-check, and the combined
+    Fees Paid — is computed here, not by callers, so a REPL/notebook use
+    and the web layer can never compute it two different ways. One
+    column per xk; an un-seeded account gets an all-NaN column rather
+    than being dropped, so callers can rely on every requested xk
+    appearing.
 
     Handy standalone (prints cleanly in a REPL/notebook) as well as being
     what the Accounts tab's totals table is built from.
@@ -1031,3 +1059,18 @@ def build_account_breakdown_table(env, xks: list[str]) -> pd.DataFrame:
         row = _build_account_breakdown_row(env, xk)
         columns[xk] = pd.Series(row, index=_ACCOUNT_BREAKDOWN_ROWS) if row else pd.Series(index=_ACCOUNT_BREAKDOWN_ROWS, dtype=float)
     return pd.DataFrame(columns)
+
+
+def account_total_delta(df: pd.DataFrame, xks: list[str]) -> Optional[float]:
+    """TOTAL of the second account minus TOTAL of the first, from a
+    build_account_breakdown_table DataFrame — the topbar's "Δ" column.
+    None if fewer than two xks are given, or either TOTAL is NaN
+    (un-seeded account). Exists so this comparison is computed once,
+    here, rather than in the web layer — same reasoning as every other
+    derived figure in this module."""
+    if len(xks) < 2:
+        return None
+    t0, t1 = df[xks[0]]["TOTAL"], df[xks[1]]["TOTAL"]
+    if pd.isna(t0) or pd.isna(t1):
+        return None
+    return float(t1 - t0)

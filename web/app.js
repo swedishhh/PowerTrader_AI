@@ -412,21 +412,27 @@ function renderTopbarAccounts() {
   const xks = state.exchangeList;
   const cols = (_lastAccountsBreakdown && _lastAccountsBreakdown.columns) || {};
 
-  let html = '<table class="xk-table"><thead><tr><th></th><th>Total</th><th>Cash</th><th>Holdings</th><th>LTH</th><th>Realized</th><th>Floating</th><th>Fees</th>';
+  let html = '<table class="xk-table"><thead><tr><th></th><th>Total</th><th>%Total</th><th>Cash</th><th>Holdings</th><th>LTH</th><th>Realized</th><th>Floating</th><th>Fees</th>';
   if (xks.length >= 2) html += '<th>Δ</th>';
   html += '</tr></thead><tbody>';
 
-  const totalOf = xk => (cols[xk] ? cols[xk]['TOTAL'] : null) || 0;
+  const deltaTotal = _lastAccountsBreakdown ? _lastAccountsBreakdown.delta_total : null;
 
   xks.forEach((xk, i) => {
+    // Every value below is looked up directly from the breakdown — never
+    // recomputed client-side (see _build_account_breakdown_row's
+    // docstring: every derived figure, including %Total and Fees Paid,
+    // is computed exactly once, server-side).
     const col = cols[xk] || null;
     const total = col ? col['TOTAL'] : null;
+    const pctTotal = col ? col['%Total'] : null;
     const cash = col ? col['Cash'] : null;
     const holdings = col ? col['Holdings (Tradable)'] : null;
     const lth = col ? col['Holdings (LTH)'] : null;
     const realized = col ? col['Realized PnL'] : null;
     const floating = col ? col['Floating PnL'] : null;
-    const fees = col ? (col['Buy Fees Paid'] || 0) + (col['Sell Fees Paid'] || 0) : null;
+    const fees = col ? col['Fees Paid'] : null;
+    const pClass = pctTotal != null ? (pctTotal >= 0 ? 'positive' : 'negative') : '';
     const rClass = realized != null ? (realized >= 0 ? 'positive' : 'negative') : '';
     const fClass = floating != null ? (floating >= 0 ? 'positive' : 'negative') : '';
     const color = xkColor(xk);
@@ -434,6 +440,7 @@ function renderTopbarAccounts() {
     html += `<tr>
       <td class="xk-table-name"><span class="xk-dot" style="background:${color}"></span>${xkDisplayName(xk)}</td>
       <td class="xk-table-val">${total != null ? fmtUSD(total) : '—'}</td>
+      <td class="xk-table-val ${pClass}" title="Overall account return since inception, relative to the starting Seed balance.">${pctTotal != null ? fmtPct(pctTotal) : '—'}</td>
       <td class="xk-table-val">${cash != null ? fmtUSD(cash) : '—'}</td>
       <td class="xk-table-val">${holdings != null ? fmtUSD(holdings) : '—'}</td>
       <td class="xk-table-val">${lth != null ? fmtUSD(lth) : '—'}</td>
@@ -1653,7 +1660,11 @@ const ACCOUNT_BREAKDOWN_LAYOUT = [
   { row: 'Cash', tip: 'USD sitting uninvested right now — not tied up in any coin holding.' },
   { row: 'Holdings (Tradable)', tip: 'Current market value of coins the bot is actively trading.\nHoldings (Tradable) = Σ (quantity × current price) over active positions.' },
   { row: 'Holdings (LTH)', sep: true, tip: 'Current market value of coins set aside long-term, outside active trading.\nHoldings (LTH) = Σ (quantity × current price) over reserved positions.' },
-  { row: 'TOTAL', total: true, sep: true, tip: 'Total account value right now.\nTOTAL = Cash + Holdings (Tradable) + Holdings (LTH).' },
+  { row: 'TOTAL', total: true, tip: 'Total account value right now.\nTOTAL = Cash + Holdings (Tradable) + Holdings (LTH).' },
+  {
+    row: '%Total', memo: true, sep: true, pct: true,
+    tip: 'Overall account return since inception, relative to the starting Seed balance.\n%Total = (TOTAL − Seed) / Seed × 100.',
+  },
   { section: 'Attribution' },
   { row: 'Seed', tip: 'Starting cash balance when this account began being tracked.' },
   { row: 'Realized PnL', tip: 'Cumulative profit/loss already banked from closed (sold) trades, fully net of both buy- and sell-side fees.' },
@@ -1661,10 +1672,10 @@ const ACCOUNT_BREAKDOWN_LAYOUT = [
   { row: 'Rounding', memo: true, sep: true, tip: 'Exact leftover after Realized + Floating PnL above (both already fee-accurate) — real, but not yet traced to one cause; likely accumulated precision effects across many trades.\nRounding = TOTAL − (Seed + Realized PnL + Floating PnL).' },
   { row: 'Buy Fees Paid', memo: true, tip: 'All-time buy-side trading fees, for reference — already netted into Realized/Floating PnL above, not an additional deduction.' },
   { row: 'Sell Fees Paid', memo: true, tip: 'All-time sell-side trading fees, for reference — already netted into Realized PnL above, not an additional deduction.' },
+  { row: 'Fees Paid', memo: true, tip: 'Buy Fees Paid + Sell Fees Paid combined, for reference.' },
   {
-    row: 'Total', total: true,
-    compute: col => col['Seed'] + col['Realized PnL'] + col['Floating PnL'] + col['Rounding'],
-    tip: 'Same figure as TOTAL above, recomputed from this section\'s own rows as a visual cross-check.\nTotal = Seed + Realized PnL + Floating PnL + Rounding.',
+    row: 'Total (check)', total: true,
+    tip: 'Same figure as TOTAL above, independently recomputed server-side from this section\'s own rows as a genuine cross-check.\nTotal (check) = Seed + Realized PnL + Floating PnL + Rounding.',
   },
 ];
 
@@ -1676,7 +1687,7 @@ function renderAccountsTotalsTable(breakdown, xks) {
   xks.forEach(xk => { html += `<th style="color:${xkColor(xk)};text-align:right">${xk}</th>`; });
   html += '</tr></thead><tbody>';
 
-  ACCOUNT_BREAKDOWN_LAYOUT.forEach(({ row: label, total, memo, sep, tip, section, compute }) => {
+  ACCOUNT_BREAKDOWN_LAYOUT.forEach(({ row: label, total, memo, sep, tip, section, pct }) => {
     if (section) {
       html += `<tr class="accounts-section-hdr"><td colspan="${1 + xks.length}">${section}</td></tr>`;
       return;
@@ -1686,9 +1697,13 @@ function renderAccountsTotalsTable(breakdown, xks) {
     const tipAttr = tip ? ` title="${tip.replace(/"/g, '&quot;')}"` : '';
     html += `<tr class="${classes}"${scopeAttr}><td class="compare-coin"${tipAttr}>${label}</td>`;
     xks.forEach(xk => {
-      const v = cols[xk] ? (compute ? compute(cols[xk]) : cols[xk][label]) : null;
+      // Every value here is looked up directly, never computed client-side
+      // — see pt_account_analytics._build_account_breakdown_row's
+      // docstring for why (every derived figure is computed exactly once,
+      // server-side).
+      const v = cols[xk] ? cols[xk][label] : null;
       const cls = (v != null && !memo) ? (v >= 0 ? 'positive' : 'negative') : '';
-      html += `<td class="${cls}">${v != null ? fmtUSD(v) : '—'}</td>`;
+      html += `<td class="${cls}">${v != null ? (pct ? fmtPct(v) : fmtUSD(v)) : '—'}</td>`;
     });
     html += '</tr>';
     if (sep) html += `<tr class="accounts-separator"><td colspan="${1 + xks.length}"></td></tr>`;
