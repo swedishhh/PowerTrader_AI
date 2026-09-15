@@ -7,6 +7,7 @@ import glob
 import json
 import os
 import queue
+import signal
 import subprocess
 import sys
 import threading
@@ -29,10 +30,32 @@ class ProcHandle:
     log_q: queue.Queue = field(default_factory=lambda: queue.Queue(maxsize=4000))
     log_file: Path | None = field(default=None, repr=False)
     _thread: threading.Thread | None = field(default=None, repr=False)
+    # Set by _stop() right before terminate() so the on_exit callback can
+    # tell a user-requested stop from an unexpected death and only report
+    # the latter.
+    expected_stop: bool = False
 
     @property
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
+
+
+def _describe_exit(returncode) -> str:
+    """Human-readable exit reason. Negative returncode = killed by signal
+    (POSIX convention) — -9 is SIGKILL, the signature of an OOM kill or a
+    forced `docker stop`/`kill`; -15 is SIGTERM, a graceful terminate that
+    the process didn't handle and exit(0) itself."""
+    if returncode is None:
+        return "returncode unavailable"
+    if returncode < 0:
+        try:
+            sig_name = signal.Signals(-returncode).name
+        except ValueError:
+            sig_name = str(-returncode)
+        return f"killed by signal {sig_name} (code {returncode})"
+    if returncode == 0:
+        return "exited cleanly (code 0) — unexpected for a service meant to run continuously"
+    return f"exited with code {returncode}"
 
 
 def _reader_thread(proc: subprocess.Popen, q: queue.Queue, prefix: str,
@@ -178,6 +201,7 @@ class ProcessController:
 
     def _stop(self, handle: ProcHandle):
         if handle.alive:
+            handle.expected_stop = True
             try:
                 handle.proc.terminate()
             except Exception:
@@ -235,10 +259,25 @@ class ProcessController:
         except Exception:
             pass
 
+        def _on_thinker_exit(returncode):
+            if self._thinker.expected_stop:
+                self._thinker.expected_stop = False
+                return
+            pt_errors.emit(
+                "controller", level="error",
+                message=f"Thinker process exited unexpectedly: {_describe_exit(returncode)}",
+                detail=(
+                    "The thinker generates trading signals for every coin; no new "
+                    "signals will be produced until it is restarted from the Hub. "
+                    "This was not a user-requested stop."
+                ),
+            )
+
         return self._launch(
             self._thinker,
             str(self._script_path("thinker")),
             prefix="[THINKER] ",
+            on_exit=_on_thinker_exit,
             log_name="thinker",
         )
 
@@ -280,11 +319,26 @@ class ProcessController:
         ok = True
         for xk in self._trader_exchanges(exchange):
             h = self._get_trader(xk)
+
+            def _on_trader_exit(returncode, _xk=xk, _h=h):
+                if _h.expected_stop:
+                    _h.expected_stop = False
+                    return
+                pt_errors.emit(
+                    "controller", level="error",
+                    message=f"Trader ({_xk}) process exited unexpectedly: {_describe_exit(returncode)}",
+                    detail=(
+                        f"No trades, DCA checks, or exits will run for {_xk} until it "
+                        "is restarted from the Hub. This was not a user-requested stop."
+                    ),
+                )
+
             result = self._launch(
                 h,
                 str(self._script_path("trader")),
                 args=["--exchange", xk],
                 prefix=f"[TRADER:{xk.upper()}] ",
+                on_exit=_on_trader_exit,
                 log_name=f"trader-{xk}",
             )
             ok = ok and result
