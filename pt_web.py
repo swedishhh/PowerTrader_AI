@@ -37,6 +37,12 @@ TF_NAME_TO_MINUTES = dict(zip(TRAIN_TF_NAMES, TRAIN_TF_MINUTES))
 PROJECT_DIR = Path(__file__).resolve().parent
 WEB_DIR = PROJECT_DIR / "web"
 
+# Synthetic account key for the static buy-and-hold BTC benchmark on the
+# portfolio chart — see api_account_history. Never a member of
+# _active_accounts(); every other endpoint (positions/trades/close-all/etc)
+# stays untouched.
+STATIC_BENCHMARK_XK = "static_btc"
+
 _pre = argparse.ArgumentParser(add_help=False)
 _pre.add_argument("--config", default=None)
 _pre.add_argument("--state_dir", default=None)
@@ -364,6 +370,22 @@ async def api_account_history(tf: str = "1day", coin: str = None, start: int = N
             # flooded notifications. Revisit with proper dedup/throttling
             # before wiring this back into the error panel.
             warnings[xk] = out["warning"]["message"]
+
+    # Static buy-and-hold BTC benchmark, portfolio-total scope only — not a
+    # real account, so it stays out of _active_accounts() (position/trade/
+    # close-all endpoints would choke on a key with no real Exchange behind
+    # it). Mirrors the primary account's own seed (same starting capital,
+    # same start time) so it's a fair side-by-side comparison on the chart.
+    if coin is None and result:
+        mirror_xk = _active_accounts()[0]
+        async with _ledger_compute_lock:
+            btc_out = await asyncio.to_thread(
+                pt_account_analytics.build_static_hold_series, env, mirror_xk, "BTC", tf_minutes, start, end
+            )
+        result[STATIC_BENCHMARK_XK] = btc_out["points"]
+        baselines[STATIC_BENCHMARK_XK] = btc_out["baseline"]
+        if btc_out.get("warning"):
+            warnings[STATIC_BENCHMARK_XK] = btc_out["warning"]["message"]
     return {"history": result, "baselines": baselines, "warnings": warnings}
 
 

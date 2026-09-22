@@ -9,6 +9,7 @@ const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
 const XK_PALETTE = ['#F0B429', '#A78BFA', '#34D399', '#F87171', '#60A5FA'];
 function xkColor(xk) {
   if (xk === 'shadow' || xk === 'demo') return '#00D4FF';
+  if (xk === 'static_btc') return '#9090AA';
   const real = (state.exchangeList || []).filter(k => k !== 'shadow' && k !== 'demo');
   const idx = real.indexOf(xk);
   return XK_PALETTE[idx >= 0 ? idx : 0] || '#888';
@@ -16,6 +17,7 @@ function xkColor(xk) {
 function xkDisplayName(xk) {
   if (xk === 'demo') return 'Demo';
   if (xk === 'shadow') return 'Shadow';
+  if (xk === 'static_btc') return 'BTC Hold';
   return xk.charAt(0).toUpperCase() + xk.slice(1);
 }
 function xkShortLabel(xk) {
@@ -1092,6 +1094,17 @@ async function loadAccountChart(tf, scope) {
       visible: !state._acctHidden[xk],
     });
   });
+  if (scope === 'total') {
+    // Static buy-and-hold BTC benchmark — same price/right axis as the real
+    // account lines so it's directly comparable; dashed to read as a
+    // reference line rather than another tracked account.
+    state.acctSeries['static_btc'] = state.chart.addLineSeries({
+      color: xkColor('static_btc'), lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed,
+      title: '', priceScaleId: 'right',
+      priceFormat: {type: 'price', precision: 2, minMove: 0.01},
+      visible: !state._acctHidden['static_btc'],
+    });
+  }
 
   state._acctMarkerSeries = state.chart.addLineSeries({
     color: 'transparent', lineWidth: 0, lastValueVisible: false,
@@ -1194,12 +1207,12 @@ function _buildAccountLegend() {
   const legend = $('#chart-legend');
   legend.classList.remove('hidden');
   legend.innerHTML = '';
-  state.exchangeList.forEach(xk => {
+  const addLegendItem = (xk, label) => {
     const color = xkColor(xk);
     const hidden = !!state._acctHidden[xk];
     const item = document.createElement('button');
     item.className = 'legend-item' + (hidden ? ' legend-hidden' : '');
-    item.innerHTML = `<span class="legend-dot" style="background:${color}"></span><span class="legend-label">${xk}</span>`;
+    item.innerHTML = `<span class="legend-dot" style="background:${color}"></span><span class="legend-label">${label}</span>`;
     item.addEventListener('click', () => {
       state._acctHidden[xk] = !state._acctHidden[xk];
       const series = state.acctSeries[xk];
@@ -1207,7 +1220,9 @@ function _buildAccountLegend() {
       item.classList.toggle('legend-hidden');
     });
     legend.appendChild(item);
-  });
+  };
+  state.exchangeList.forEach(xk => addLegendItem(xk, xk));
+  if (state.accountScope === 'total') addLegendItem('static_btc', xkDisplayName('static_btc'));
   if (state._diffSeries) {
     const item = document.createElement('span');
     item.className = 'legend-item legend-static';
@@ -1264,6 +1279,18 @@ async function _acctApplyData(tf, scope, start, end, signal) {
       series.setData(pts);
       pointsByXk[xk] = pts;
     });
+
+    if (!coin) {
+      const btcSeries = state.acctSeries['static_btc'];
+      const btcRaw = histByXk['static_btc'] || [];
+      if (btcSeries && btcRaw.length) {
+        const base = baselines['static_btc'];
+        btcSeries.setData(btcRaw.map(h => ({
+          time: Math.floor(h.ts),
+          value: pct && base ? (h.value - base) / base * 100 : h.value,
+        })));
+      }
+    }
 
     if (state._diffSeries && state.exchangeList.length >= 2) {
       const ctrlPts = pointsByXk['shadow'] || [];

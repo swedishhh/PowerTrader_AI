@@ -828,6 +828,58 @@ def build_account_series(
     return {"points": points, "baseline": baseline, "warning": warning}
 
 
+def build_static_hold_series(
+    env,
+    mirror_xk: str,
+    coin: str = "BTC",
+    tf_minutes: int = 1440,
+    start_ts: Optional[float] = None,
+    end_ts: Optional[float] = None,
+    price_source: Optional[PriceSource] = None,
+) -> dict:
+    """Synthetic 'bought `coin` at mirror_xk's inception and held' benchmark
+    — same starting capital and start time as mirror_xk (its own seed), no
+    trade ledger of its own: value(t) = seed_cash * close(t) / close(seed_ts).
+    Same return shape as build_account_series's coin=None case, so the
+    chart can treat it as just another total-value series:
+    {"points": [...], "baseline": float, "warning": {...}|None}."""
+    price_source = price_source or _default_price_source(env)
+    seed = _read_seed(env.account_history_path(mirror_xk))
+    if seed is None:
+        return {"points": [], "baseline": None, "warning": {"message": f"No account_value_history seed for {mirror_xk}"}}
+    seed_ts, seed_cash = seed
+
+    price_df = get_price_series(coin, PRICE_FETCH_TF_MINUTES, price_source=price_source)
+    if price_df.empty:
+        return {"points": [], "baseline": seed_cash, "warning": {"message": f"No price history for {coin}"}}
+    close = price_df["close"]
+
+    # Entry price at seed_ts, asof-backward like every other lookup in this
+    # module. If mirror_xk's inception predates the earliest available
+    # candle, fall back to that earliest close instead of NaN — same
+    # "gap filled, not silently dropped" approach get_coin_value_series
+    # uses for a coin traded before its first candle.
+    seed_grid = pd.Index([seed_ts], dtype="float64", name="ts")
+    entry_price = _asof_into_grid(seed_grid, close, fill=float("nan")).iloc[0]
+    warning = None
+    if pd.isna(entry_price):
+        entry_price = float(close.iloc[0])
+        warning = f"{coin} candle history starts after {mirror_xk}'s inception; using earliest available price"
+    else:
+        entry_price = float(entry_price)
+    if not entry_price:
+        return {"points": [], "baseline": seed_cash, "warning": {"message": f"No usable price for {coin}"}}
+
+    range_start = max(start_ts, seed_ts) if start_ts is not None else seed_ts
+    range_end = end_ts if end_ts is not None else pd.Timestamp.utcnow().timestamp()
+    grid = _bucket_grid(range_start, range_end, tf_minutes)
+    price = _asof_into_grid(grid, close, fill=float("nan")).ffill().fillna(entry_price)
+
+    value = seed_cash * price / entry_price
+    points = [{"ts": int(ts), "value": float(v)} for ts, v in value.items() if pd.notna(v)]
+    return {"points": points, "baseline": seed_cash, "warning": {"message": warning} if warning else None}
+
+
 def _read_live_total(env, xk: str) -> Optional[float]:
     path = env.trader_status_path(xk)
     if not path.exists():
