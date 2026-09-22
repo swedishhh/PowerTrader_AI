@@ -51,6 +51,7 @@ const state = {
   chartMode: 'candle',
   accountTf: '1day',
   accountScope: 'total',
+  acctShowLabels: false,
   logRefreshTimer: null,
   cfg: {},
   cfgSchema: {},
@@ -1199,6 +1200,22 @@ async function loadAccountChart(tf, scope) {
     btn.addEventListener('click', () => { state.acctDisplayMode = mode; loadAccountChart(state.accountTf, state.accountScope); });
     tfContainer.appendChild(btn);
   });
+  if (scope === 'total') {
+    const labelsSep = document.createElement('span');
+    labelsSep.className = 'tf-sep';
+    tfContainer.appendChild(labelsSep);
+    const labelsBtn = document.createElement('button');
+    labelsBtn.className = 'tf-btn' + (state.acctShowLabels ? ' active' : '');
+    labelsBtn.textContent = 'Labels';
+    labelsBtn.addEventListener('click', () => {
+      state.acctShowLabels = !state.acctShowLabels;
+      labelsBtn.classList.toggle('active', state.acctShowLabels);
+      if (state._acctMarkerSeries) {
+        state._acctMarkerSeries.setMarkers(state.acctShowLabels ? (state._acctLastMarkers || []) : []);
+      }
+    });
+    tfContainer.appendChild(labelsBtn);
+  }
 
   _buildAccountLegend();
 }
@@ -1329,7 +1346,9 @@ async function _acctApplyData(tf, scope, start, end, signal) {
             });
           });
         });
-        state._acctMarkerSeries.setMarkers(markers.sort((a, b) => a.time - b.time));
+        markers.sort((a, b) => a.time - b.time);
+        state._acctLastMarkers = markers;
+        state._acctMarkerSeries.setMarkers(state.acctShowLabels ? markers : []);
       }
     }
   } catch (e) {
