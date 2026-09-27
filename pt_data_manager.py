@@ -45,10 +45,15 @@ def _ccxt_sym(coin: str) -> str:
 
 
 def _get_arctic():
-    import arcticdb as adb
+    # Routed through the Arctic singleton server when running under the
+    # orchestrator, rather than opening our own arcticdb.Arctic() handle —
+    # see pt_arctic_server.py for why this store can't safely be opened by
+    # more than one process at a time. Falls back to a direct open for
+    # standalone runs (e.g. `python pt_data_manager.py` outside pt_web).
+    from pt_arctic_client import get_arctic_backend
     data_dir = _env.historic_data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
-    return adb.Arctic(f"lmdb:///{data_dir}")
+    return get_arctic_backend(f"lmdb:///{data_dir}")
 
 
 def _write_status(state: str, coin: str = "", tf: int = 0,
@@ -97,9 +102,8 @@ def _backfill_coin(client, arctic, coin: str, error_coins: list):
 
         if lib_name not in arctic.list_libraries():
             arctic.create_library(lib_name)
-        lib = arctic.get_library(lib_name)
 
-        if a_sym in lib.list_symbols():
+        if a_sym in arctic.list_symbols(lib_name):
             continue  # already have data; topup handles this
 
         log.info(f"[Backfill] {coin} {lib_name}")
@@ -131,7 +135,7 @@ def _backfill_coin(client, arctic, coin: str, error_coins: list):
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
             df = df.set_index("timestamp").sort_index().astype(float)
 
-            lib.write(a_sym, df, prune_previous_versions=True)
+            arctic.write(lib_name, a_sym, df, prune_previous_versions=True)
             log.info(f"[Backfill] {coin} {lib_name}: {len(df)} rows "
                      f"({df.index[0].date()} → {df.index[-1].date()})")
 
@@ -160,12 +164,11 @@ def _topup_coin(client, arctic, coin: str, error_coins: list):
 
         if lib_name not in arctic.list_libraries():
             continue
-        lib = arctic.get_library(lib_name)
-        if a_sym not in lib.list_symbols():
+        if a_sym not in arctic.list_symbols(lib_name):
             continue
 
         try:
-            last_ts = lib.read(a_sym, columns=[]).data.index[-1]
+            last_ts = arctic.read(lib_name, a_sym, columns=[]).index[-1]
             since_ms = int(last_ts.timestamp() * 1000) + 1
 
             all_candles = []
@@ -196,7 +199,7 @@ def _topup_coin(client, arctic, coin: str, error_coins: list):
                 log.debug(f"[Topup] {coin} {lib_name}: up to date")
                 continue
 
-            lib.append(a_sym, df)
+            arctic.append(lib_name, a_sym, df)
             log.info(f"[Topup] {coin} {lib_name}: +{len(df)} rows → {df.index[-1]}")
 
         except Exception:
@@ -245,11 +248,9 @@ def run():
         a_sym = _arctic_sym(coin)
         lib60 = _lib_name(60)
         try:
-            if lib60 in arctic.list_libraries():
-                lib = arctic.get_library(lib60)
-                if a_sym in lib.list_symbols():
-                    coins_to_topup.append(coin)
-                    continue
+            if lib60 in arctic.list_libraries() and a_sym in arctic.list_symbols(lib60):
+                coins_to_topup.append(coin)
+                continue
         except Exception:
             pass
         coins_to_backfill.append(coin)
@@ -305,7 +306,7 @@ def run():
             lib60 = _lib_name(60)
             try:
                 has_data = (lib60 in arctic.list_libraries() and
-                            a_sym in arctic.get_library(lib60).list_symbols())
+                            a_sym in arctic.list_symbols(lib60))
             except Exception:
                 has_data = False
 

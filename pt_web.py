@@ -560,9 +560,9 @@ async def api_data_manager_backfill(coin: str):
 async def api_data_manager_stats():
     """Per-(coin, tf) stats from the local kucoin ArcticDB libraries."""
     try:
-        import arcticdb as adb
-        store = adb.Arctic(f"lmdb:///{env.historic_data_dir}")
-        known_libs = set(store.list_libraries())
+        from pt_arctic_client import get_arctic_backend
+        backend = get_arctic_backend(f"lmdb:///{env.historic_data_dir}")
+        known_libs = set(backend.list_libraries())
 
         status_path = env.data_manager_status_path()
         error_coins: list = []
@@ -580,8 +580,7 @@ async def api_data_manager_stats():
                 for coin in env.coins:
                     rows.append({"coin": coin, "tf_minutes": tf, "error": "No library"})
                 continue
-            lib = store.get_library(lib_name)
-            symbols = set(lib.list_symbols())
+            symbols = set(backend.list_symbols(lib_name))
             for coin in env.coins:
                 sym = f"{coin}_USDT"
                 if coin in error_coins:
@@ -591,7 +590,7 @@ async def api_data_manager_stats():
                     rows.append({"coin": coin, "tf_minutes": tf, "error": "No data"})
                     continue
                 try:
-                    df = lib.read(sym, columns=[]).data
+                    df = backend.read(lib_name, sym, columns=[])
                     last_ts = df.index[-1]
                     age_minutes = int((now - last_ts).total_seconds() / 60)
                     rows.append({
@@ -616,14 +615,13 @@ async def api_data_manager_chart(coin: str, tf_minutes: int, limit: int = 1500,
     """Return OHLCV candles from the local ArcticDB store."""
     import math
     try:
-        import arcticdb as adb
-        store = adb.Arctic(f"lmdb:///{env.historic_data_dir}")
+        from pt_arctic_client import get_arctic_backend
+        backend = get_arctic_backend(f"lmdb:///{env.historic_data_dir}")
         lib_name = f"kucoin{tf_minutes}"
-        if lib_name not in store.list_libraries():
+        if lib_name not in backend.list_libraries():
             return {"candles": [], "error": "Library not found"}
-        lib = store.get_library(lib_name)
         sym = f"{coin}_USDT"
-        df = lib.read(sym).data
+        df = backend.read(lib_name, sym)
         if df.empty:
             return {"candles": [], "effective_minutes": tf_minutes, "total_rows": 0}
 
@@ -1519,6 +1517,7 @@ def _migrate_control_to_shadow():
 @asynccontextmanager
 async def lifespan(app):
     pt_errors.trim(max_lines=500)
+    ctrl.start_arctic_server()
     _migrate_hub_data_flat_to_subdirs()
     _migrate_control_to_shadow()
     _init_exchange_balances()

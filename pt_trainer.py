@@ -35,12 +35,16 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Optional
 
-import arcticdb as adb
 import numpy as np
 import pandas as pd
 
+from pt_arctic_server import ArcticService
+
+# Non-live sources only (e.g. --source kraken/binance for backtest/research use).
+# The live "kucoin_local" source goes through the Arctic singleton server
+# instead — see _fetch_from_arctic and pt_arctic_server.py.
 arctic_path = f"/home/{getpass.getuser()}/dev/data/arcticdb"
-arctic = adb.Arctic(f"lmdb:///{arctic_path}")
+arctic = ArcticService(f"lmdb:///{arctic_path}")
 
 _trainer_env = PTEnv(os.path.dirname(os.path.abspath(__file__)))
 
@@ -186,23 +190,30 @@ def _fetch_from_arctic(
 ) -> Optional[pd.DataFrame]:
     """Read candles from ArcticDB library."""
     if source == "kucoin_local":
-        # Local store: kucoin{tf} libs, USDT symbols, configurable path
-        _arctic = adb.Arctic(f"lmdb:///{_trainer_env.historic_data_dir}")
+        # Live store: kucoin{tf} libs, USDT symbols. Routed through the
+        # Arctic singleton server when running under the orchestrator (this
+        # is the store pt_web and pt_data_manager also read/write live —
+        # see pt_arctic_server.py for why this can't be its own direct
+        # arcticdb.Arctic() handle there); falls back to a direct open for
+        # standalone/test runs of this module, where nothing else is
+        # contending for the store.
+        from pt_arctic_client import get_arctic_backend
+
+        backend = get_arctic_backend(f"lmdb:///{_trainer_env.historic_data_dir}")
         lib_name = f"kucoin{tf_minutes}"
         symbol = f"{coin}_USDT"
     else:
-        _arctic = arctic
+        backend = arctic
         lib_name = f"{source}{tf_minutes}"
         symbol = f"{coin}_USD" if source == "kraken" else f"{coin}_USDT"
 
-    if lib_name not in _arctic.list_libraries():
+    if lib_name not in backend.list_libraries():
         return None
 
-    lib = _arctic.get_library(lib_name)
-    if symbol not in lib.list_symbols():
+    if symbol not in backend.list_symbols(lib_name):
         # Try alternative denominator
         alt = f"{coin}_USDT" if source == "kraken" else f"{coin}_USD"
-        if alt not in lib.list_symbols():
+        if alt not in backend.list_symbols(lib_name):
             return None
         symbol = alt
 
@@ -213,11 +224,11 @@ def _fetch_from_arctic(
         # level (cheap — avoids reading data past the cutoff at all), then
         # trim to the most recent MAX_CANDLES rows in pandas.
         cutoff = pd.Timestamp(asof_ts, unit="s", tz="UTC") - pd.Timedelta(microseconds=1)
-        df = lib.read(symbol, date_range=(None, cutoff)).data
+        df = backend.read(lib_name, symbol, date_range=(None, cutoff))
         if df is not None and len(df) > MAX_CANDLES:
             df = df.tail(MAX_CANDLES)
     else:
-        df = lib.read(symbol, row_range=(-MAX_CANDLES, None)).data
+        df = backend.read(lib_name, symbol, row_range=(-MAX_CANDLES, None))
     if df is None or df.empty:
         return None
 

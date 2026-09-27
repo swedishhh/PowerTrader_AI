@@ -140,6 +140,7 @@ class ProcessController:
     def __init__(self, env: PTEnv, code_dir: Path | None = None):
         self.env = env
         self._code_dir = Path(code_dir).resolve() if code_dir else env.project_dir
+        self._arctic_server = ProcHandle(name="arctic-server")
         self._thinker = ProcHandle(name="thinker")
         self._data_manager = ProcHandle(name="data-manager")
         self._traders: dict[str, ProcHandle] = {}
@@ -206,6 +207,54 @@ class ProcessController:
                 handle.proc.terminate()
             except Exception:
                 pass
+
+    # -- Arctic singleton server --
+
+    def start_arctic_server(self) -> bool:
+        """The only process allowed to open arcticdb.Arctic() against the
+        live store (see pt_arctic_server.py) — everything else (thinker,
+        trader, data manager, pt_web itself) is a client of it. Started once
+        at pt_web boot and auto-restarted if it dies, since every other
+        component depends on it for price data."""
+        script = self._code_dir / "pt_arctic_server.py"
+        if not script.is_file():
+            return False
+
+        def _on_arctic_server_exit(returncode):
+            if self._arctic_server.expected_stop:
+                self._arctic_server.expected_stop = False
+                return
+            pt_errors.emit(
+                "controller", level="error",
+                message=f"Arctic server process exited unexpectedly: {_describe_exit(returncode)}",
+                detail=(
+                    "This process is the sole reader/writer of the live ArcticDB store; "
+                    "price data, training, and account history are all unavailable until "
+                    "it restarts. Restarting it automatically now."
+                ),
+            )
+            self.start_arctic_server()
+
+        ok = self._launch(
+            self._arctic_server,
+            str(script),
+            prefix="[ARCTIC] ",
+            on_exit=_on_arctic_server_exit,
+            log_name="arctic-server",
+        )
+        if ok:
+            # Marks "the singleton server is/will be up" for this process and
+            # every subprocess launched from here on (_make_env() copies
+            # os.environ) — see pt_arctic_client.get_arctic_backend().
+            os.environ["POWERTRADER_ARCTIC_SERVER"] = "1"
+        return ok
+
+    def stop_arctic_server(self):
+        self._stop(self._arctic_server)
+
+    @property
+    def arctic_server_running(self) -> bool:
+        return self._arctic_server.alive
 
     # -- Data Manager --
 

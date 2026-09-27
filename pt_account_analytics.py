@@ -721,29 +721,34 @@ _price_source_cache_lock = threading.Lock()
 
 
 def _default_price_source(env) -> PriceSource:
-    """ArcticPriceSource pointed at this deployment's actual KuCoin store
-    (env.historic_data_dir, i.e. pt_config.json's kucoin_local_data_dir —
-    the same store pt_trainer.py reads for training), not
-    ArcticPriceSource's own generic ~/dev/data/arcticdb default, which is a
-    different store and typically doesn't hold this project's candles.
+    """ArcticPriceSource backed by the live Arctic singleton server (see
+    pt_arctic_server.py), not ArcticPriceSource's own generic
+    ~/dev/data/arcticdb default, which is a different store and typically
+    doesn't hold this project's candles.
 
-    Cached module-level per store path: constructing ArcticPriceSource opens
-    the LMDB store (adb.Arctic(...)), which is real per-call overhead if
-    rebuilt on every request — this is called from every account-summary/
-    account-history request, including the Accounts tab's 10s poll.
+    History: this used to construct ArcticPriceSource with a direct
+    arctic_url, opening its own arcticdb.Arctic(...) handle onto
+    env.historic_data_dir. Two threads racing an empty cache here could each
+    open their own handle over the same LMDB path — LMDB explicitly
+    documents that as unsupported (undefined behavior, since it's
+    mmap-backed) — and that produced exactly this warning live: "LMDB path
+    ... has already been opened in this process which is not supported by
+    LMDB." Routing through the singleton server removes that hazard
+    entirely (only the server ever opens the store), but the cache/lock
+    stay: cheap to keep, and they still avoid rebuilding this object's
+    symbol-resolution cache on every request.
 
-    Locked because callers run on separate asyncio.to_thread worker
-    threads: an unlocked check-then-construct-then-store here let two
-    threads both see an empty cache and each open their own Arctic/LMDB
-    instance over the same path — LMDB explicitly documents that as
-    unsupported (undefined behavior, since it's mmap-backed), and it's
-    what produced this exact warning live: "LMDB path ... has already
-    been opened in this process which is not supported by LMDB.\""""
+    Cached module-level per store path — this is called from every
+    account-summary/account-history request, including the Accounts tab's
+    10s poll. Locked since callers run on separate asyncio.to_thread worker
+    threads."""
     key = str(env.historic_data_dir)
     with _price_source_cache_lock:
         src = _price_source_cache.get(key)
         if src is None:
-            src = ArcticPriceSource(arctic_url=f"lmdb:///{env.historic_data_dir}")
+            from pt_arctic_client import get_arctic_backend
+
+            src = ArcticPriceSource(backend=get_arctic_backend(f"lmdb:///{env.historic_data_dir}"))
             _price_source_cache[key] = src
         return src
 

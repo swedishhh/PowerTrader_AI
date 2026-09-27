@@ -77,31 +77,33 @@ class ArcticPriceSource(PriceSource):
         lib_prefix: str = "kucoin",
         denominator: str = "USDT",
         max_candles: Optional[int] = 75000,
+        backend=None,
     ):
-        import arcticdb as adb
-        import getpass
+        """`backend`, when given, must expose ArcticService's interface
+        (list_libraries/list_symbols/read) — either a local ArcticService or
+        a pt_arctic_client remote handle. Lets this class stay agnostic to
+        whether it's talking to ArcticDB directly or through the live
+        singleton server; see pt_arctic_server.py for why that distinction
+        matters for the live deployment."""
+        if backend is not None:
+            self._backend = backend
+        else:
+            import getpass
 
-        if arctic_url is None:
-            arctic_url = f"lmdb:///home/{getpass.getuser()}/dev/data/arcticdb"
-        self._arctic = adb.Arctic(arctic_url)
+            from pt_arctic_server import ArcticService
+
+            if arctic_url is None:
+                arctic_url = f"lmdb:///home/{getpass.getuser()}/dev/data/arcticdb"
+            self._backend = ArcticService(arctic_url)
         self._prefix = lib_prefix
         self._denom = denominator
         self._max_candles = max_candles
-        self._lib_cache: dict = {}
         self._symbol_cache: dict = {}  # (lib_name, coin) -> resolved symbol
 
-    def _get_lib(self, tf_minutes: int):
-        lib_name = f"{self._prefix}{tf_minutes}"
-        if lib_name not in self._lib_cache:
-            if lib_name not in self._arctic.list_libraries():
-                raise KeyError(f"ArcticDB library {lib_name!r} not found")
-            self._lib_cache[lib_name] = self._arctic.get_library(lib_name)
-        return self._lib_cache[lib_name]
-
-    def _resolve_symbol(self, lib, coin: str) -> str:
+    def _resolve_symbol(self, lib_name: str, coin: str) -> str:
         # list_symbols() is a real ArcticDB store scan — worth caching since
         # a coin's resolved symbol never changes for the life of this store.
-        cache_key = (lib.name, coin.upper())
+        cache_key = (lib_name, coin.upper())
         cached = self._symbol_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -109,7 +111,7 @@ class ArcticPriceSource(PriceSource):
         symbol = f"{coin.upper()}_{self._denom}"
         alt_denom = "USD" if self._denom == "USDT" else "USDT"
         alt = f"{coin.upper()}_{alt_denom}"
-        available = set(lib.list_symbols())
+        available = set(self._backend.list_symbols(lib_name))
         if symbol in available:
             resolved = symbol
         elif alt in available:
@@ -127,8 +129,10 @@ class ArcticPriceSource(PriceSource):
         asof_ts: Optional[float] = None,
         n_back: Optional[int] = None,
     ) -> pd.DataFrame:
-        lib = self._get_lib(tf_minutes)
-        symbol = self._resolve_symbol(lib, coin)
+        lib_name = f"{self._prefix}{tf_minutes}"
+        if lib_name not in self._backend.list_libraries():
+            raise KeyError(f"ArcticDB library {lib_name!r} not found")
+        symbol = self._resolve_symbol(lib_name, coin)
 
         if asof_ts is not None:
             # Use ArcticDB date_range to push the cutoff to the store layer
@@ -136,13 +140,13 @@ class ArcticPriceSource(PriceSource):
             # accepts one of date_range/row_range per read() call, so the
             # max_candles cap is re-applied in pandas afterward here.
             cutoff = pd.Timestamp(asof_ts, unit="s", tz="UTC") - pd.Timedelta(microseconds=1)
-            df = lib.read(symbol, date_range=(None, cutoff)).data
+            df = self._backend.read(lib_name, symbol, date_range=(None, cutoff))
             if self._max_candles is not None and df is not None and len(df) > self._max_candles:
                 df = df.tail(self._max_candles)
         elif self._max_candles is not None:
-            df = lib.read(symbol, row_range=(-self._max_candles, None)).data
+            df = self._backend.read(lib_name, symbol, row_range=(-self._max_candles, None))
         else:
-            df = lib.read(symbol).data
+            df = self._backend.read(lib_name, symbol)
 
         if df is None or df.empty:
             return pd.DataFrame(columns=_OHLCV).rename_axis("timestamp")
