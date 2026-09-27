@@ -20,6 +20,7 @@ thinker/trader/data_manager.
 from __future__ import annotations
 
 import os
+import threading
 from multiprocessing.managers import BaseManager
 from typing import Optional
 
@@ -34,13 +35,25 @@ class ArcticService:
     codebase actually uses (list/read/write/append/create). Used directly
     for local/backtest access (no server involved), and wrapped by
     _ArcticManager for the live singleton — same class, same behavior,
-    either way."""
+    either way.
+
+    All access is serialized behind one lock. This class exists specifically
+    to be the *only* thing touching a given ArcticDB store, but
+    BaseManager's server handles each client connection in its own thread —
+    it does not serialize calls — so without this lock, moving from
+    multiple *processes* concurrently hitting arcticdb.Arctic() to multiple
+    *threads* concurrently hitting one shared Arctic/Library object would
+    just be the same unsynchronized-access hazard one level down (see
+    pt_account_analytics._default_price_source's docstring for the
+    in-process version of this bug class that motivated this server in the
+    first place)."""
 
     def __init__(self, arctic_url: str):
         import arcticdb as adb
 
         self._arctic = adb.Arctic(arctic_url)
         self._lib_cache: dict = {}
+        self._lock = threading.Lock()
 
     def _lib(self, lib_name: str):
         if lib_name not in self._lib_cache:
@@ -48,13 +61,16 @@ class ArcticService:
         return self._lib_cache[lib_name]
 
     def list_libraries(self) -> list[str]:
-        return self._arctic.list_libraries()
+        with self._lock:
+            return self._arctic.list_libraries()
 
     def create_library(self, lib_name: str) -> None:
-        self._arctic.create_library(lib_name)
+        with self._lock:
+            self._arctic.create_library(lib_name)
 
     def list_symbols(self, lib_name: str) -> list[str]:
-        return self._lib(lib_name).list_symbols()
+        with self._lock:
+            return self._lib(lib_name).list_symbols()
 
     def read(
         self,
@@ -71,14 +87,17 @@ class ArcticService:
             kwargs["row_range"] = row_range
         if columns is not None:
             kwargs["columns"] = columns
-        return self._lib(lib_name).read(symbol, **kwargs).data
+        with self._lock:
+            return self._lib(lib_name).read(symbol, **kwargs).data
 
     def write(self, lib_name: str, symbol: str, df: pd.DataFrame,
               prune_previous_versions: bool = True) -> None:
-        self._lib(lib_name).write(symbol, df, prune_previous_versions=prune_previous_versions)
+        with self._lock:
+            self._lib(lib_name).write(symbol, df, prune_previous_versions=prune_previous_versions)
 
     def append(self, lib_name: str, symbol: str, df: pd.DataFrame) -> None:
-        self._lib(lib_name).append(symbol, df)
+        with self._lock:
+            self._lib(lib_name).append(symbol, df)
 
 
 class _ArcticManager(BaseManager):
