@@ -82,6 +82,82 @@ Then open **http://localhost:8080** in your browser.
 
 ---
 
+## Alternative for Windows: run inside WSL2 (no Docker Desktop)
+
+Same image, same compose file, but Docker runs inside a Linux (WSL2) environment on your Windows PC. Choose this if you want PowerTrader to start with Windows without logging in to Docker Desktop, or if you run other Linux services alongside it.
+
+### 1. Install WSL2 and Docker Engine
+
+In PowerShell (administrator): `wsl --install -d Ubuntu-24.04`, then reboot and open the Ubuntu terminal. Inside it:
+
+```bash
+# Run systemd so Docker starts automatically with the distro
+printf '[boot]\nsystemd=true\n' | sudo tee /etc/wsl.conf
+# Docker Engine (official convenience script)
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+sudo systemctl enable docker
+```
+
+Then run `wsl --shutdown` in PowerShell and reopen Ubuntu. `docker compose version` should now work.
+
+### 2. Put your data folder on the Linux filesystem
+
+Create it **inside WSL** (e.g. `~/powertrader`), not under `/mnt/c/...`. The database files are memory-mapped, which is slow and can be unreliable across the Windows/Linux boundary.
+
+```bash
+mkdir -p ~/powertrader/state && cd ~/powertrader
+echo '{}' > pt_config.json
+nano exchange_api_keys.json     # same contents as in step 2 above
+```
+
+### 3. Create `docker-compose.yml` in that folder
+
+Paths are relative, so the folder holding this file *is* your data folder:
+
+```yaml
+services:
+  powertrader:
+    image: swedishhh/powertrader:latest
+    platform: linux/amd64
+    ports:
+      - "8080:8080"             # change the left side if 8080 is taken
+    volumes:
+      - ./state:/app/state
+      - ./pt_config.json:/app/pt_config.json
+      - ./exchange_api_keys.json:/app/exchange_api_keys.json
+    stop_grace_period: 60s      # lets the trainer close its database cleanly
+    restart: unless-stopped
+```
+
+### 4. Run
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Open **http://localhost:8080** in your Windows browser. `restart: unless-stopped` plus Docker enabled at boot brings it back after a reboot, as long as the WSL distro is running (see below).
+
+### Starting at Windows boot
+
+WSL only runs while something keeps it alive. Create a scheduled task that starts it at boot (PowerShell, administrator):
+
+```powershell
+$a = New-ScheduledTaskAction -Execute "wsl.exe" -Argument "-d Ubuntu-24.04 -- sleep infinity"
+$t = New-ScheduledTaskTrigger -AtStartup
+Register-ScheduledTask -TaskName "Start WSL" -Action $a -Trigger $t -User $env:USERNAME -RunLevel Highest
+```
+
+### Reaching it from other devices on your network
+
+By default the UI is only reachable from the PC itself. Add `networkingMode=mirrored` under `[wsl2]` in `%UserProfile%\.wslconfig`, run `wsl --shutdown`, and allow the port in Windows Firewall. There is no login on the UI, so only do this on a network you trust.
+
+### Moving from Docker Desktop to WSL
+
+Stop the Docker Desktop container first (**never run both against the same data and API keys**), set its restart policy to `no` (`docker update --restart=no <container>`), copy the data folder into WSL (`cp -a /mnt/c/.../powertrader ~/powertrader`), delete any `*:Zone.Identifier` / `*:mshield` files the copy produced, then continue from step 3.
+
+---
+
 ## Managing the Container
 
 In Docker Desktop → **Containers** you can start, stop, view logs, and open the UI via the port link.
